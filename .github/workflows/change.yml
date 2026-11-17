@@ -1,0 +1,32 @@
+# Tells Mainworthy when a pull request is merged, closed or reopened, so its open questions follow the change.
+name: change
+
+on:
+  pull_request:
+    types: [closed, reopened]
+
+permissions: {}
+
+jobs:
+  tell:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          MAINWORTHY_URL: ${{ vars.MAINWORTHY_URL }}
+          MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
+          MAINWORTHY_TOKEN: ${{ secrets.MAINWORTHY_TOKEN }}
+          PULL: ${{ github.event.pull_request.number }}
+          STATE: ${{ github.event.action == 'reopened' && 'open' || (github.event.pull_request.merged && 'merged' || 'closed') }}
+          HEAD_COMMIT: ${{ github.event.pull_request.head.sha }}
+          MERGED_COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          payload=$(jq -nc --arg change "pr:$PULL" --arg state "$STATE" --arg head "$HEAD_COMMIT" --arg commit "$MERGED_COMMIT" --arg branch "$BASE_BRANCH" '
+            {change: $change, state: $state, head: $head} +
+            (if $state == "merged" and $commit != "" and $branch == "main"
+             then {landing: {commit: $commit, branch: $branch}} else {} end)')
+          status=$(curl -sS -o reply.json -w '%{http_code}' -X POST "$MAINWORTHY_URL/api/p/$MAINWORTHY_PROJECT/change" \
+            -H "authorization: Bearer $MAINWORTHY_TOKEN" -H 'content-type: application/json' -d "$payload")
+          cat reply.json; echo
+          # A pull request that never sent a report is answered not_found; that is not a failure.
+          if [ "$status" -ge 300 ] && ! jq -e '.error.code == "not_found"' reply.json >/dev/null; then exit 1; fi

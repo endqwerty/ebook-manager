@@ -1,0 +1,46 @@
+# Runs the checks and reports them to Mainworthy (https://mainworthy.com, project ebook-manager), whose gate decides
+# whether the commit passes. The repository names the instance with the variables MAINWORTHY_URL and
+# MAINWORTHY_PROJECT and the secret MAINWORTHY_TOKEN (a pipeline token; see AGENTS.md, "Tests and CI").
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Put mainworthy on the path
+        run: |
+          image=ghcr.io/endqwerty/mainworthy:main
+          docker pull --quiet "$image"
+          container=$(docker create "$image")
+          mkdir -p "$RUNNER_TEMP/bin"
+          docker cp "$container:/usr/local/bin/mainworthy" "$RUNNER_TEMP/bin/mainworthy"
+          docker rm "$container" >/dev/null
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/mainworthy" version
+
+      # No code or tests yet. When the first test suite lands, run it here, write JUnit XML to results.xml even
+      # when tests fail, and replace `report --nothing-required` below with `report results.xml`.
+
+      - name: Report results and read the gate
+        if: always()
+        env:
+          MAINWORTHY_URL: ${{ vars.MAINWORTHY_URL }}
+          MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
+          MAINWORTHY_TOKEN: ${{ secrets.MAINWORTHY_TOKEN }}
+        run: |
+          mainworthy report --nothing-required
+          mainworthy gate

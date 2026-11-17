@@ -45,5 +45,42 @@ pull request so a reviewer can check the affected code.
 
 ## Project state
 
-New repository with no code yet. Language, UI toolkit and license are still open.
-Record decisions here or in `docs/` as they are made.
+A public open-source project under the Apache License 2.0 ([LICENSE](LICENSE)).
+There's no code yet, and the language and UI toolkit haven't been chosen. Everything
+committed here is public: never commit secrets, tokens, private addresses or
+personal data.
+
+## Backlog: GitHub issues
+
+The backlog lives in [GitHub issues](https://github.com/endqwerty/ebook-manager/issues).
+Before starting work, find or open the issue for it, and link it from the pull
+request (`Fixes #N`). Write feature requests in plain language about what a user
+needs. A request may describe calibre's behaviour as seen from using it, but never
+its code.
+
+## History: spec files
+
+[`specs/`](specs/README.md) describes how each area works today. A pull request that
+changes behaviour updates its spec in the same pull request. The Git history of
+`specs/` is the project's history. Don't add changelogs or decision logs beside it.
+
+## Tests and CI: Mainworthy
+
+Every push to `main` and every pull request runs [check.yml](.github/workflows/check.yml)
+on GitHub's hosted runners. It reports results to the production Mainworthy at
+<https://mainworthy.com>, project `ebook-manager`. Mainworthy's gate (`mainworthy gate`)
+decides whether the commit passes. [change.yml](.github/workflows/change.yml) tells
+Mainworthy when a pull request ends.
+
+- Repository variables `MAINWORTHY_URL` and `MAINWORTHY_PROJECT`, and secret
+  `MAINWORTHY_TOKEN`. The secret is a pipeline token for the actor
+  `ebook-manager-github-actions` (`record` only), expiring 2027-11-17. To renew it
+  before then, issue a new one with `mainworthy token new --ci ebook-manager-github-actions
+  --project ebook-manager --expires 365d` using an instance admin token, set the
+  secret, revoke the old token, and update the date here. The procedure for
+  Mainworthy production access is in the homelab repository.
+- The CLI comes from the public image `ghcr.io/endqwerty/mainworthy:main`.
+- Until the first tests exist, CI reports `--nothing-required`, which the project's
+  policy accepts (`policy empty nothing-required`). When the first test suite lands,
+  have it write JUnit XML and change the step to `mainworthy report results.xml`.
+  Then set the policy back with `mainworthy policy empty pending`.
