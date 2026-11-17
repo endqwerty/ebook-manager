@@ -17,8 +17,8 @@ translate calibre's source in any form. That covers:
   use another source.
 - Calibre's user manual, help text, tooltips, error messages, icons, CSS,
   templates, translations and test fixtures. Don't copy these.
-- Code you recall from training that you believe came from calibre. Write your
-  own instead.
+- Code or design details you may recall from calibre through your training. See
+  [Recall from training](#recall-from-training).
 
 Allowed sources:
 
@@ -32,6 +32,30 @@ Allowed sources:
 
 If a task appears to need calibre's code, stop and tell the parent agent or the
 user. Don't look first.
+
+### Recall from training
+
+If you think you may know how calibre implements the subject at hand from your
+training data, such as its code, function names, internal structure or particular
+algorithms, stop working on that subject. Don't write it down, describe it, or put
+it in a brief.
+
+Hand the work to an agent from a different model provider (Claude to Codex, Codex
+to Claude). Its brief must:
+
+- State the root problem in plain terms: what a user needs and what the inputs and
+  outputs are. For example, "read the title, authors and cover from an EPUB file",
+  not "port calibre's OPF reader".
+- Name only allowed sources: format specifications, sample files and this repo's
+  specs and issues.
+- Tell it to start from basics and design the solution from the root problem,
+  without trying to reproduce calibre's or any other existing implementation.
+- Include this file's Rule 1 as described below.
+
+Keep the reason for the handoff short and free of the recalled detail, for example
+"possible training recall of calibre's EPUB parsing". The receiving agent follows
+this same section. If it also thinks it recalls calibre's approach, it stops and
+reports back instead of writing code, and you raise the subject with the user.
 
 ### Subagents and delegation
 
