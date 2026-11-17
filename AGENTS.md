@@ -70,9 +70,21 @@ pull request so a reviewer can check the affected code.
 ## Project state
 
 A public open-source project under the Apache License 2.0 ([LICENSE](LICENSE)).
-There's no code yet, and the language and UI toolkit haven't been chosen. Everything
-committed here is public: never commit secrets, tokens, private addresses or
-personal data.
+There's no code yet, and the language and UI toolkit haven't been chosen. The aim is
+a native desktop app for macOS and Linux, probably Windows too, with native iOS and
+Android apps, fast and smooth with large libraries. Rust is under consideration for
+the shared core. Everything committed here is public: never commit secrets, tokens,
+private addresses or personal data.
+
+## Plans: requirements
+
+[`docs/requirements/`](docs/requirements/README.md) lists what the app has to do,
+with an identifier for each requirement, and
+[what that asks of the data model](docs/requirements/data-model-inputs.md). Read the
+page for an area before designing or building in it. An issue names the requirement
+identifiers it covers. When a requirement is built, describe the behaviour in a spec
+and mark the requirement done. If research or a decision changes a requirement, edit
+its page in the same pull request.
 
 ## Backlog: GitHub issues
 
