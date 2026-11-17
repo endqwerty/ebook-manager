@@ -18,8 +18,8 @@ at once.
   reading positions, annotations, reading history, device records and settings. Book
   files sync on demand or by rule.
 - `SYNC-5` (core) No account with the project is needed, and no server on the
-  public internet. Syncing the user's own data is never a paid feature. Readest and
-  others lost users by charging for it.
+  public internet. Syncing the user's own data is never a paid feature. Users criticise
+  tools that moved it behind a payment.
 - `SYNC-6` (expected) Rules for which files a device keeps: a collection, a series,
   unread books, recently added, up to a size limit. The user can pin a book.
   Finished books can be removed automatically. Downloads resume, and can be limited
@@ -27,7 +27,8 @@ at once.
 - `SYNC-7` (expected) Positions and annotations sync within seconds to minutes
   while reading, and on closing the book.
 - `SYNC-8` (expected) Settings that describe a device's screen stay on that device
-  unless the user asks for them to sync.
+  unless the user asks for them to sync. The user switches sync on or off per kind
+  of data: book files, the catalogue, annotations, history.
 - `SYNC-9` (expected) The user can see what has synced, what is waiting and what
   failed, per book, and can repair the sync state. Kobo had to add a repair step.
 - `SYNC-10` (core) Turning sync off on a device leaves its data in place. Apple
@@ -41,7 +42,7 @@ arrangements the design must allow. Which to build first is an open decision in 
 
 - `SYNC-20` (expected) A hosted library: one machine, such as a desktop or a home
   server, holds the files, and the others connect to it.
-- `SYNC-21` (expected) Direct sync between the user's devices on the home network
+- `SYNC-21` (core) Direct sync between the user's devices on the home network
   with no always-on machine.
 - `SYNC-22` (expected) Sync through storage the user already has: a folder kept in
   step by Syncthing, iCloud Drive or Dropbox, or a WebDAV server. A live database
@@ -93,8 +94,8 @@ arrangements the design must allow. Which to build first is an open decision in 
 
 - `SERVE-1` (expected) An OPDS catalogue, version 1.2 and 2.0, with search, facets
   and paging, per user. It exposes the user's collections, series and "continue
-  reading". Project Gutenberg retires its OPDS 1 feeds in 2027, so version 2 comes
-  first.
+  reading". Version 2 comes first, because Project Gutenberg is reported to be
+  retiring its OPDS 1 feeds in 2027.
 - `SERVE-2` (expected) Page streaming for comics, so a client reads a large archive
   page by page.
 - `SERVE-3` (expected) Position sync for outside readers. OPDS is download-only,
@@ -129,8 +130,8 @@ arrangements the design must allow. Which to build first is an open decision in 
   changes without trusting clocks.
 - Deletion markers, with a rule for when they can be dropped.
 - A change log per library, and for each device how far it has read that log.
-- Per device: which files it holds, its download rules and pins, and its transfer
-  state.
+- Per device: which files it holds, its download rules and pins, its transfer
+  state, and which kinds of data it syncs.
 - Users, roles and permissions, per-library grants and restrictions. Keys per
   client, with what each may do and when it was last used.
 - Which data is per user (positions, annotations, history, ratings, collections,
@@ -142,7 +143,8 @@ arrangements the design must allow. Which to build first is an open decision in 
 
 ## Not verified
 
-No product's documentation states a library size limit or describes how it finds a
+Project Gutenberg's plan for its feeds comes from a search summary, because its site
+refused automated readers. No product's documentation states a library size limit or describes how it finds a
 moved file by content. How Kavita, Komga and Audiobookshelf behave under two-device
 edits needs testing, not reading. Apple's rules on local network use and background
 work could not be read from its developer pages.

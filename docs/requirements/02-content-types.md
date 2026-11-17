@@ -84,7 +84,7 @@ them, even if the first release shows only some.
   page flag, width and height. A page can be hidden without rewriting the archive.
 - `FMT-24` (expected) Cover date and store date are separate. Age rating is a
   listed value with a mapping to other scales.
-- `FMT-25` (later) Story arcs and cross-series reading lists, imported from `.cbl`
+- `FMT-25` (expected) Story arcs and cross-series reading lists, imported from `.cbl`
   files.
 
 ## Audiobooks
@@ -121,8 +121,8 @@ them, even if the first release shows only some.
 
 ## What the app must store
 
-- Per file: detected format and version, layout kind, protection scheme and whether
-  this build can open it, the flags in `FMT-6`, validation results, and the metadata
+- Per file: detected format and version, layout kind, protection scheme, the
+  account or identity the protection is tied to, whether this build can open it, the flags in `FMT-6`, validation results, and the metadata
   snapshot from import.
 - Per multi-part item: an ordered list of parts, each with path, hash, size,
   duration, codec, track and disc numbers from the tag, from the file name and the

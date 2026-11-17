@@ -21,8 +21,8 @@ and adding that later means reworking annotations, positions and file identity.
   side-by-side translation.
 - An open-source project aligns an audiobook with its EPUB so the text follows the
   narration. Read-along is the most requested feature on Audiobookshelf's tracker.
-- In user discussions, some readers ask for "less AI", and one book server lost its
-  community partly over undisclosed machine-written code. No survey was found that
+- In user discussions, some readers ask for "less AI", and one book server was criticised for
+  machine-written code that its users said was undisclosed. No survey was found that
   measures demand for summaries inside books.
 
 ## Requirements
@@ -50,8 +50,8 @@ and adding that later means reworking annotations, positions and file identity.
   translator's work.
 - `DERIV-10` (core, as a rule) Derived data is rebuilt, not trusted, when its source
   changes. The user's own data (annotations, history, positions) is stored apart
-  from anything that can be rebuilt. A Kobo update in September 2026 left owners
-  without annotations and statistics for a time.
+  from anything that can be rebuilt. A Kobo beta release in September 2026 hid
+  annotations and statistics on some models.
 - `DERIV-11` (core, as a rule) A model or voice the app bundles or downloads is
   listed with its licence and size. Several popular ones are not compatible with
   the project's licence.

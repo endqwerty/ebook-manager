@@ -69,7 +69,7 @@ them. This area exists to fix both.
   inside a PDF, and Readwise or Apple Books exports. Each import can be repeated
   without making duplicates, records its source, and keeps a copy of the raw input so
   it can be parsed again after a bug fix. See [devices](07-devices.md).
-- `ANN-12` (expected) Deleting an annotation leaves a marker, so the deletion
+- `ANN-12` (core) Deleting an annotation leaves a marker, so the deletion
   reaches other devices and the annotation does not come back on the next sync.
 - `ANN-13` (expected) PDF annotations: highlight, underline, strike-out, squiggly,
   text note, free text, shapes and ink, placed by page and rectangle.
@@ -87,18 +87,20 @@ them. This area exists to fix both.
 
 - `HIST-1` (core) A book has a status: want to read, reading, paused, finished, did
   not finish, or none. "Did not finish" can record where the reader stopped and why.
+  The user can add statuses of their own, because imports from trackers carry them.
 - `HIST-2` (core) Every read-through is its own record with a start date, a finish
   date, the edition and format read, and the device or app. Reading a book twice
   makes two records. Dates can be edited, and a book read on paper or in another app
-  can be logged by hand. Apple Books and Goodreads allow neither.
-- `HIST-3` (core) A rating, in quarter steps of a five-point scale, with "unrated"
-  distinct from zero. A review with a spoiler flag. Private notes separate from the
+  can be logged by hand. Apple Books has no editable reading dates, and a Goodreads
+  export carries one finish date however often a book was read.
+- `HIST-3` (core) A rating on a five-point scale, stored finely enough for half
+  and quarter steps because trackers differ, with "unrated" distinct from zero. A review with a spoiler flag. Private notes separate from the
   review.
-- `HIST-4` (expected) Reading sessions are logged: book, device, start, end, active
+- `HIST-4` (core) Reading sessions are logged: book, device, start, end, active
   time, and where the reader started and stopped. Statistics, streaks, pace and
   time-left estimates all come from sessions. Every file counts the same, whatever
-  its format or origin. Kobo and Kindle exclude sideloaded books from parts of their
-  statistics.
+  its format or origin. Kobo is reported to leave sideloaded books out of parts of
+  its statistics.
 - `HIST-5` (expected) Statistics: time and pages per day, a calendar, streaks,
   books and pages per year, breakdown by author, genre and format, time to finish,
   speed per book, and a yearly summary.
@@ -125,9 +127,11 @@ them. This area exists to fix both.
   `POS-1`, the file hash, a time and a source. Position history.
 - Hash aliases linking each replaced file to its successor, and a map from old to
   new part names when a conversion renames them.
-- Annotation: stable identifier, kind, colour value and name, quote, note text and
-  format, tags, flags, created and modified times, deleted time, author, origin
-  (app, device, service, embedded in the file), identifiers in outside services.
+- Annotation: stable identifier, kind, colour value and name, quote, whether the
+  quote was cut short by a copy or export limit, note text and format, tags, flags,
+  created and modified times, deleted time, author, visibility (private, shared
+  with a group, public), origin (app, device, service, embedded in the file),
+  identifiers in outside services.
 - Annotation anchors: several per annotation, each with its form, the file version
   it belongs to and whether it currently resolves.
 - Ink strokes, their page or text anchor, and recognised text. Notebooks.
@@ -137,7 +141,8 @@ them. This area exists to fix both.
 - Reading status per user and book. Read-through records. Sessions.
 - Ratings, reviews with spoiler flag and visibility, private notes.
 - Goals with their history. Review schedule for highlights.
-- Tracker accounts, per-book remote identifiers and the pending queue.
+- Tracker accounts, per-book remote identifiers, the pending queue, and how far
+  the app has read each service's list of changes.
 - The original row of every imported record.
 
 ## Not verified

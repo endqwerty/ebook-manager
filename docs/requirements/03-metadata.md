@@ -17,7 +17,7 @@ ComicInfo 2.1.
 | Identifier | Many | Scheme plus value. One may be the file's own unique identifier, which is not proof of identity: two different books can share one |
 | Language | Many, ordered | BCP 47 tags. Language of the text and original language are separate |
 | Subject | Many | Scheme, code and label (LCSH, BISAC, Thema, FAST) or a plain keyword. Separate from the user's tags |
-| Publisher, imprint | One each | Records, so a name change touches one place |
+| Publisher, imprint | Many, one marked as main | Records, so a name change touches one place |
 | Dates | Several | Published, first published, file modified, added to library. A date may be a year only |
 | Description | One per language | Rich text |
 | Rights | Many | Free text or a licence name |
@@ -34,7 +34,10 @@ reading status. A source never overwrites them.
 
 Identifier schemes to support: ISBN-10 and 13, ASIN (Kindle and Audible values
 differ), DOI, arXiv, ISSN, OCLC, LCCN, Open Library edition and work, Wikidata, Google
-volume, Hardcover, Goodreads, ISFDB, Comic Vine, Metron, GCD, BnF ARK, DNB, UUID, URL.
+volume, Hardcover, Goodreads, LibraryThing, ISFDB, Comic Vine, Metron, GCD, AniList,
+MyAnimeList, GTIN, Project Gutenberg number, Internet Archive identifier, Standard
+Ebooks address, BnF ARK, DNB, UUID, URL. Outside tools add their own: a Readwise book
+identifier and the document hash KOReader computes.
 People carry VIAF, ISNI, ORCID, LC name authority and Wikidata identifiers.
 
 ## Editing
@@ -108,16 +111,18 @@ their edits.
   Keys go in the operating system's keychain, not in the library.
 - `META-42` (core) Each source has a storage class. Some results may be kept
   (Open Library, Wikidata, national libraries). Some may only be shown and copied by
-  the user, not mirrored (Google Books). Some forbid storing their data at all
-  (AniList, MyAnimeList). The app honours the class per field.
+  the user, not mirrored (Google Books). Some allow only
+  short-lived copies and require deletion on request, within 24 hours for
+  MyAnimeList, and forbid using their data as a store (AniList). The app honours the
+  class per field, including the deadline.
 - `META-43` (core) Before any lookup the user can see which sources will be
   contacted and what is sent: an identifier or a title and author, never the library
   list, file names or reading history. Each source has an off switch, and one
   setting stops all network use.
 - `META-44` (expected) The app shows the attribution a source requires.
 - `META-45` (expected) The app does not bundle data it has no right to
-  redistribute: the full BISAC list and the ISBN range file. Codes that arrive in a
-  book's metadata are stored as plain strings.
+  redistribute: the full BISAC list, the ISBN range file and the ISO 639-3 language
+  tables. Codes that arrive in a book's metadata are stored as plain strings.
 
 ## Sources
 
@@ -152,14 +157,16 @@ their edits.
 - Authority identifiers and name variants for people.
 - Each source's series text and position beside the normalised ones.
 - Per source: on or off, rank, a pointer to the key in the keychain, rate-limit
-  counters, the time of the last refusal and when to retry.
+  counters, the time of the last refusal and when to retry, and the marker that lets
+  the next request ask only for what changed.
 - A log of lookups: when, which source, what was sent.
 - Hash aliases for files the app has rewritten.
 - Rules from `META-10`.
 
 ## Not verified
 
-Hardcover's terms and limits, ISBNdb's storage terms, Google's default daily quota,
+The Library of Congress and Trove limits in the table come from a first-round report
+and a search summary. Hardcover's terms and limits, ISBNdb's storage terms, Google's default daily quota,
 the licence of Open Library's dumps and of the Library of Congress authority files,
 and the terms of VIAF after OCLC changed its interfaces in January 2025. These pages
 refused automated readers, so each needs a person to read it before the source ships.

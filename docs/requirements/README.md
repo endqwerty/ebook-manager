@@ -53,8 +53,8 @@ consideration for the shared core. No language or toolkit is chosen.
 
 ## What people ask for most
 
-From user discussions dated 2022 to 2026. The counts behind this order are rough, and
-Reddit could not be read, so treat it as a guide.
+From user discussions, most dated 2022 to 2026 and a few older. The counts behind this
+order are rough, and Reddit could not be read, so treat it as a guide.
 
 1. One reading position across every device and app, for the ebook and the audiobook
    together.
@@ -106,8 +106,8 @@ requirements change.
 | Is a household with several users in the first release? | Personal and shared data must be separate from the first schema either way | The model has users from the start. The first release has one |
 | Do comics and audiobooks belong in the first release? | They force the work, edition, file and parts model | The model holds them. Reading them is "expected", after text and PDF |
 | Database or files beside the books as the source of truth? | Portability and safety against speed | A local database for speed, with the user's data also written beside the books in an open format |
-| Should Kobo wireless sync be built? | It means answering as Kobo's own service. It is the most requested server feature and has no public specification | Listed as "later". Needs black-box testing on a device |
-| Should the project seek Readium LCP certification? | It is the only lawful way to read library loans. It needs a contract, a fee and a closed module | Not now. The app catalogues LCP files and says why it cannot open them |
+| Should Kobo wireless sync be built? | It means answering as Kobo's own service. It is among the most requested server features and has no public specification | Listed as "later". Needs black-box testing on a device |
+| Should the project seek Readium LCP certification? | It is the one protection scheme found with a published licensing route for independent readers, and some library loans use it. It needs a contract, a fee and a closed module | Not now. The app catalogues LCP files and says why it cannot open them |
 | Are features that send book text to a service ever acceptable? | Authors' groups object to them, and reading data is sensitive | Local or off by default, with consent per book and per service |
 | Which app stores will the project ship through? | Store rules remove extensions, cable transfer and background work on iOS, and limit folder access on Android | Direct downloads on desktop. Stores on mobile |
 | Is importing an existing calibre library a first-release feature? | It is the first thing most prospective users check | Yes, by reading the files calibre writes, which Rule 1 allows |
@@ -118,10 +118,13 @@ Two rounds of research agents, twenty-two in all, each given one subject. The fi
 round listed features. The second read primary documents: specifications, vendor help
 pages, API terms, store policies and user discussions. Each brief carried
 [Rule 1](../../AGENTS.md#rule-1-never-look-at-calibres-source-code). No agent opened
-calibre's source, manual or plugins, and none reported seeing calibre code.
+calibre's source, manual or plugins, and none reported seeing calibre code. One agent
+requested a made-up address on the website of calibre's author by mistake. It returned
+"not found" and nothing was read.
 
-The agents made at most ten requests to any one website, one at a time, and did not
-retry or work round a page that refused them.
+The agents were told to make at most ten requests to any one website, one at a time,
+and not to retry or work round a page that refused them. One agent reported two
+slips: a few requests to one site sent together, and eleven requests to another.
 
 Limits of the research:
 

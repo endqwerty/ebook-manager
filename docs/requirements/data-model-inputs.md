@@ -76,8 +76,7 @@ Grouped by who owns them. Each line names a thing and the area that explains it.
   (03)
 - Collections that are shared, reading lists with unmatched entries and remap
   rules, smart collections with their query. (01)
-- Acquisition records, loans, serial and feed sources, paper copies, wish-list
-  entries. (09)
+- Serial and feed sources. That a copy exists and where it is kept. (09)
 - Conversion and edit history: derived-from links with settings, versions of edited
   files, maps of renamed parts, check results. (06)
 - Alignment maps between text and audio. (02, 11)
@@ -89,6 +88,8 @@ Grouped by who owns them. Each line names a thing and the area that explains it.
 - Annotations with several anchors each, ink strokes, notebooks. Annotation tags,
   colour meanings, review schedule. (05)
 - Rating, review, private notes. Goals. (05)
+- Acquisition records with the account used, loans, wish-list entries, and who a
+  paper copy is lent to. (09)
 - Personal collections and their manual order. Saved searches. (01)
 - Reader settings at each scope: global, library, series, book, device. Themes,
   fonts, vocabulary, dictionaries, voices. (04)

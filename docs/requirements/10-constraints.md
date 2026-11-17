@@ -13,8 +13,8 @@ not legal advice.
   does not exempt distributing tools.
 - `LAW-2` (core) When a user opens a protected file the app names the scheme, says
   it cannot open it, keeps the book in the library, and offers no workaround.
-- `LAW-3` (later) Readium LCP is the one scheme an independent reader can support
-  lawfully. It needs a signed agreement with EDRLab, a yearly fee, a yearly
+- `LAW-3` (later) Readium LCP is the only scheme found with a published route for an
+  independent reader to support it. Other schemes were not researched. It needs a signed agreement with EDRLab, a yearly fee, a yearly
   conformity check and a closed module that cannot live in a public repository. The
   app must build and run without it. Whether EDRLab would certify an open-source
   app is an open question for the owner.
@@ -30,7 +30,7 @@ The project is Apache 2.0. Code under the GPL or AGPL cannot be built into it.
 | Conversion | Own code, kepub conversion tools under MIT | Pandoc (GPL): only as a separate program the user installs |
 | OCR | Tesseract (Apache 2.0). Check each language data file | |
 | Archives | libarchive for reading RAR | The unrar source has its own restrictive licence. RAR cannot be created |
-| MTP | A Rust crate under MIT or Apache 2.0, still before version 1.0 | libmtp (LGPL): dynamic linking only, which iOS does not allow |
+| MTP | A Rust crate under MIT or Apache 2.0, still before version 1.0 | libmtp (LGPL): link it dynamically. iOS gives apps no USB access to MTP devices at all |
 | Audio | The platform's own decoders on mobile | FFmpeg: LGPL only if built without GPL parts and linked dynamically |
 | Speech | The platform's voices | Piper (GPL): only as something the user installs |
 | Fonts | Fonts under the SIL Open Font License | Atkinson Hyperlegible: licence terms not confirmed |
@@ -133,7 +133,9 @@ The project is Apache 2.0. Code under the GPL or AGPL cannot be built into it.
 - Folder grants with the platform token, a stale flag and when each was last
   checked.
 - Per book: permission for scripts and for network, and the log from `SEC-9`.
-- The log of data that left the machine, and the user's consent per service.
+- The log of data that left the machine: when, which book, which service, what
+  kind and range of data, and why. The user's consent per service and per book,
+  with its scope, when it was given and when it lapses.
 - Private flag per book.
 - Per profile: whether it is a child's.
 - A manifest of bundled parts and their licences.

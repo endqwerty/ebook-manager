@@ -47,11 +47,12 @@ Devices no longer all appear as a USB drive. This decides the design.
   temporary name and renamed, and an interrupted batch can resume. The app reminds
   the user to eject drives safely.
 - `DEV-14` (core) Each device has a profile: preferred formats in order, conversion
-  preset, folder and file name template, cover handling, and how collections are
+  settings, folder and file name template, cover handling, and how collections are
   expressed.
 - `DEV-15` (core) The cover and metadata inside the sent file are correct and
-  complete, because the device builds its own library from the file. Device-side
-  thumbnail folders are an extra per family.
+  complete, because the device builds its own library from the file. The app writes them into
+  the copy it sends and leaves the library's file alone. Device-side thumbnail
+  folders are an extra per family.
 - `DEV-16` (expected) The app shows which library books are on the device, which
   device books are not in the library, and which copies are out of date because the
   library's metadata or file changed since they were sent.
@@ -99,7 +100,7 @@ Devices no longer all appear as a USB drive. This decides the design.
 - `DEV-40` (expected) Send to Kindle by email, to the device's address, from an
   address the user has approved with Amazon. Limits the app enforces: 50 MB a
   message, 25 attachments, and the file types Amazon accepts. Amazon converts EPUB on
-  arrival. Setting up mail must be simple. Users call it the worst part of existing
+  arrival. Setting up mail must be simple. Users describe it as clunky in existing
   tools.
 - `DEV-41` (expected) An OPDS catalogue of the library that reader apps and
   KOReader can browse and download from. See [sync and sharing](08-sync-sharing.md).
@@ -111,7 +112,7 @@ Devices no longer all appear as a USB drive. This decides the design.
   and keeps the old hash when a file changes.
 - `DEV-44` (later) Sync with Kobo e-readers over Wi-Fi by answering as the device's
   sync service: books, covers, collections, positions and reading state, with kepub
-  made on request. This is the most requested feature of self-hosted book servers.
+  made on request. This is among the most requested features of self-hosted book servers.
   It must work on the home network without exposing a server to the internet.
 - `DEV-45` (later) Cloud folders a device already watches, such as the Dropbox
   folder some Kobo models read, as a delivery route.
@@ -129,7 +130,7 @@ Devices no longer all appear as a USB drive. This decides the design.
 
 ## What the app must store
 
-- Device: label, family, model, firmware string when seen, USB vendor and product
+- Device: label, which users may send to it, family, model, firmware string when seen, USB vendor and product
   numbers, USB and MTP serial numbers, the app's marker identifier, transport, last
   seen, volumes with capacity, and its profile.
 - What the app believes is on each device: book, format, hash of the exact file

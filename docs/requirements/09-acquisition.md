@@ -10,8 +10,10 @@ file.
   have several such records.
 - `ACQ-2` (expected) A book the user owns but cannot hold as a file is still
   catalogued: a Kindle, Apple Books or Kobo purchase that stays inside the store's
-  app. The record links to the store and says where the copy is. Amazon removed
-  download-by-cable for purchases on 26 February 2025, so this case is now common.
+  app. The record links to the store and says where the copy is. Amazon is reported to have
+  removed download-by-cable for purchases on 26 February 2025, so this case is now
+  common. It is also reported to offer EPUB and PDF downloads of eligible unprotected
+  purchases since 20 January 2026.
 - `ACQ-3` (expected) Browse and download from open catalogues inside the app, over
   OPDS: Standard Ebooks, Project Gutenberg, and any catalogue the user adds. The app
   follows each catalogue's rules for automated use.
@@ -47,7 +49,9 @@ file.
   own work, web capture, feed), source, account, date, address, product identifier,
   price, order reference, licence note, region.
 - Whether a file is present, and if not, where the copy lives.
-- Loans: library, card, due date, state, hold position.
+- Loans: library, card, due date, state, hold position, how to return it, the
+  licence file and a hint for its passphrase.
+- The protection scheme of each acquired file and the account it is tied to.
 - For serials and feeds: address, kind, schedule, last checked, last updated,
   last entry seen, counts, status.
 - Paper copies: location, lent to, lent on.
@@ -57,7 +61,8 @@ file.
 
 ## Not verified
 
-Hoopla, cloudLibrary and BorrowBox, the terms of fan fiction and serial sites, what
+Both Amazon dates in `ACQ-2` come from news coverage, because Amazon's pages refused
+automated readers. Hoopla, cloudLibrary and BorrowBox, the terms of fan fiction and serial sites, what
 Apple Books and Google Play Books let a buyer export today, and the licence fields of
 the library lending standards were not read from primary pages.
 

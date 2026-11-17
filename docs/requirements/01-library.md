@@ -65,7 +65,7 @@ feature afterwards.
 - `LIB-26` (expected) A home screen with Continue reading, Recently added and the
   user's pinned collections.
 - `LIB-27` (expected) Bulk edit with a preview of every change and undo.
-- `LIB-28` (expected) Every action is reachable from the keyboard. This is a common
+- `LIB-28` (core) Every action is reachable from the keyboard. This is a common
   complaint about existing tools.
 
 ## Importing
@@ -84,7 +84,7 @@ feature afterwards.
   that. A file still being copied is left alone until it stops changing.
 - `LIB-34` (expected) Index a folder tree in place without moving or renaming
   anything.
-- `LIB-35` (expected) Import an existing calibre library by reading the files it
+- `LIB-35` (core) Import an existing calibre library by reading the files it
   writes (its database and folder layout), without changing or locking that library.
   Custom fields, ratings, tags, series and covers carry over. Import from another
   manager's export follows the same rule. This is the first thing people check.
@@ -124,9 +124,10 @@ feature afterwards.
   another operating system.
 - `LIB-48` (expected) Scheduled backups and a restore. An integrity check lists
   missing files, files with no record, changed hashes and a damaged index.
-- `LIB-49` (expected) Deleting moves a book to a trash that can be restored.
+- `LIB-49` (expected) Deleting moves a book to a trash that can be restored. A
+  book can also be hidden from the main views without deleting it.
   Removing the file from disk is a separate, explicit step.
-- `LIB-50` (expected) Every change is journalled so it can be undone, and so sync
+- `LIB-50` (core) Every change is journalled so it can be undone, and so sync
   has a record of what changed.
 
 ## Several libraries

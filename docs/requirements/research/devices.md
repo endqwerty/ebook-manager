@@ -1,6 +1,6 @@
 ISSUES
 
-Why ISSUES: about 24 pages were opened and read, but several important vendor pages failed (Fandom/MobileRead wiki 402/404, Amazon 503, Boox help 404, Apple developer pages returned only titles, the KOReader wiki page for statistics was empty). Those topics are marked [unverified]. No calibre source was opened. Search-result summaries mentioned calibre plugin/driver names (Kobo driver templates, a calibre bug tracker entry, "amazon-cover-bug" folder); I did not open any calibre page or thread and use none of it. One page I opened (the-ebook-reader.com cover post) names a calibre version and folder in comments but shows no code.
+Why ISSUES: about 24 pages were opened and read, but several important vendor pages failed (Fandom/MobileRead wiki 402/404, Amazon 503, Boox help 404, Apple developer pages returned only titles, the KOReader wiki page for statistics was empty). Those topics are marked [unverified]. No calibre source was opened. Search-result summaries mentioned calibre plugin and driver names; I did not open any calibre page or thread and use none of it. One page I opened (the-ebook-reader.com cover post) mentions calibre in its comments but shows no code.
 
 Marking: [V] = read on a page I opened. [S] = only seen in a search-result summary, page not opened. [U] = unverified / general knowledge.
 

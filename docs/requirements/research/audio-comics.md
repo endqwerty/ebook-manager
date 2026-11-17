@@ -1,6 +1,6 @@
 ISSUES
 
-Why ISSUES: Metron docs, Libation docs, Storyteller docs, Apple and Spotify help, Kobo (partly), Panels, Chunky, MangaUpdates, MAL and Kitsu docs could not be read (blocked, 404, login wall or not attempted). Those items are [unverified] or come from search summaries. No calibre code or calibre docs were seen. "Possible training recall of calibre's" nothing was needed. One doc page (ABS OPF) names two OPF attribute names that carry series data; these are public field names in ABS's own docs, not calibre material.
+Why ISSUES: Metron docs, Storyteller docs, Apple and Spotify help, Kobo (partly), Panels, Chunky, MangaUpdates, MAL and Kitsu docs could not be read (blocked, 404, login wall or not attempted). Those items are [unverified] or come from search summaries. No calibre code or calibre docs were seen. "Possible training recall of calibre's" nothing was needed.
 
 Marks: V = read on a page I opened. S = from a search-result summary only. [unverified] = not read.
 
@@ -19,11 +19,10 @@ Entity model
 - V. Readium audiobook profile: media type `application/audiobook+json`, package `.audiobook` (`application/audiobook+zip`); each reading-order link needs `duration` in seconds, `bitrate` kbps when known; `alternate` array for other formats/bitrates of the same audio (same duration). Total `duration` is a display hint only. https://www.readium.org/webpub-manifest/profiles/audiobook
 - V. Edition-awareness: a chapter is a navigation marker on a timeline of one resource; per-file chapters need offsets; a different narration or an abridged edition has a different timeline, so chapter numbers and resume times cannot be reused across editions. Emby article. https://emby.media/learn/articles/libraries-collections/books-spoken-audio/audiobooks/Library-Audiobook-Chapters.html
 - V. Chapter sources: M4B chapter structures (the .m4b extension does not prove they exist); MP3 ID3v2 CHAP and CTOC frames (ms units, element IDs local to the tag). Same Emby page. Cue sheets: not covered there. [unverified] for cue-sheet handling anywhere.
-- S. Libation records Audible data, splits per chapter optionally, uses naming templates for folder, file and per-chapter title tag. Supported regions list is V from the README. https://github.com/rmcrackan/Libation. Template tags detail not read.
 
 Tag and sidecar reading (ABS, V)
 - Default priority, highest first: ABS metadata.json, OPF, desc.txt and reader.txt, NFO, embedded tags (ffmpeg), folder structure. Per-library reorderable. Lower sources fill first, higher overwrite. https://www.audiobookshelf.org/docs/documentation/libraries/book-library/book-metadata
-- V. OPF/NFO can give title, author, narrator (role `nrt`), publishYear, publisher, isbn, description, genres, language, series, volumeNumber; OPF series in `calibre:series` and `calibre:series_index` attributes (public field names).
+- V. OPF/NFO can give title, author, narrator (role `nrt`), publishYear, publisher, isbn, description, genres, language, series, volumeNumber; series name and index from OPF.
 - V. metadata.json mirrors DB metadata per item, rewritten on every change; disabling it risks losing manual edits on next scan. "Embed metadata" writes DB values back to audio tags with a backup copy; not all formats support all tags.
 - V. Cover: `cover.jpg` in folder wins; else first embedded cover.
 - [unverified] ID3/MP4 atom/Vorbis tag-to-field mapping: ABS page gives none.
@@ -133,7 +132,7 @@ Per-user and per-device state
 - Format support for WebP, AVIF, JPEG XL, large-archive streaming limits, colour e-ink page handling: no primary page read. Needs Kavita and Komga image docs or tests.
 - Metron series types, reprint and variant model; MetronInfo element list; Comic Vine volume restart rules (official wiki not read).
 - Tag mapping for ID3, MP4 atoms (©nam, ©ART, ©nrt?), Vorbis, cue sheets: no doc read; use format specs (ID3v2.4 chapters addendum, MP4 spec) in a follow-up.
-- Storyteller and Libation official docs, Plappa, Prologue, Smart AudioBook Player own docs, ABS bookmark/stats/share/backup schemas (API page offset 200000 onward unread).
+- Storyteller official docs, Plappa, Prologue, Smart AudioBook Player own docs, ABS bookmark/stats/share/backup schemas (API page offset 200000 onward unread).
 - EPUB media overlay body, fixed-layout rules, scripting security rules, sheet music viewers, web archive formats (WARC, ZIM), interactive fiction, cookbook widgets, newspaper article models beyond Kindle (old manuals).
 - AniList, MAL, Kitsu, MangaUpdates exact fields and rate limits.
 - Cases where one "book" is the wrong unit (below) need a design decision on Work/Edition/Asset naming.
@@ -156,7 +155,6 @@ https://www.audiobookshelf.org/docs/documentation/libraries/book-library/series-
 https://api.audiobookshelf.org/ (twice, offsets 0 and 100000)
 https://github.com/advplyr/audiobookshelf-app (README without feature list)
 https://github.com/rasmuslos/ShelfPlayer (archived, no features)
-https://github.com/rmcrackan/Libation
 https://www.w3.org/TR/audiobooks/
 https://www.readium.org/webpub-manifest/profiles/audiobook
 https://www.w3.org/TR/epub-33/ (twice, outline only)
@@ -181,5 +179,5 @@ https://yacreader.com/
 https://mokkari.readthedocs.io/en/stable/ (no schemas)
 https://github.com/Kareadita/Kavita/wiki/Series-Naming-and-Folder-Structure (stub)
 
-Blocked or failed (not retried beyond once): metron.cloud docs (Anubis), wiki.openzim.org (Anubis), docs.anilist.co (403), anilist.github.io (404), smoores.gitlab.io (login redirect, not followed), amazon help (503), spotify support (404), Audible help (empty body), Apple Books guide (links only), komga scanner/media-types/readers pages (404), specs.opds.io pse (404), libation.pages.dev (wrong content).
+Blocked or failed (not retried beyond once): metron.cloud docs (Anubis), wiki.openzim.org (Anubis), docs.anilist.co (403), anilist.github.io (404), smoores.gitlab.io (login redirect, not followed), amazon help (503), spotify support (404), Audible help (empty body), Apple Books guide (links only), komga scanner/media-types/readers pages (404), specs.opds.io pse (404).
 Search-result-only sources (marked S): Smart AudioBook Player changelogs, Kobo speed and sleep timer, Audible Read and Listen naming, Spotify audiobook hours, Apple Books Asset Guide, OPDS-PSE, Kindle periodicals, Comic Vine numbering forums.
