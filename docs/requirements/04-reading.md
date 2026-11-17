@@ -14,18 +14,19 @@ meet.
   and the user's.
 - `READ-4` (core) Themes: light, dark, sepia, true black, and custom foreground and
   background colours. A theme can follow the system or the time of day.
-- `READ-5` (core) Settings have a scope chain: global default, library, series,
+- `READ-5` (expected) Settings have a scope chain: global default, library, series,
   book and device. The app shows which level is in force and offers a reset. Kavita
   creates hidden per-device profiles and Apple Books resets fonts, and users complain
   about both.
-- `READ-6` (core) The user loads their own fonts.
+- `READ-6` (expected) The user loads their own fonts.
 - `READ-7` (core) Progress shows the percentage, the chapter, pages left in the
   chapter, and time left in the chapter and the book from the user's own pace. When
   the publisher supplied print page numbers the reader uses them, and says which
   print edition they match.
 - `READ-8` (core) Search inside the book with results in context.
-- `READ-9` (core) Select text to highlight, note, copy, look up, translate or
-  share. Footnotes open in place.
+- `READ-9` (core) Select text to highlight, note, copy or share. Lookup and
+  translation appear in the same menu once those features exist. Footnotes open in
+  place.
 - `READ-10` (core) Go back after following a link or jumping. Syncing to a position
   from another device is offered, never forced.
 - `READ-11` (expected) Dictionary lookup from installed dictionaries, with word
@@ -56,7 +57,7 @@ meet.
   continuous, rotation, and the outline. Page labels are shown when the file has
   them.
 - `READ-31` (core) Text selection and search when the PDF has a text layer. The app
-  says when it has none and offers OCR. See
+  says when it has none, and offers OCR once that exists. See
   [conversion](06-conversion-editing.md).
 - `READ-32` (expected) Crop margins. A reflow view that shows the extracted text in
   the text reader, with a warning that order may be wrong.
@@ -120,8 +121,8 @@ points below follow its Annex I and the EPUB Accessibility specification.
 - `READ-73` (core) The book's accessibility metadata is shown in plain words and
   can be searched and filtered: has image descriptions, no flashing hazard,
   conformance level, who certified it.
-- `READ-74` (core) Protection on a file never disables text-to-speech or screen
-  reader access.
+- `READ-74` (core) For a protected book the app can open, protection never
+  disables text-to-speech or screen reader access.
 - `READ-75` (expected) Fonts and spacing that help dyslexic readers.
 - `READ-76` (core) The app does not profile a user from their accessibility
   settings or reading habits.

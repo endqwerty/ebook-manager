@@ -11,8 +11,8 @@ not legal advice.
   extensions refuse them too. United States law exempts certain acts of
   circumvention for certain people, such as readers with print disabilities, and
   does not exempt distributing tools.
-- `LAW-2` (core) When a user opens a protected file the app names the scheme, says
-  it cannot open it, keeps the book in the library, and offers no workaround.
+- `LAW-2` (core) When a user opens a file protected by a scheme the app does not
+  support, the app names the scheme, says it cannot open it, keeps the book in the library, and offers no workaround.
 - `LAW-3` (later) Readium LCP is the only scheme found with a published route for an
   independent reader to support it. Other schemes were not researched. It needs a signed agreement with EDRLab, a yearly fee, a yearly
   conformity check and a closed module that cannot live in a public repository. The

@@ -46,8 +46,8 @@ them. This area exists to fix both.
   deleted.
 - `ANN-4` (core) One screen lists every annotation from every book, device and
   source. It can be searched and filtered by book, colour, tag, date and source.
-- `ANN-5` (core) Export annotations for one book or all of them as Markdown, plain
-  text, HTML, CSV and JSON. Nothing caps how much of the user's own book they can
+- `ANN-5` (core) Export annotations for one book or all of them as Markdown and
+  JSON. Plain text, HTML and CSV are expected. Nothing caps how much of the user's own book they can
   export. Kindle truncates exports beyond a publisher's limit of about 10 to 20
   percent of a book.
 - `ANN-6` (expected) Export uses templates the user can edit: variables for the
@@ -85,7 +85,8 @@ them. This area exists to fix both.
 
 ## Reading history
 
-- `HIST-1` (core) A book has a status: want to read, reading, paused, finished, did
+- `HIST-1` (core) A book has a status the user sets, which the app may suggest
+  from reading activity but never overrides: want to read, reading, paused, finished, did
   not finish, or none. "Did not finish" can record where the reader stopped and why.
   The user can add statuses of their own, because imports from trackers carry them.
 - `HIST-2` (core) Every read-through is its own record with a start date, a finish
@@ -118,6 +119,10 @@ them. This area exists to fix both.
   sends only a percentage and reads nothing back.
 - `HIST-10` (later) Moods, pace and content warnings, as the user's own data and as
   imported data.
+- `HIST-12` (core) A date the user typed is stored as a date, to the day, month or
+  year they gave. A moment the app recorded is stored as an instant with its time
+  zone. Days for streaks, statistics and loan deadlines are counted in the reader's
+  local time, including across travel and clock changes.
 - `HIST-11` (later) Ownership: copies owned, where a paper copy is, who borrowed
   it, when and where it was bought.
 

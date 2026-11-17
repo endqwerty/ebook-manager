@@ -37,6 +37,11 @@ do or what the app guarantees.
   core.
 - **later**: not planned yet. Listed so the data model leaves room for it.
 
+A priority says when the feature is built, not when the model must allow it.
+Several expected and later requirements constrain the first schema: editions and
+containers, kinds of item, merging duplicates, several users, text and audio
+alignment. [The data model page](data-model-inputs.md) lists them.
+
 The priorities are a first proposal by the agent that wrote these pages. The owner
 has not reviewed them.
 

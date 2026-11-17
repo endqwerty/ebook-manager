@@ -23,7 +23,9 @@ at once.
 - `SYNC-6` (expected) Rules for which files a device keeps: a collection, a series,
   unread books, recently added, up to a size limit. The user can pin a book.
   Finished books can be removed automatically. Downloads resume, and can be limited
-  to Wi-Fi.
+  to Wi-Fi. A download is checked against its hash before the book opens, a file
+  that changed mid-download starts again, and a full device stops downloads with a
+  message.
 - `SYNC-7` (expected) Positions and annotations sync within seconds to minutes
   while reading, and on closing the book.
 - `SYNC-8` (expected) Settings that describe a device's screen stay on that device
@@ -31,6 +33,10 @@ at once.
   of data: book files, the catalogue, annotations, history.
 - `SYNC-9` (expected) The user can see what has synced, what is waiting and what
   failed, per book, and can repair the sync state. Kobo had to add a repair step.
+- `SYNC-11` (core) A device joins a library only after the user approves it on a
+  device that already belongs. Two devices that each imported the same book end up
+  with one book. When records are merged, by sync or by the user, references to the
+  old record follow, and a mistaken merge can be reversed.
 - `SYNC-10` (core) Turning sync off on a device leaves its data in place. Apple
   Books empties the library.
 
@@ -55,16 +61,20 @@ arrangements the design must allow. Which to build first is an open decision in 
 
 - `SYNC-30` (core) Two devices edit the same book offline and neither edit is lost
   silently. Fields merge one by one, and the later edit of a field wins. A real
-  clash, the same field changed two ways, is shown to the user where it matters.
+  clash, the same field changed two ways, is shown to the user where it matters. An
+  edit on one device beats a deletion of the same record on another, and the user is
+  told.
 - `SYNC-31` (core) Sets merge as additions and removals: tags, collection
   membership, contributors. Adding a tag on one device and another tag on a second
-  leaves both.
+  leaves both. Ordered lists, such as contributors and a collection's manual order,
+  merge without losing or duplicating an entry.
 - `SYNC-32` (core) Deleted records leave a marker so they do not return.
 - `SYNC-33` (core) Annotations and read-through records are independent items with
   permanent identifiers, so they merge without conflict. Note text edited in two
   places keeps both versions.
-- `SYNC-34` (core) Book files are identified by content hash and never conflict. A
-  changed file is a new version.
+- `SYNC-34` (core) Book files are identified by content hash. A changed file is a
+  new version. When two devices replace the same file differently, both versions are
+  kept and the user picks the current one.
 - `SYNC-35` (core) Clocks on the user's devices disagree. Ordering does not depend
   on wall-clock time alone.
 - `SYNC-36` (expected) History is kept for a while, so a bad merge can be undone.
@@ -80,10 +90,11 @@ arrangements the design must allow. Which to build first is an open decision in 
   owner's.
 - `SHARE-3` (expected) Roles: owner, editor, reader, guest. Downloading files and
   editing metadata are separate permissions.
-- `SHARE-4` (expected) Child profiles need no password and collect no data beyond
-  the device.
+- `SHARE-4` (expected) Child profiles need no password. Their reading data syncs
+  only between the household's own devices and is never sent to an outside service.
 - `SHARE-5` (expected) Each device or client app gets its own key, which can be
-  revoked alone.
+  revoked alone. Revoking stops further sync and downloads. The app says plainly
+  that it cannot remove files a device already holds.
 - `SHARE-6` (later) Shared collections and reading lists. Shared highlights for a
   reading group.
 - `SHARE-7` (later) Sign-in through an identity provider (OIDC) for people who run
@@ -130,8 +141,10 @@ arrangements the design must allow. Which to build first is an open decision in 
   changes without trusting clocks.
 - Deletion markers, with a rule for when they can be dropped.
 - A change log per library, and for each device how far it has read that log.
-- Per device: which files it holds, its download rules and pins, its transfer
-  state, and which kinds of data it syncs.
+- Per device: which files it holds, its download rules and pins, the state of
+  each download (waiting, partial, checked, failed), and which kinds of data it
+  syncs.
+- Redirects from merged records to the record that replaced them.
 - Users, roles and permissions, per-library grants and restrictions. Keys per
   client, with what each may do and when it was last used.
 - Which data is per user (positions, annotations, history, ratings, collections,

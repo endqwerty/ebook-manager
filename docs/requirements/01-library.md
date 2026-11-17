@@ -61,10 +61,12 @@ feature afterwards.
 - `LIB-24` (expected) Facets with counts: author, series, tag, language, format,
   rating, reading status, source, device.
 - `LIB-25` (expected) Full-text search inside books, with a snippet and a jump to
-  the hit. The index is a cache the app can rebuild.
+  the hit. The index is a cache the app can rebuild. Search shows how much of the
+  library is indexed, covers only books whose text the device holds, and never
+  shows a count or snippet from a book or note the user may not see.
 - `LIB-26` (expected) A home screen with Continue reading, Recently added and the
   user's pinned collections.
-- `LIB-27` (expected) Bulk edit with a preview of every change and undo.
+- `LIB-27` (core) Bulk edit with a preview of every change and undo.
 - `LIB-28` (core) Every action is reachable from the keyboard. This is a common
   complaint about existing tools.
 
@@ -104,9 +106,11 @@ feature afterwards.
   them. A book can move from one mode to the other.
 - `LIB-41` (core) Files stay plain files that open without the app. The folder
   layout is documented and stable.
-- `LIB-42` (core) The user's data survives without the app's database. Metadata,
-  reading state and annotations can be written beside the books in a documented open
-  format, and a library can be rebuilt from those files. Whether the database or the
+- `LIB-42` (core) The user's data survives without the app's database. Metadata
+  with its sources and locks, collections, reading state, annotations and deletion
+  markers can be written beside the books in a documented open format, and a library
+  can be rebuilt from those files. A rebuilt library does not bring deleted records
+  back when it next syncs. Whether the database or the
   sidecar wins a disagreement is an open decision in the [README](README.md).
 - `LIB-43` (core) The app never edits a book file unless the user asks. Writing
   metadata into files is a separate action. Sync clients identify a book by its hash,
@@ -124,11 +128,20 @@ feature afterwards.
   another operating system.
 - `LIB-48` (expected) Scheduled backups and a restore. An integrity check lists
   missing files, files with no record, changed hashes and a damaged index.
-- `LIB-49` (expected) Deleting moves a book to a trash that can be restored. A
+- `LIB-49` (expected) Three actions are kept apart: removing a download from one
+  device, deleting a book from the catalogue, and erasing every copy for good. The
+  app says which devices and which referenced files each one touches. Deleting moves
+  a book to a trash that can be restored. A
   book can also be hidden from the main views without deleting it.
   Removing the file from disk is a separate, explicit step.
 - `LIB-50` (core) Every change is journalled so it can be undone, and so sync
-  has a record of what changed.
+  has a record of what changed. One user action, such as a bulk edit, undoes as one
+  step. Undoing a change that another device or user has since built on reverts only
+  what is still as the user left it, and asks about the rest.
+- `LIB-51` (core) Upgrading the app never loses a library. The app backs up before
+  it changes the format of its database or sidecar files, recovers from an upgrade
+  that was interrupted, refuses a library made by a newer version with a clear
+  message, and keeps syncing safely with a device that runs an older version.
 
 ## Several libraries
 
@@ -143,7 +156,8 @@ feature afterwards.
 ## Speed
 
 - `LIB-70` (core) The app starts and searches fast at 100,000 books and stays usable
-  beyond that. It never reads every file at start. Reports of existing tools slowing
+  at 1,000,000. Proposed targets on an ordinary laptop: the window shows the library
+  within 2 seconds of launch, and a quick search answers within 100 milliseconds. It never reads every file at start. Reports of existing tools slowing
   or failing start at about 20,000 books.
 - `LIB-71` (core) The grid scrolls smoothly at any size, with covers drawn from
   cached thumbnails.

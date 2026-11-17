@@ -12,11 +12,13 @@ work.
    many editions, an edition has many files, a file can hold several works, and a
    record can have no file at all. ([Library](01-library.md),
    [content types](02-content-types.md))
-2. **A file has an identity that survives its path and its bytes.** Each file needs
-   a whole-file hash, the quick partial hash that sync clients compute, and a hash of
-   its text content. When a file is rewritten, converted or replaced, the old hashes
-   stay as aliases of the new file. Positions, annotations, device copies and outside
-   sync all hang on this. ([Annotations](05-annotations-history.md),
+2. **A file has an identity that survives its path and its bytes.** A file record
+   has versions. Each version is fixed and has its own whole-file hash, the quick
+   partial hash that sync clients compute, and a hash of its text content. A version
+   says what it came from: an edit of an earlier version, a conversion of another
+   file, or a replacement from the source. Versions branch, and an old one can still
+   be on a device. Positions, annotations, device copies and outside sync all name
+   the version they were made against. ([Annotations](05-annotations-history.md),
    [devices](07-devices.md))
 3. **A place in a book is stored in several forms at once**, tied to the file
    version it was made in: part and fraction, fraction of the whole, structural path,
@@ -24,10 +26,15 @@ work.
    alignment share this one form. ([Annotations](05-annotations-history.md))
 4. **The user's data lives outside the book file**: annotations, positions,
    history, ratings. Writing into a file is an explicit export.
-5. **Every record can change on two devices at once.** Each needs a permanent
+5. **Every record belongs to one of four classes**: shared between users, personal
+   to a user, local to one installation (folder grants, jobs, pointers to keys), or
+   rebuildable. Only the first two sync. **Every synced record can change on two
+   devices at once.** Each needs a permanent
    identifier made without a central server, a version that orders changes without
    trusting clocks, per-field merging, add and remove semantics for sets, and a
-   deletion marker. ([Sync](08-sync-sharing.md))
+   deletion marker. Two devices can create the same book, person or series
+   independently, so records must be able to merge, leave a redirect behind, and be
+   split again. ([Sync](08-sync-sharing.md))
 6. **Shared and personal data are separate from the first version.** The catalogue
    is shared. Positions, annotations, history, ratings, collections and settings
    belong to a user. ([Sync](08-sync-sharing.md))
@@ -40,14 +47,17 @@ work.
 9. **Numbers that order things are text with a sort key.** Series positions, issue
    numbers and volume labels include `1.5`, `2.2.1`, `1-5`, `TPB1`, `2015 Special`.
 10. **Reading is an event log.** Sessions, read-throughs and position history are
-    kept as records with times. Status, statistics, streaks and time-left are
-    computed from them.
+    kept as records with times. Statistics, streaks and time-left are
+    computed from them. Status and dates the user set by hand are their own records
+    and win over anything computed.
 11. **Rebuildable data is kept apart from the user's data**: search indexes,
     thumbnails, extracted text, vectors, generated summaries, speech audio. Each
     derived item records the hash of what it was built from.
     ([Derived features](11-derived-features.md))
 12. **Imports keep their raw input.** The original row, file or device snapshot is
-    stored with the parser version, so a lossy or buggy import can be redone.
+    stored with the parser version, so a lossy or buggy import can be redone. Raw input is erased when the user
+    deletes the data it produced, and is never kept longer than its source allows.
+    The same holds for journals and backups.
 
 ## The things that must be representable
 
@@ -79,13 +89,15 @@ Grouped by who owns them. Each line names a thing and the area that explains it.
 - Serial and feed sources. That a copy exists and where it is kept. (09)
 - Conversion and edit history: derived-from links with settings, versions of edited
   files, maps of renamed parts, check results. (06)
-- Alignment maps between text and audio. (02, 11)
+- Alignment maps between text and audio. Panel regions on comic pages, marked as
+  authored or detected. (02, 04, 11)
 
 ### Personal, owned by one user
 
 - Reading status. Read-through records. Sessions. Position per device, with
   history. (05)
-- Annotations with several anchors each, ink strokes, notebooks. Annotation tags,
+- Annotations with several anchors each, the page geometry of PDF annotations,
+  ink strokes with recognised text, notebooks. Annotation tags,
   colour meanings, review schedule. (05)
 - Rating, review, private notes. Goals. (05)
 - Acquisition records with the account used, loans, wish-list entries, and who a
@@ -113,12 +125,15 @@ Grouped by who owns them. Each line names a thing and the area that explains it.
 
 - Per metadata source: on or off, rank, rate-limit counters, last refusal, key
   reference. The log of lookups. (03)
-- The log of data that left the machine, and consent per service. (10, 11)
+- The log of data that left the machine. Consent: who gave it, for which book and
+  service, for what kind of text, when, and whether it was withdrawn. Queued jobs
+  check it again before they run. (10, 11)
 - Folder grants with platform tokens. (10)
 - Jobs: kind, target, settings, state, progress, result. (06)
 - Import log, review queue, duplicate candidates and "not a duplicate" decisions.
   (01)
-- Backups made, schema version, sidecar format version. (01)
+- Backups made, schema version, sidecar format version, and the oldest app
+  version each device runs. (01)
 - Extensions and the manifest of bundled parts with licences. (08, 10)
 
 ### Rebuildable

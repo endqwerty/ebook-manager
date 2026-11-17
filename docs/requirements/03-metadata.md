@@ -119,7 +119,9 @@ their edits.
   contacted and what is sent: an identifier or a title and author, never the library
   list, file names or reading history. Each source has an off switch, and one
   setting stops all network use.
-- `META-44` (expected) The app shows the attribution a source requires.
+- `META-44` (core) The app shows the attribution a source requires. A source is
+  switched on only when the app can meet its rules for storage, attribution and
+  export.
 - `META-45` (expected) The app does not bundle data it has no right to
   redistribute: the full BISAC list, the ISBN range file and the ISO 639-3 language
   tables. Codes that arrive in a book's metadata are stored as plain strings.

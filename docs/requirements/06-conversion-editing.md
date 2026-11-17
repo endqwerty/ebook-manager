@@ -8,8 +8,9 @@ public specifications and the documentation of other tools. See
 ## Conversion
 
 - `CONV-1` (core) Convert between reflowable formats, with EPUB as the form in the
-  middle. The directions that matter first are EPUB to kepub for Kobo, EPUB to and
-  from AZW3 and MOBI, and text, HTML, DOCX and FB2 into EPUB.
+  middle. The directions needed first are EPUB to kepub for Kobo and EPUB to and
+  from AZW3 and MOBI. Text, HTML, DOCX and FB2 into EPUB follow. The table in
+  [content types](02-content-types.md) is the full list of directions.
 - `CONV-2` (core) Conversion never replaces the source. The result is a new file on
   the same book, linked to the file it came from with the settings used.
 - `CONV-3` (core) The library's metadata and cover are written into the result.
@@ -19,25 +20,30 @@ public specifications and the documentation of other tools. See
 - `CONV-5` (core) The app states what a direction loses before it runs: PDF to
   reflowable text loses layout and may scramble order, EPUB to MOBI loses SVG, maths
   and scripts, reflowable to PDF fixes one page size.
-- `CONV-6` (expected) The user picks a target profile: generic EPUB, a Kindle, a
-  Kobo, a small e-ink screen, a tablet. A profile sets the format, image size limits,
-  greyscale or colour, and device-specific fixes.
-- `CONV-7` (expected) Settings the user controls:
-  - Fonts: keep, embed a chosen font, subset, or remove.
-  - Layout: margins, line height, paragraph spacing and indent, justification, and
-    whether to keep or strip the book's own styles.
-  - Structure: where chapters split, how they are detected, how deep the table of
-    contents goes, whether to add a title page.
-  - Cover: keep, replace or generate.
-  - Images: maximum size, quality, greyscale, conversion of types the target cannot
-    show.
-  - Text: hyphenation, smart punctuation, find and replace, character set override
-    for broken input.
-- `CONV-8` (expected) Named presets, a default preset per device and per pair of
-  formats, and overrides per book.
-- `CONV-9` (expected) Clean-up for badly formatted input: rejoin lines broken at a
-  fixed width, rejoin hyphenated words, remove running headers, footers and page
-  numbers, and mark scene breaks.
+- `CONV-6` (expected) The user chooses the reading device or app and how the
+  file will reach it, or chooses an output format when the target is unknown.
+  The app chooses a compatible format and handles packaging, text encoding and
+  required image changes automatically, explaining its choices and any unknown
+  target limits. It keeps supported content and image detail unless a target limit
+  or a user choice requires a change, and asks before losing content.
+- `CONV-7` (expected) The user can keep the book's appearance or make body text
+  follow the reader's font and spacing choices, while keeping meaningful differences
+  such as headings, verse and emphasis. Where the output supports both, the user
+  chooses between keeping page layout and allowing text to fit the screen, and
+  between sharper images and a smaller file. The app explains these trade-offs with
+  sample pages before applying them, including any loss of selectable text or colour.
+- `CONV-8` (expected) The user can save named conversion choices and set a default
+  for a target and delivery method or for a pair of formats. Each job shows which
+  choices came from a default and allows changes for that book without changing the
+  default. Reusing saved choices checks them against the current target and source,
+  and asks again about newly found losses or uncertain repairs.
+- `CONV-9` (expected) The app identifies input problems such as broken characters,
+  missing headings, a contents list in the wrong order, and page layouts whose
+  columns or tables may extract in the wrong order. It offers affected passages for
+  review and asks the user to confirm text encoding, heading choices or reading
+  order when these cannot be determined reliably. It repairs unambiguous packaging
+  faults automatically and reports them, but never silently rewrites uncertain text
+  or invents missing structure.
 - `CONV-10` (expected) A side-by-side preview of source and result, with a
   comparison of the two tables of contents.
 - `CONV-11` (expected) The result is checked before it is added (`CHK-1`).
@@ -46,8 +52,8 @@ public specifications and the documentation of other tools. See
   [annotations](05-annotations-history.md).
 - `CONV-13` (expected) Convert on the way to a device without keeping the result in
   the library, if the user prefers. See [devices](07-devices.md).
-- `CONV-14` (expected) Comic archives convert between CBZ, CBR and CB7 by repacking,
-  with no loss. The app can read RAR archives and cannot create them.
+- `CONV-14` (expected) CBR and CB7 comic archives convert to CBZ by repacking, with
+  no loss. The app reads RAR archives and cannot create them.
 - `CONV-15` (later) OCR for scanned PDFs and page images: a choice of languages,
   skip pages that already have text, deskew, and output as a PDF with a text layer.
   The report shows confidence, and warns that columns may be read in the wrong order
@@ -100,12 +106,18 @@ public specifications and the documentation of other tools. See
 
 ## What the app must store
 
-- Conversion presets, the default preset per device and per format pair, and
-  overrides per book.
+- Named conversion choices, their defaults per target and delivery method or format
+  pair, and separate choices saved for each book.
+- The target's known capabilities and limits, their source and version, and any
+  limits that remain unknown.
 - Jobs: kind, target, settings, state, progress, start and end times, warnings and
   the error if any, so a job can resume after a restart.
-- For each derived file: the source file's hash, the tool and its version, the
-  settings, the losses reported, and the map of renamed parts.
+- Each derived file records the source file's hash, the tool and its version, the
+  target and delivery method, and the choices actually used, including automatic
+  choices and which default supplied each saved choice.
+- Each conversion records detected input problems, the passages reviewed, confirmed
+  repairs, automatic repairs, accepted losses and unresolved warnings, together with
+  the map of renamed parts.
 - Versions of an edited file with time and a note.
 - Check results per file: the checker and its version, the date, and each message
   with severity and place.

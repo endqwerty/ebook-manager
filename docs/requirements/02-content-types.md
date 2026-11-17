@@ -13,7 +13,7 @@ a cover, and send to a device.
 | EPUB 2 and 3 | Reflowable or fixed | OPF metadata, declared cover | core | core | core |
 | PDF | Fixed pages | Info dictionary and XMP, which can disagree. No standard cover, so use page 1 | core | expected, lossy | expected |
 | Kobo kepub | Reflowable | EPUB plus Kobo markup | as EPUB | core | core, for Kobo devices |
-| MOBI and AZW3 (KF8) | Reflowable | EXTH records, cover record | expected, when not protected | expected | expected, AZW3 for older Kindles |
+| MOBI and AZW3 (KF8) | Reflowable | EXTH records, cover record | expected, when not protected | core | core, AZW3 for older Kindles |
 | KFX | Reflowable or fixed | Amazon container with no public specification | catalogue only | no | no |
 | CBZ, CBR, CB7, CBT | Page images | Optional `ComicInfo.xml`; first image is the cover | expected | expected | CBZ, PDF |
 | FB2 | Reflowable | XML description block with base64 cover | expected | expected | later |
