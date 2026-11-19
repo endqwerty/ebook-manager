@@ -24,12 +24,14 @@ goal and not a test. A screen follows this page when its frame is built from the
 controls named in [the platform table](#how-each-rule-maps-to-a-platform) with
 no custom styling, and its content matches the rules below.
 
-![The library window, cover states and book details drawn to these rules](interface-sample-light.png)
+![The library window, cover states and book details in light appearance](interface-sample-light.png)
 
-The picture shows the content rules on plain surfaces. Its sidebar, buttons and
-outlined panels are stand-ins and not a mock-up of any platform's frame. Its
-covers stand in for artwork, except the two labelled as bindings set in type. [`interface-sample.html`](interface-sample.html) draws it, and
-there is [a dark version](interface-sample-dark.png).
+![The same in dark appearance](interface-sample-dark.png)
+
+The pictures show the content rules on plain surfaces. Their sidebar, buttons
+and outlined panels are stand-ins and not a mock-up of any platform's frame.
+Their covers stand in for artwork, except the two labelled as bindings set in
+type. [`interface-sample.html`](interface-sample.html) draws both.
 
 ## What makes it feel like a library
 
@@ -133,6 +135,34 @@ on Windows, CSS pixels in GTK and density-independent pixels on Android.
   finished book has a check mark after the author's name, and both are announced
   to assistive technology in words.
 
+### Light and dark
+
+Every shell supports light and dark appearance on every device, and neither is
+the lesser one. Design and review each screen in both.
+
+- The app follows the system's setting and changes with it while running,
+  without a restart. It never asks the reader to choose at first launch.
+- The frame needs no work, because the platform's semantic colours and
+  materials have both appearances. A colour written as a number has one, so the
+  content layer may use a fixed colour only where this page gives its value for
+  both appearances.
+- Use the platform's own dark window colour. Do not darken it to pure black or
+  tint it warm.
+- Cover artwork is shown as it is in both appearances. Never dim, invert or
+  tint a cover.
+- What the app draws around a cover changes: the shadow and the edge line have
+  a value for each appearance, under [Covers](#covers) and
+  [Shadows and depth](#shadows-and-depth). In dark appearance the edge line is
+  what separates a dark cover from the window, so it is never left out.
+- Bindings set in type keep their colours in both appearances. Their text sits
+  on the binding and not on the window, so its contrast does not change.
+- The progress line, its track, the check mark and the loading block use
+  semantic colours and follow by themselves.
+- The serif roles keep their weight in both appearances.
+- The reader's page colour is the reader's own setting and does not follow the
+  window. Its default does: paper in light appearance and grey in dark.
+- A pull request that changes a screen shows it in both appearances.
+
 ### Covers
 
 A cover is the one thing in the window drawn as a physical object.
@@ -229,6 +259,7 @@ roles and the motion above are drawn by the app, so the app must follow them.
 
 | Setting | What the content layer does |
 |---|---|
+| Dark appearance | As described under [Light and dark](#light-and-dark). |
 | Larger text | The serif roles and captions scale with it. Multiply the chosen cover width by the system's text scale before counting columns, so the grid loses columns as text grows and captions keep their line length. |
 | More contrast | The inner edge line, the spine shade and both shadows are removed. A 1 unit outline in the platform's primary text colour is drawn outside the cover's edge, where artwork cannot hide it. Selection, focus and the pointer rise are unchanged. Bindings set in type keep their colours, which already meet 4.5:1. |
 | Less transparency | Nothing in the content layer is translucent, so nothing changes. |
@@ -252,6 +283,7 @@ roles and the motion above are drawn by the app, so the app must follow them.
 | Progress of a running job | Toolbar | Toolbar | Title bar | Header bar | Top app bar |
 | A problem that needs a decision | A plain row at the top of the content | The same | `InfoBar` at the top of the content | `AdwBanner` | Snackbar with an action. It lies over the bottom of the grid, which is accepted. |
 | Button and menu capitals | Title Case | Title Case | Sentence case | Header Capitalisation | Sentence case |
+| Following light and dark | Semantic colours and asset catalogue colours with both appearances | The same | Theme resources, with the window's requested theme left at its default | `AdwStyleManager` at its default colour scheme, and `prefers-color-scheme` in the app's CSS | `isSystemInDarkTheme()` choosing between the light and dark colour scheme |
 | Icons | SF Symbols | SF Symbols | Segoe Fluent Icons | Symbolic icons from GTK and the Icon Library | Material Symbols |
 
 ### Mac, iPhone and iPad: Liquid Glass
@@ -357,7 +389,11 @@ The current releases are GNOME 51 and libadwaita 1.10.
   `gtk-interface-reduced-motion`, which the app checks for the cover's rise.
 - Support a window 360 wide, which GNOME asks of apps that suit a phone.
 - Off GNOME, GTK reads what settings the desktop shares and libadwaita chooses
-  light when it learns no preference. The app adds no detection of its own.
+  light when it learns no preference. So that dark appearance is available on
+  every desktop, the Linux shell has an Appearance setting with Follow system,
+  Light and Dark, which GNOME's guidelines allow for apps used for long periods.
+  Follow system is the default. Hide that choice when
+  `AdwStyleManager:system-supports-color-schemes` is false.
 
 ### Android
 
@@ -391,7 +427,7 @@ The current releases are Android 17 and Compose Material 3 1.5.
 
 The reader is the warmest place in the app and the plainest. The frame hides
 while reading and returns on a tap or pointer movement. The page offers white,
-paper, grey and black, with paper as the default in light appearance. Text is set
+paper, grey and black. The default is paper in light appearance and grey in dark. Text is set
 in a serif with a line of 60 to 70 characters. Page turns slide or cross-fade and
 never curl. The reader's own design page will set the details.
 
