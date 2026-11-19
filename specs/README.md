@@ -4,7 +4,14 @@ Each file here describes one area of Ebook Manager as it works today: what it do
 the rules it follows and why. Specs are the project's history. The Git log of
 `specs/` shows how the behaviour changed, and each commit message says why.
 
-Rules:
+## Implemented behaviour
+
+- [Desktop shelf, import and reading](desktop-mvp.md)
+- [Library storage and recovery](library-mvp.md)
+- [EPUB reader and helper isolation](epub-reader-mvp.md)
+- [Mounted reader export](mounted-epub-export.md)
+
+## Writing a spec
 
 - A pull request that changes behaviour updates the spec for that area, or adds one,
   in the same pull request. Code and spec must agree on `main`.

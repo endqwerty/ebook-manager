@@ -34,7 +34,10 @@ through your desktop before unplugging. CrossPoint can display the EPUB's
 embedded title even when its exported filename uses your edited library title.
 [Mounted EPUB export](specs/mounted-epub-export.md)
 
-The [library guide](crates/ebook-library/README.md) describes how to back up your books, edits and reading positions and restore them on a fresh installation.
+Read the [desktop guide](apps/desktop/README.md) for the controls and the
+[library guide](crates/ebook-library/README.md) to back up and restore your
+books, edits and reading positions. The [EPUB reader guide](crates/ebook-reader/README.md)
+describes format support and the Linux sandbox.
 
 ## Project
 
