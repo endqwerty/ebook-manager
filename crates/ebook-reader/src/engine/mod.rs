@@ -6,6 +6,7 @@ pub mod cover;
 pub mod encoding;
 pub mod entities;
 pub mod isolation;
+pub mod markup;
 pub mod package;
 pub mod paths;
 pub mod run;
