@@ -8,6 +8,11 @@ Priorities: **core** is needed for a first usable release, **expected** is what 
 of comparable tools take for granted, **later** means store the data now and build the
 feature afterwards.
 
+The [local library](../../specs/library-mvp.md) implements title and author search,
+managed EPUB copies, duplicate detection, replacement review and recovery from
+a portable backup. These cover parts of LIB-1, LIB-22, LIB-30 through LIB-32,
+LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
+
 ## Organising
 
 - `LIB-1` (core) A book has a title, sort title, authors and other contributors with
