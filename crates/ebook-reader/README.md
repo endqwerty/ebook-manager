@@ -1,8 +1,9 @@
 # ebook-reader
 
 Opens a reader's own DRM-free EPUB 2 or EPUB 3 file and returns plain data an
-interface can draw: import metadata, the reading order, the table of contents
-and each chapter as blocks of styled text. The behaviour is specified in
+interface can draw: import metadata, a word count and cover thumbnail for
+browsing, the reading order, the table of contents and each chapter as blocks
+of styled text. The behaviour is specified in
 [specs/epub-reader-mvp.md](../../specs/epub-reader-mvp.md). Linux only for now.
 
 ## Entry point
@@ -11,7 +12,9 @@ and each chapter as blocks of styled text. The behaviour is specified in
 use ebook_reader::{Reader, ReaderConfig};
 
 let reader = Reader::new(ReaderConfig::default())?;   // proves the sandbox works
-let meta = reader.inspect(path)?;                     // import: title, authors, identifiers
+let meta = reader.inspect(path)?;                     // import: title, authors, identifiers,
+                                                      // series, published, right_to_left
+let survey = reader.survey(path)?;                    // browsing: words and cover
 let book = reader.open(path)?;                        // reading
 for info in book.chapters() { /* index, title, linear; zero-based, reading order */ }
 for entry in book.toc() { /* title, depth, target: Option<Target> */ }
@@ -20,6 +23,24 @@ let chapter = book.read_chapter(0)?;                  // blocks of text
 
 `inspect` and `open` are separate on purpose: a book can import and still
 refuse to open, for example when `Metadata::protected` is set.
+
+`survey` reads every linear chapter and decodes the cover, so it takes longer
+than `inspect`: tens of milliseconds for a novel in a release build. Its two
+results are independent and neither is an error:
+
+```rust
+let Survey { words, cover } = reader.survey(path)?;
+// words: Option<u32>, None when some linear chapter could not be counted.
+if let Some(SurveyedCover { thumbnail, average, spine }) = cover {
+    // thumbnail.width() <= 256, thumbnail.height() <= 384, both >= 1;
+    // thumbnail.pixels() is exactly width * height * 3 bytes of RGB, row by row.
+    // average and spine are Rgb; Rgb::to_u32 gives 0xRRGGBB.
+}
+```
+
+An error from `survey` means the helper gave no answer (it timed out,
+crashed, or the file is not a readable EPUB); asking again later may work.
+A protected book surveys as `{ words: None, cover: None }`.
 
 Following a link or contents entry, and resuming:
 
@@ -56,8 +77,20 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   is no unsandboxed fallback. The helper also refuses to read a book when run
   outside a sandbox.
 - **Inert output.** Results hold text, style flags, anchor names and link
-  targets. No markup, script, style sheet, image data or file path from the book
-  reaches the caller. `Link::External` is text; ask the user before opening it.
+  targets. No markup, script, style sheet, encoded image or file path from the
+  book reaches the caller. `Link::External` is text; ask the user before
+  opening it. The one picture is the survey's cover, as raw RGB pixels that
+  the helper decoded and scaled in the sandbox.
+- **Checked thumbnails.** `Thumbnail` has private fields and no public
+  constructor. The host builds one only after checking both sides are 1 or
+  more and within 256 by 384 and that the pixels are exactly width times
+  height times 3 bytes, with overflow-checked arithmetic. A reply that fails
+  is `ReaderError::HelperFailed`. The host never decodes an image.
+- **Cover limits.** The helper reads the cover only up to
+  `Limits::max_cover_bytes` (20 MiB unpacked) and decodes it only when its
+  header declares at most `Limits::max_cover_pixels` (40 million). JPEG, PNG,
+  GIF and WebP are decoded; anything else gives no cover. A cover that would
+  need enlarging more than three times gives no cover.
 - **Stateless reads.** `Book` holds no process and no open file. A helper that
   crashes or times out costs one call; the next call starts a new helper.
 - **Stable input.** The file must not change while a `Book` is in use. A changed
@@ -137,19 +170,27 @@ disk, nothing is cached and no network connection is made.
 cargo test                     # unit tests and end-to-end tests through the real sandbox
 cargo test --release
 cargo run --example epub-dump -- book.epub      # debug build: set EBOOK_READER_HELPER to the built helper
+cargo test --release --test reading a_novel_is_surveyed -- --nocapture   # prints the survey time
 ```
+
+The survey's statements (V1 to V6 in the spec) are checked in
+`tests/reading.rs` (series, dates, each image format, spine colour, word
+counts) and `tests/failures.rs` (unusable covers, cover limits, unknown
+counts, and a stand-in sandbox whose malformed cover replies the host must
+refuse).
 
 The end-to-end tests need a working `bwrap` with unprivileged user namespaces
 and fail without one. On GitHub's `ubuntu-latest` runners the distribution's
 `bubblewrap` package is enough.
 
-Fixtures are generated in `tests/common/mod.rs`. Add a case there when a real
+Fixtures, cover pictures included, are generated in `tests/common/mod.rs`. Add a case there when a real
 book shows a markup habit the tests do not cover; never commit a real book.
 
 ## Layout
 
 - `src/model.rs`, `src/error.rs`: public types
 - `src/host.rs`: discovery, sandbox launch, limits, reply checks
-- `src/engine/`: parsing, run only inside the helper
+- `src/engine/`: parsing, run only inside the helper; `survey.rs` counts
+  words and `cover.rs` decodes and shrinks the cover
 - `src/bin/helper.rs`: the helper program
 - `examples/epub-dump.rs`: prints a book as text

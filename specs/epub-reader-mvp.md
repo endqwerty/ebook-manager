@@ -1,16 +1,20 @@
 # EPUB reader (MVP)
 
 The `ebook-reader` crate opens a DRM-free EPUB 2 or EPUB 3 file on Linux and
-gives the desktop interface what it needs to import and read it: title, authors
-and identifiers; the chapters in reading order; the table of contents; and each
-chapter as blocks of styled text. Book files are untrusted, so all parsing
-happens in a helper process inside a bubblewrap sandbox with no network, and the
-interface receives text and flags only. When the sandbox cannot be set up,
+gives the desktop interface what it needs to import, browse and read it: title,
+authors, identifiers, series, date and page direction; a word count and a small
+cover picture; the chapters in reading order; the table of contents; and each
+chapter as blocks of styled text. Book files are untrusted, so all parsing and
+image decoding happens in a helper process inside a bubblewrap sandbox with no
+network, and the interface receives text, flags and checked thumbnail pixels
+only. When the sandbox cannot be set up,
 nothing is opened. The caller-facing contract is in the
 [crate README](../crates/ebook-reader/README.md).
 
 This covers the engine side of `READ-1` (contents and a position to resume
-from) and `SEC-1` to `SEC-5` for EPUB text. Not covered yet: images, style sheets and fonts,
+from) and `SEC-1` to `SEC-5` for EPUB text, and the helper's part of
+[browsing a large library](../docs/design/library-browsing.md). Not covered
+yet: pictures inside chapters, style sheets and fonts,
 pagination, search, positions finer than a block, footnote pop-ups, fixed-layout
 and media-overlay books, and every platform other than native Linux packages.
 
@@ -63,6 +67,18 @@ and media-overlay books, and every platform other than native Linux packages.
 - **M4** A book that declares encrypted content other than obfuscated fonts is
   reported as protected. Its metadata is still returned so it can be imported
   and shown as unreadable.
+- **M5** Series come from EPUB 3 `belongs-to-collection` entries whose
+  `collection-type` is `series`, in package order, each with its
+  `group-position` as text when given. Collections of another type are left
+  out. An EPUB 2 book's `calibre:series` and `calibre:series_index` `meta`
+  names add a series when its name is not already listed; an index written
+  as a whole number with a zero fraction, such as `3.0`, is given as `3`.
+  The first series is the primary one.
+- **M6** The publication date is the `dc:date` text as written, with
+  whitespace collapsed: the one marked with the publication event when an
+  EPUB 2 book marks several, else the first with no event. A date marked with
+  another event is never used. A book whose spine says
+  `page-progression-direction="rtl"` is flagged as right to left.
 
 ## Reading
 
@@ -128,6 +144,58 @@ and media-overlay books, and every platform other than native Linux packages.
 - **R10** A sixty-chapter, 600,000-word book opens and every chapter is read in
   well under thirty seconds in a debug build.
 
+## Survey
+
+A survey is one helper call that gives the facts a library view needs and
+that take more than the package to find: a word count and a cover.
+
+- **V1** The word count and the cover are independent: an unusable cover
+  leaves the count, and an unknown count leaves the cover. Neither is ever an
+  error. A survey fails only as other calls do (F1 to F7). A protected book
+  (M4) gives an unknown count and no cover.
+- **V2** The count covers the linear reading order. A word is a run of
+  characters containing a letter or digit, ended by whitespace or the end of
+  a block, so `don't` and `well-known` are one word each and a dash alone is
+  none. Each Han, kana or hangul character counts as half a word; the halves
+  of the whole book are added and rounded up once. A picture that stands on
+  its own is not counted, nor is its text alternative. A picture in a
+  block that also holds text counts as its text alternative, as it reads, because that is how a decorated first letter spells its
+  word. A reading-order item that is a picture adds nothing. The count is unknown when a linear item names no
+  manifest entry, is missing from the archive, is neither text nor a
+  picture, cannot be decoded, passes a limit or is cut at the block limit
+  (R9). Non-linear items are not read.
+- **V3** The cover is the manifest item with the `cover-image` property,
+  else the item an EPUB 2 `meta` named `cover` names by id or by file. It is
+  recognised by its content as JPEG, PNG, GIF (first frame) or WebP, drawn
+  over white where it is transparent, and scaled with its shape kept to fit
+  256 by 384 by averaging areas. A cover smaller than that is enlarged up to
+  three times. The result is the thumbnail's RGB pixels, their mean colour,
+  and the spine colour: the most common colour, with each channel rounded to
+  5 bits, on the tenth of the thumbnail's width at the bound side, given as
+  the mean of the pixels with that colour. The bound side is the left, or the
+  right for a right-to-left book (M6). A thumbnail under 10 pixels wide uses
+  all its columns.
+- **V4** There is no cover when none is declared, its file is missing, it is
+  over 20 MiB unpacked, its header declares more than 40 million pixels, it
+  is another type such as SVG, it fails to decode, it is a JPEG that a strict
+  decode refuses, the decoder stops, or it
+  would need enlarging more than three times. The pixel count is checked from
+  the header before any pixel is decoded. A JPEG's segments and scans
+  must lead one after another to its end marker, and it must pass a strict
+  decode, before it is used, because the lenient decoder fills in the rest of a file that stops
+  early. So a JPEG that stops anywhere before its end gives no cover. Bytes
+  after the picture's end are ignored. Damage that this decoder accepts is
+  not detected, and the cover is used as it decodes: a file cut and then
+  given an end marker, which some stricter decoders refuse, or a changed
+  byte inside the picture data.
+- **V5** The host accepts a cover only when both sides are at least 1, the
+  width at most 256, the height at most 384, and the pixel data is exactly
+  width times height times 3 bytes, computed without overflow. Any other
+  cover in a reply is refused as a helper failure. The caller cannot build an
+  unchecked thumbnail.
+- **V6** A 90,000-word book with a 1600 by 2400 JPEG cover is surveyed in
+  under 5 seconds in a debug build.
+
 ## Refusals and limits
 
 Each failure reaches the interface as a distinct error whose text can be shown
@@ -154,19 +222,23 @@ to the reader.
   reading-order items; 20,000 contents entries; 400,000 elements and text runs
   in a package or contents document; 64 MiB unpacked in one call, counting
   entries that failed part-way; a 200-to-1 unpacked-to-packed ratio for any
-  entry that unpacks to more than 4 MiB; a 96 MiB reply. The entry count is
+  entry that unpacks to more than 4 MiB; a 96 MiB reply; a 20 MiB cover file
+  and 40 million cover pixels (V4). The entry count is
   read from the archive's end record before its directory is parsed. Passing a
   limit gives a limit error; in particular, contents that are too long or too large
-  are an error and never a shortened list. One call unpacks at most the
+  are an error and never a shortened list. A reading call unpacks at most the
   container file, the encryption list, the package, the two contents documents
-  and one chapter, so the per-document limits also bound the total. Nothing is
+  and one chapter, so the per-document limits also bound the total. A survey
+  unpacks the cover first and then the linear chapters, all within the same
+  64 MiB, so a book whose cover and text pass it has an unknown count. Nothing is
   unpacked to disk: archive entry names are only looked up, a looked-up name
   never starts with `/` or contains `..`, and an entry marked as a symbolic
   link is read as ordinary bytes. Compression other than stored and deflate is
   refused as unsupported, for a contents document as for any other.
 - **F7** Before reading the book the helper limits itself to 768 MiB of
   address space, the call's time allowance plus two in CPU seconds, 32 open
-  files, no core dump and no further processes or threads, and does not run
+  files, no core dump and no further processes or threads (the image decoders
+  run on the helper's one thread), and does not run
   if a limit cannot be set. Where the application already runs under a lower
   limit, soft or hard, that limit is kept. Because the helper cannot start another
   process, the address-space limit bounds the whole sandbox. The helper is

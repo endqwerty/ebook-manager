@@ -2,9 +2,13 @@
 //! its reply into checked values. No book byte is parsed in this process.
 
 use crate::error::{ReaderError, Unsupported};
-use crate::model::{Chapter, ChapterInfo, Limits, Link, Metadata, Position, TocEntry};
+use crate::model::{
+    Chapter, ChapterInfo, Limits, Link, Metadata, Position, Survey, SurveyedCover, Thumbnail,
+    TocEntry,
+};
 use crate::wire::{
-    BookOutline, Payload, Response, WireError, WireErrorKind, BOOK_IN_SANDBOX, HELPER_IN_SANDBOX,
+    BookOutline, Payload, Response, WireError, WireErrorKind, WireSurvey, BOOK_IN_SANDBOX,
+    HELPER_IN_SANDBOX,
 };
 use std::ffi::OsString;
 use std::io::Read;
@@ -114,6 +118,19 @@ impl Reader {
         let source = Source::check(epub, &self.inner.limits)?;
         match self.run(Some(&source.path), &["open"])? {
             Payload::Book(outline) => Book::new(self.clone(), source, outline),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// The book's length in words and its cover as a small picture, for
+    /// browsing. Reads every linear chapter, so it takes longer than
+    /// [`Reader::inspect`]. A missing or unusable cover and an uncountable
+    /// text are `None` in the result, not errors; an error means the helper
+    /// gave no answer and asking again later may work.
+    pub fn survey(&self, epub: &Path) -> Result<Survey, ReaderError> {
+        let source = Source::check(epub, &self.inner.limits)?;
+        match self.run(Some(&source.path), &["survey"])? {
+            Payload::Survey(survey) => checked_survey(survey),
             _ => Err(unexpected()),
         }
     }
@@ -243,6 +260,27 @@ fn collect(
         .recv_timeout(Duration::from_millis(200))
         .unwrap_or_default();
     Ok((out, err, status))
+}
+
+/// The helper decoded the cover from an untrusted file. Its reply is held to
+/// the thumbnail's shape before any caller sees the pixels.
+fn checked_survey(survey: WireSurvey) -> Result<Survey, ReaderError> {
+    let cover = match survey.cover {
+        None => None,
+        Some(c) => Some(SurveyedCover {
+            thumbnail: Thumbnail::new(c.width, c.height, c.pixels).ok_or_else(|| {
+                ReaderError::HelperFailed {
+                    detail: "inconsistent cover".into(),
+                }
+            })?,
+            average: c.average,
+            spine: c.spine,
+        }),
+    };
+    Ok(Survey {
+        words: survey.words,
+        cover,
+    })
 }
 
 fn unexpected() -> ReaderError {
@@ -537,6 +575,15 @@ fn scrub_metadata(m: &mut Metadata) {
         }
     }
     m.languages.iter_mut().for_each(scrub);
+    for s in &mut m.series {
+        scrub(&mut s.name);
+        if let Some(p) = &mut s.position {
+            scrub(p);
+        }
+    }
+    if let Some(p) = &mut m.published {
+        scrub(p);
+    }
     if let Some(v) = &mut m.epub_version {
         scrub(v);
     }

@@ -1,6 +1,6 @@
 //! The helper's reply format. Private to this crate's two halves.
 
-use crate::model::{Chapter, ChapterInfo, Metadata, TocEntry};
+use crate::model::{Chapter, ChapterInfo, Metadata, Rgb, TocEntry};
 use serde::{Deserialize, Serialize};
 
 /// Where the sandbox places the helper and the book.
@@ -19,6 +19,25 @@ pub enum Payload {
     Metadata(Metadata),
     Book(BookOutline),
     Chapter(Chapter),
+    Survey(WireSurvey),
+}
+
+/// A survey as the helper sends it. The host checks the cover before it
+/// becomes a [`crate::Thumbnail`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WireSurvey {
+    pub words: Option<u32>,
+    pub cover: Option<WireCover>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WireCover {
+    pub width: u32,
+    pub height: u32,
+    /// RGB, row by row.
+    pub pixels: Vec<u8>,
+    pub average: Rgb,
+    pub spine: Rgb,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

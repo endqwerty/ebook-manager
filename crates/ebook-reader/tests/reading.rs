@@ -4,7 +4,11 @@
 mod common;
 
 use common::*;
-use ebook_reader::{BlockKind, ChapterWarning, Identifier, Link, Position, Target};
+use ebook_reader::{
+    BlockKind, ChapterWarning, Identifier, Link, Position, SeriesMembership, Survey, Target,
+    Thumbnail,
+};
+use image::ImageFormat;
 
 fn texts(chapter: &ebook_reader::Chapter) -> Vec<String> {
     chapter.blocks.iter().map(|b| b.text()).collect()
@@ -494,4 +498,357 @@ fn pictures_in_the_reading_order_are_placeholders() {
         book.read_chapter(2),
         Err(ebook_reader::ReaderError::InvalidBook { .. })
     ));
+}
+
+fn series(name: &str, position: Option<&str>) -> SeriesMembership {
+    SeriesMembership {
+        name: name.into(),
+        position: position.map(Into::into),
+    }
+}
+
+fn survey(bytes: &[u8]) -> Survey {
+    let dir = Scratch::new();
+    reader().survey(&dir.file("b.epub", bytes)).unwrap()
+}
+
+/// M5: EPUB 3 series collections, in package order, with their positions.
+/// Collections of another type are not series.
+#[test]
+fn epub3_series_come_in_order_with_positions() {
+    let bytes = package(Parts {
+        metadata: r##"
+<meta property="belongs-to-collection" id="s1">The Tide Cycle</meta>
+<meta refines="#s1" property="collection-type">series</meta>
+<meta refines="#s1" property="group-position">2.5</meta>
+<meta property="belongs-to-collection" id="set">Boxed Edition</meta>
+<meta refines="#set" property="collection-type">set</meta>
+<meta property="belongs-to-collection" id="s2">Harbour  Stories</meta>
+<meta refines="#s2" property="collection-type">series</meta>
+<meta property="belongs-to-collection" id="s3">Lamps</meta>
+<meta refines="#s3" property="collection-type">series</meta>
+<meta refines="#s3" property="group-position">TPB1</meta>"##,
+        chapters: &["<p>x</p>"],
+        ..Parts::default()
+    });
+    let dir = Scratch::new();
+    let m = reader().inspect(&dir.file("b.epub", &bytes)).unwrap();
+    assert_eq!(
+        m.series,
+        [
+            series("The Tide Cycle", Some("2.5")),
+            series("Harbour Stories", None),
+            series("Lamps", Some("TPB1")),
+        ]
+    );
+}
+
+/// M5: the EPUB 2 series names, with a whole-number index written as a
+/// decimal shown as the whole number.
+#[test]
+fn epub2_series_is_read_from_its_meta_names() {
+    let dir = Scratch::new();
+    let read = |index: &str| {
+        let metadata = format!(
+            r#"<meta name="calibre:series" content="Old Roads"/><meta name="calibre:series_index" content="{index}"/>"#
+        );
+        let bytes = package(Parts {
+            version: "2.0",
+            metadata: &metadata,
+            chapters: &["<p>x</p>"],
+            ..Parts::default()
+        });
+        reader()
+            .inspect(&dir.file("b.epub", &bytes))
+            .unwrap()
+            .series
+    };
+    assert_eq!(read("3.0"), [series("Old Roads", Some("3"))]);
+    assert_eq!(read("1.5"), [series("Old Roads", Some("1.5"))]);
+    assert_eq!(read(""), [series("Old Roads", None)]);
+    assert!(reader()
+        .inspect(&dir.file("none.epub", &epub2()))
+        .unwrap()
+        .series
+        .is_empty());
+}
+
+/// M6: the publication date as written, and the page direction.
+#[test]
+fn publication_date_and_page_direction_are_returned() {
+    let dir = Scratch::new();
+    let epub2_dates = package(Parts {
+        version: "2.0",
+        metadata: r#"<dc:date opf:event="modification">2020-01-01</dc:date><dc:date opf:event="publication">1931-05</dc:date>"#,
+        chapters: &["<p>x</p>"],
+        ..Parts::default()
+    });
+    let m = reader().inspect(&dir.file("a.epub", &epub2_dates)).unwrap();
+    assert_eq!(m.published.as_deref(), Some("1931-05"));
+    assert!(!m.right_to_left);
+
+    let rtl = package(Parts {
+        metadata: "<dc:date> 2019-04-02 </dc:date>",
+        spine_attrs: r#" page-progression-direction="rtl""#,
+        chapters: &["<p>x</p>"],
+        ..Parts::default()
+    });
+    let m = reader().inspect(&dir.file("b.epub", &rtl)).unwrap();
+    assert_eq!(m.published.as_deref(), Some("2019-04-02"));
+    assert!(m.right_to_left);
+    assert!(
+        reader()
+            .open(&dir.file("c.epub", &rtl))
+            .unwrap()
+            .metadata()
+            .right_to_left
+    );
+
+    let undated = reader().inspect(&dir.file("d.epub", &epub3())).unwrap();
+    assert_eq!(undated.published, None);
+}
+
+/// V3: each supported format is decoded and scaled to fit 256 by 384 with
+/// its shape kept, enlarging a small picture up to three times.
+#[test]
+fn covers_in_each_format_are_scaled_to_fit() {
+    let cases = [
+        (
+            ImageFormat::Jpeg,
+            "c.jpg",
+            "image/jpeg",
+            (600, 900),
+            (256, 384),
+        ),
+        (
+            ImageFormat::Png,
+            "c.png",
+            "image/png",
+            (1000, 500),
+            (256, 128),
+        ),
+        (
+            ImageFormat::Gif,
+            "c.gif",
+            "image/gif",
+            (120, 180),
+            (256, 384),
+        ),
+        (
+            ImageFormat::WebP,
+            "c.webp",
+            "image/webp",
+            (300, 300),
+            (256, 256),
+        ),
+    ];
+    for (format, name, media, (w, h), (tw, th)) in cases {
+        let s = survey(&with_cover(&striped(w, h, format), name, media, ""));
+        let cover = s
+            .cover
+            .unwrap_or_else(|| panic!("{format:?} gave no cover"));
+        let t = &cover.thumbnail;
+        assert_eq!((t.width(), t.height()), (tw, th), "{format:?}");
+        assert_eq!(t.pixels().len(), (tw * th * 3) as usize);
+        assert!(t.width() <= Thumbnail::MAX_WIDTH && t.height() <= Thumbnail::MAX_HEIGHT);
+        // A tenth red, a tenth blue, the rest green.
+        let average = [47, 134, 71];
+        assert!(
+            near(cover.average, average, 6),
+            "{format:?}: {:?}",
+            cover.average
+        );
+        assert!(
+            near(t.pixel(tw / 2, th / 2).unwrap(), GREEN, 6),
+            "{format:?}"
+        );
+        assert_eq!(s.words, Some(3), "{format:?}");
+    }
+}
+
+/// V3: the spine colour comes from the bound side: the left, or the right
+/// when pages turn right to left.
+#[test]
+fn spine_colour_comes_from_the_bound_side() {
+    let image = striped(600, 900, ImageFormat::Png);
+    let left = survey(&with_cover(&image, "c.png", "image/png", ""))
+        .cover
+        .unwrap();
+    assert_eq!(
+        left.spine,
+        ebook_reader::Rgb {
+            r: 200,
+            g: 30,
+            b: 30
+        }
+    );
+    let rtl = r#" page-progression-direction="rtl""#;
+    let right = survey(&with_cover(&image, "c.png", "image/png", rtl))
+        .cover
+        .unwrap();
+    assert_eq!(
+        right.spine,
+        ebook_reader::Rgb {
+            r: 30,
+            g: 30,
+            b: 200
+        }
+    );
+    // The same picture, so the same thumbnail and average.
+    assert_eq!(left.thumbnail, right.thumbnail);
+    assert_eq!(left.average, right.average);
+}
+
+/// V3: transparent and half-transparent pixels are drawn over white.
+#[test]
+fn transparency_is_drawn_over_white() {
+    let image = picture(200, 300, ImageFormat::Png, |x, _| {
+        if x < 100 {
+            [0, 0, 0, 0]
+        } else {
+            [0, 0, 0, 128]
+        }
+    });
+    let cover = survey(&with_cover(&image, "c.png", "image/png", ""))
+        .cover
+        .unwrap();
+    let t = &cover.thumbnail;
+    assert_eq!(
+        t.pixel(10, 10),
+        Some(ebook_reader::Rgb {
+            r: 255,
+            g: 255,
+            b: 255
+        })
+    );
+    assert!(near(
+        t.pixel(t.width() - 10, 10).unwrap(),
+        [127, 127, 127],
+        1
+    ));
+    assert!(
+        near(cover.average, [191, 191, 191], 1),
+        "{:?}",
+        cover.average
+    );
+}
+
+/// V3: an EPUB 2 book names its cover with a `meta` element.
+#[test]
+fn an_epub2_cover_is_found_by_its_meta_name() {
+    let image = striped(300, 450, ImageFormat::Jpeg);
+    let bytes = package(Parts {
+        version: "2.0",
+        metadata: r#"<meta name="cover" content="cover-id"/>"#,
+        manifest: r#"<item id="cover-id" href="art/front.jpeg" media-type="image/jpeg"/>"#,
+        chapters: &["<p>One two.</p>"],
+        files: &[("OEBPS/art/front.jpeg", &image)],
+        ..Parts::default()
+    });
+    let s = survey(&bytes);
+    let cover = s.cover.expect("the cover the meta element names");
+    assert_eq!(
+        (cover.thumbnail.width(), cover.thumbnail.height()),
+        (256, 384)
+    );
+    assert_eq!(s.words, Some(2));
+}
+
+/// V2, V4: a book that declares no cover still has its words counted.
+#[test]
+fn a_book_without_a_declared_cover_has_no_cover() {
+    let s = survey(&simple(&["<p>Only text here.</p>"], &[]));
+    assert_eq!(s.cover, None);
+    assert_eq!(s.words, Some(3));
+}
+
+/// V2: words in the linear chapters only, by letters and digits; a picture
+/// in the reading order adds none and does not make the count unknown.
+#[test]
+fn words_are_counted_in_the_linear_reading_order() {
+    let bytes = package(Parts {
+        manifest: r#"<item id="pic" href="plate.png" media-type="image/png"/>"#,
+        spine_extra: r#"<itemref idref="pic"/>"#,
+        chapters: &[
+            "<h1>Chapter 1</h1><p>The keeper&rsquo;s boat came in on the <em>morn</em>ing tide &mdash; late, as always.</p><ul><li>oil</li><li>wick</li></ul>",
+            "<p>A note outside the reading line, not counted.</p>",
+            r#"<p>In 1999, a well-known <a href="c0.xhtml">harbour</a>.</p><p><img src="x.png" alt="Not counted either"/></p>"#,
+        ],
+        nonlinear: &[1],
+        files: &[("OEBPS/plate.png", &striped(10, 10, ImageFormat::Png))],
+        ..Parts::default()
+    });
+    // 2 + 12 + 2, then 5.
+    assert_eq!(survey(&bytes).words, Some(21));
+}
+
+/// V2: Han, kana and hangul count as half a word each, with the halves of
+/// the whole book rounded up once at the end.
+#[test]
+fn han_kana_and_hangul_count_as_half_words() {
+    let bytes = simple(
+        &[
+            "<p>\u{6771}\u{4EAC}\u{3067}\u{3059}\u{306D}</p>",
+            "<p>\u{D55C}\u{AD6D}\u{C5B4} Seoul</p>",
+        ],
+        &[],
+    );
+    // 8 halves and one word.
+    assert_eq!(survey(&bytes).words, Some(5));
+    let odd = simple(&["<p>\u{6771}</p>", "<p>\u{4EAC}\u{3067}</p>"], &[]);
+    assert_eq!(survey(&odd).words, Some(2));
+}
+
+/// V6: surveying a novel of ordinary size, with a full-size photographic
+/// cover, takes a small part of the helper's time allowance.
+#[test]
+fn a_novel_is_surveyed_well_inside_the_time_limit() {
+    const WORDS: [&str; 16] = [
+        "harbour", "keeper", "lamp", "tide", "morning", "quay", "rope", "gull", "salt", "stair",
+        "window", "letter", "storm", "boat", "wick", "light",
+    ];
+    let mut seed = 0x2545_f491_u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    // 30 chapters of 100 paragraphs of 30 words: 90,000 words.
+    let chapters: Vec<String> = (0..30)
+        .map(|_| {
+            (0..100)
+                .map(|_| {
+                    let words: Vec<&str> = (0..30).map(|_| WORDS[next() as usize % 16]).collect();
+                    format!("<p>{}.</p>\n", words.join(" "))
+                })
+                .collect()
+        })
+        .collect();
+    let bodies: Vec<&str> = chapters.iter().map(String::as_str).collect();
+    let cover = picture(1600, 2400, ImageFormat::Jpeg, |x, y| {
+        let v = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)) >> 24;
+        [v as u8, (x / 7) as u8, (y / 11) as u8, 255]
+    });
+    let bytes = package(Parts {
+        manifest: r#"<item id="cov" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>"#,
+        chapters: &bodies,
+        files: &[("OEBPS/cover.jpg", &cover)],
+        ..Parts::default()
+    });
+    let dir = Scratch::new();
+    let path = dir.file("novel.epub", &bytes);
+    let r = reader();
+    let started = std::time::Instant::now();
+    let survey = r.survey(&path).unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(survey.words, Some(90_000));
+    let thumb = survey.cover.expect("the cover").thumbnail;
+    assert_eq!((thumb.width(), thumb.height()), (256, 384));
+    eprintln!(
+        "survey of a {} byte book with a {} byte cover took {elapsed:?}",
+        bytes.len(),
+        cover.len()
+    );
+    assert!(elapsed.as_secs() < 5, "the survey took {elapsed:?}");
 }
