@@ -424,8 +424,11 @@ handling until the field is on screen with the focus, so the keys go
 through its input method and none typed while the bar opens is lost. The
 bar opens when there is text, so a dead key waits for its letter, and
 while it waits Escape and Backspace cancel it and Space completes it.
-The Sort menu's More opens the sort editor as a popover of three rows. Every
-menu, popover and the table's column menu opens and works from the keyboard.
+The Sort menu's More opens the sort editor, a dialog of three rows. It is a
+dialog and not a popover because each row holds drop-downs, whose own lists
+are popovers, and GTK closes a popover when a choice is made in one nested in
+it. Every menu, the editor and the table's column menu opens and works from
+the keyboard.
 
 ```mermaid
 flowchart LR
@@ -513,7 +516,18 @@ flowchart LR
 - **List** is a `GtkListView` and **Table** a `GtkColumnView`, as
   [their sections](interface-views.md#list) describe. A click on a table
   header changes the model's sort. The table never sorts rows itself. The
-  table is offered only when the window is at least 640 wide.
+  table is offered only when the window is at least 640 wide. One view is
+  built at a time over the model, and a view built anew goes on screen when
+  the model has its books, so the old one can still say where the reader is.
+  GTK's column headers take no keyboard focus, so the table gives it to
+  them: Up from the first row reaches a header, the arrows move along them,
+  Return and Control+Return sort, and the Menu key opens the header's menu.
+  A list row's separator is the app's own line in the platform's border
+  colour, because the platform's runs under the cover. The view switch uses
+  `view-dual-symbolic` for the table until an icon is drawn for it.
+- **A sort the reader asks for** starts at the book they were on, if one is
+  selected or focused, and otherwise at the top. Keeping the first book on
+  screen is for changes the reader did not ask for.
 - **Shelf** is a custom scrollable widget. It asks for the `ShelfStrip` once
   per view, packs rows for its width (a new row when the next spine does not
   fit, and at each group start), and stores each row's first rank and y
@@ -669,10 +683,7 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 17. When the reader switches between Grid, List, Table and Shelf, sorts, types
     a search, and opens, edits and exports a book using only the keyboard,
     then each works, and the view and sort are as left after a restart.
-    `apps/desktop/tests/smoke.py`. The first pull request of the window
-    proves the Grid half: typing a search, and opening, editing and
-    exporting a book from the keyboard. Switching views, sorting and what
-    is kept across a restart are proved with the second.
+    `apps/desktop/tests/smoke.py`, for all but the shelf.
 18. When the shelf is resized, then the first fully visible book stays at the
     top, and when a book is selected then only that spine changes.
     `apps/desktop/tests/smoke.py`, and a unit test of the row packing.
@@ -736,16 +747,16 @@ same time.
    Closes [#28](https://github.com/endqwerty/ebook-manager/issues/28).
 2. **Helper facts and covers** (done). Everything under `crates/ebook-reader`.
    Behaviour 15.
-3. **The window** (in two pull requests, the first done). After 1 and 2.
-   Behaviour 17 without the shelf.
+3. **The window** (done, in two pull requests). After 1 and 2. Behaviour 17
+   without the shelf.
    Closes [#25](https://github.com/endqwerty/ebook-manager/issues/25).
-   - First (done): import passes the helper's facts into `ParsedMetadata`,
-     the reader saves the fraction read, the thumbnail cache, the survey, the
+   - First: import passes the helper's facts into `ParsedMetadata`, the
+     reader saves the fraction read, the thumbnail cache, the survey, the
      model, Grid, search, the actions and their keys, the Edit window's
      filing fields, and the launch time check. `Library::search` is deleted.
      A view stays readable after the catalogue changes, which the first
      pull request's contract did not allow and an import needs.
-   - Second (open): List and Table, the view switch, the Sort menu and its
+   - Second: List and Table, the view switch, the Sort menu and its
      editor, the cover sizes and the remembered choices.
 4. **The shelf** (open). After 3. Behaviour 18.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).

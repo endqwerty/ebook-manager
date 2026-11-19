@@ -2,17 +2,35 @@
 
 ## Acceptance walk-through
 
-Use an empty XDG data directory and generated EPUBs. Start the app, add a folder containing a multi-chapter EPUB, an exact duplicate, a revised copy and an invalid file. Check each result and resolve the revision. Search by typing, then edit the title, author, sort title, author sort name, series and position from the keyboard and find the new values. Read chapter two, close the application, reopen the same book and check its reading position. Send the book to a folder twice and compare the exported bytes to the imported EPUB. Keep the source files intact throughout. [`smoke.py`](../apps/desktop/tests/smoke.py) does this with the keyboard, and [`scale.py`](../apps/desktop/tests/scale.py) repeats the library steps with 100,000 generated books.
+Use an empty XDG data directory and generated EPUBs. Start the app, add a folder containing a multi-chapter EPUB, an exact duplicate, a revised copy and an invalid file. Check each result and resolve the revision. Switch between the grid, the list and the table and sort each. Search by typing, then edit the title, author, sort title, author sort name, series and position from the keyboard and find the new values. Read chapter two, close the application, reopen the same book and check its reading position. Send the book to a folder twice and compare the exported bytes to the imported EPUB. Keep the source files intact throughout. [`smoke.py`](../apps/desktop/tests/smoke.py) does this with the keyboard, and [`scale.py`](../apps/desktop/tests/scale.py) repeats the library steps with 100,000 generated books.
 
 ## The library window
 
-- The window shows one place, All books, with the number of books beside its name. The books are a grid of covers in title order: a leading article is skipped by the book's language, and numbers sort by value.
+- The window shows one place, All books, with the number of books beside its name, as a grid of covers, a list or a table. A place with no sort chosen is in title order: a leading article is skipped by the book's language, and numbers sort by value.
 - Every cover is a 2:3 frame of the same size. A book with a cover image shows it with an edge line, a shade on the side it is bound and a shadow. A book without one shows a binding set in type: its title and author on one of eight colours chosen from the book's ID. While a cover's image is being read its frame is the cover's average colour. Under More contrast the shade and shadows go and an outline is drawn around the cover. The app follows the system's light or dark appearance.
 - A partly read book has a line under its cover, as long as the part read. A finished book has a check mark after its author. A screen reader hears both in words with the title and author.
-- The number of columns follows the window's width and the system's text size. Covers grow to share a row, up to a quarter over the medium width of 128.
+- The grid's number of columns follows the window's width, the cover size and the system's text size. Covers grow to share a row, up to a quarter over the chosen width: 96 for small covers, 128 for medium and 160 for large.
 - With no books the window says so and offers Add. When a search matches nothing it names the text searched for and offers Clear Search. When the books asked for cannot be opened it says why and offers Try Again, and shows no books of an earlier search. When the books on screen can no longer be read, a command on a book whose row had not loaded says so, and the window opens the books again by itself.
 - A book the reader was on stays selected, focused and in place when the books shown are replaced by a search or by a change to the library. The selection is kept as the books themselves and not their places, so new books never arrive with an old selection. If the reader scrolls while their place is being found, the new books are shown and the place they moved to is found once more, and if they move again the view stays where they put it. One case is not caught: a drag or a flick that was already under way when a refresh placed the view sends no new press, so the view can be put back once to where the drag had it at that moment. A view that cannot be read when it is about to be shown is an error with Try Again, and showing an error clears the selection. During an import the list is refreshed at most once a second.
 - Closing the window first closes the windows opened from it, so each saves what it holds.
+
+## List and table
+
+- A list row is a small cover, the title, the author, and the series with the book's place in it. At its trailing edge is the percentage read, a check mark for a finished book, or, when the list is sorted by a date, that date. The cover is 40, 48 or 60 wide with the cover size.
+- The table has a column for each fact: Title, Author, Series, Date Added and Progress to start with, and Date Published and Last Read to add. Title has a small cover and cannot be removed. A column's width can be dragged, and a header dragged to another place.
+- The table is offered when the window is at least 640 wide. Under that the view switch is a menu without it, and a window set to the table shows the list. When the system's text size is one and a half times or more, a window set to the grid shows the list. Neither changes the choice.
+- From the first row, Up reaches the table's headers. On a header, Left and Right move along them, Return sorts by that column and again turns the sort round, Control+Return adds the column as the next sort key or turns that key round, and the Menu key or Shift+F10 opens the header's menu. Down returns to the books. A click and a Control+click do what Return and Control+Return do. A second and third key show a small 2 and 3 in their headers.
+- A header's menu shows and hides columns and moves its column toward the start or the end.
+
+## Sorting
+
+- The Sort menu sorts by title, author, series, date added, date published or last read, ascending or descending. More opens the sort editor: three rows, each a field and a direction, for a second and third key. Progress is a field there too.
+- Each view has its own sort. A sort the reader chooses starts at the book they were on if it is selected or focused, and at the top otherwise.
+- A book with no value for a field sorts after those that have one, in both directions.
+
+## Remembered choices
+
+- The view, each view's sort, the cover size, and the table's columns with their order and widths are kept in `settings.json` in the app's config folder and are as they were left after a restart. A part of the file this version does not understand takes its default and leaves the rest.
 
 ## Search
 
@@ -24,6 +42,9 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 | Command | Keys |
 |---|---|
 | Add files, add a folder | Ctrl+O, Ctrl+Shift+O, or the Add menu |
+| Grid, list, table | Ctrl+1, Ctrl+2, Ctrl+3, or the view switch |
+| Sort | The Sort menu, a table header, or Ctrl+Shift+S for the sort editor |
+| Small, medium or large covers | The main menu, F10 |
 | Search | Typing, or Ctrl+F |
 | Read | Return or a double click |
 | Edit | F2 |

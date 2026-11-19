@@ -54,10 +54,10 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
 ## Finding and viewing
 
 - `LIB-20` (core) Cover grid, list and table views. The table has user-chosen
-  columns. Each view remembers its sort. The Linux window shows the [cover grid](../../specs/desktop-mvp.md#the-library-window). The list, the table and the remembered sort are open.
+  columns. Each view remembers its sort. Done on Linux: the [grid](../../specs/desktop-mvp.md#the-library-window), the [list and the table](../../specs/desktop-mvp.md#list-and-table) with chosen columns, and a remembered sort for each.
 - `LIB-21` (core) Sort by any field, with a second and third key. Sorting follows
   the locale: leading articles are skipped by a per-language rule, numbers sort as
-  numbers, and the user can edit any sort key by hand.
+  numbers, and the user can edit any sort key by hand. On Linux the [Sort menu, its editor and the table's headers](../../specs/desktop-mvp.md#sorting) sort by seven fields with up to three keys, and the Edit window sets a book's sort title and author sort names. A sort key for a series position cannot be edited apart from the position.
 - `LIB-22` (core) Typing in the search box filters at once across title, author,
   series and tags. The Linux window [filters as the reader types](../../specs/desktop-mvp.md#search) across title, author and series. Tags wait until the catalogue holds them.
 - `LIB-23` (expected) A query language with `field:value`, AND, OR, NOT, ranges,
