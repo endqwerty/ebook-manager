@@ -107,6 +107,8 @@ fn sandbox_has_no_network_and_sees_only_the_book() {
     let mut cmd = Command::new("/usr/bin/bwrap");
     cmd.args([
         "--unshare-all",
+        "--unshare-user",
+        "--disable-userns",
         "--die-with-parent",
         "--new-session",
         "--clearenv",
@@ -116,6 +118,9 @@ fn sandbox_has_no_network_and_sees_only_the_book() {
     for d in ["/usr/lib", "/usr/lib64", "/lib", "/lib64"] {
         cmd.args(["--ro-bind-try", d, d]);
     }
+    // Tools for the checks below; the real sandbox has neither.
+    cmd.args(["--ro-bind-try", "/usr/bin/unshare", "/unshare"]);
+    cmd.args(["--ro-bind", "/usr/bin/true", "/true"]);
     cmd.args(["--ro-bind", "/bin/sh", "/helper"])
         .arg("--ro-bind")
         .arg(&book)
@@ -124,7 +129,8 @@ fn sandbox_has_no_network_and_sees_only_the_book() {
     cmd.arg(format!(
         "for p in /home /etc /proc /tmp /dev /run /usr/bin '{}' '{}'; do [ -e \"$p\" ] && echo \"SEES $p\"; done; \
          [ -r /book.epub ] && echo BOOK-OK; ( : > /book.epub ) 2>/dev/null && echo WROTE-BOOK; \
-         ( : > /x ) 2>/dev/null && echo WROTE-ROOT; echo DONE",
+         ( : > /x ) 2>/dev/null && echo WROTE-ROOT; \
+         [ -e /unshare ] && /unshare -U /true 2>/dev/null && echo NESTED-NAMESPACE; echo DONE",
         secret.display(),
         dir.0.display()
     ));
@@ -385,6 +391,7 @@ fn memory_and_time_limits_stop_the_helper() {
     let heavy = dir.file("heavy.epub", &simple(&[&big], &[]));
     let mut cfg = config();
     cfg.limits.memory_bytes = 24 * 1024 * 1024;
+    cfg.limits.max_compression_ratio = u32::MAX;
     let starved = Reader::new(cfg).unwrap();
     let err = starved
         .open(&heavy)
@@ -393,18 +400,30 @@ fn memory_and_time_limits_stop_the_helper() {
     assert!(matches!(err, ReaderError::HelperFailed { .. }), "{err:?}");
     assert!(starved.inspect(&path).is_ok());
 
+    // A stand-in sandbox that answers the probe and then never replies.
+    let script = "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{\"Ok\":{\"Probe\":{\"isolated\":true}}}';;\n*) exec /usr/bin/sleep 30;;\nesac\n";
+    let stuck = dir.file("stuck-bwrap", script.as_bytes());
+    Command::new("/bin/chmod")
+        .arg("+x")
+        .arg(&stuck)
+        .status()
+        .unwrap();
     let cfg = ReaderConfig {
-        timeout: Duration::from_millis(40),
+        bwrap_path: Some(stuck),
+        timeout: Duration::from_millis(300),
         ..config()
     };
-    // The probe itself must fit in the allowance on this machine; if it does
-    // not, creation fails closed, which is also the behaviour under test.
-    if let Ok(hurried) = Reader::new(cfg) {
-        let slow = format!("<p>{}</p>", "<b>x</b> ".repeat(1024 * 1024));
-        let slow = dir.file("slow.epub", &simple(&[&slow], &[]));
-        let result = hurried.open(&slow).and_then(|b| b.read_chapter(0));
-        assert_eq!(result.unwrap_err(), ReaderError::Timeout);
-    }
+    let started = std::time::Instant::now();
+    let mut outcome = None;
+    settle(|| match Reader::new(cfg.clone()) {
+        Ok(hurried) => {
+            outcome = Some(hurried.open(&path).map(|_| ()));
+            String::new()
+        }
+        Err(e) => format!("{e:?}"),
+    });
+    assert_eq!(outcome, Some(Err(ReaderError::Timeout)));
+    assert!(started.elapsed() < Duration::from_secs(10));
     assert!(reader().open(&path).is_ok());
 }
 
@@ -561,4 +580,124 @@ fn extreme_settings_do_not_panic() {
         }
     );
     assert!(err.to_string().contains("4294967296"));
+}
+
+/// S3: files the application has open are not handed to the sandbox, even
+/// when they are not marked close-on-exec.
+#[test]
+fn open_descriptors_do_not_reach_the_sandbox() {
+    use std::os::fd::AsRawFd;
+    let dir = Scratch::new();
+    let secret = std::fs::File::open(dir.file("secret.txt", b"private")).unwrap();
+    // A descriptor number unlikely to be in use, inheritable on purpose.
+    const LEAKY: i32 = 57;
+    // SAFETY: dup2 onto an unused number; the copy is closed below.
+    assert_eq!(unsafe { libc::dup2(secret.as_raw_fd(), LEAKY) }, LEAKY);
+
+    // A stand-in for bwrap that reports whether it was handed descriptor 57.
+    let script = format!(
+        "#!/bin/sh\nif [ -e /proc/$$/fd/{LEAKY} ]; then echo 'bwrap: LEAKED' >&2; else echo 'bwrap: CLEAN' >&2; fi\nexit 1\n"
+    );
+    let fake = dir.file("fd-bwrap", script.as_bytes());
+    Command::new("/bin/chmod")
+        .arg("+x")
+        .arg(&fake)
+        .status()
+        .unwrap();
+    let cfg = ReaderConfig {
+        bwrap_path: Some(fake),
+        ..config()
+    };
+    let report = settle(|| match Reader::new(cfg.clone()) {
+        Err(ReaderError::SandboxUnavailable { reason }) => reason,
+        other => panic!("expected the stand-in to fail, got {other:?}"),
+    });
+    // SAFETY: closes the copy made above.
+    unsafe { libc::close(LEAKY) };
+    assert_eq!(report, "bwrap: CLEAN");
+}
+
+/// S6: a helper reply that breaks the crate's promises is refused or
+/// corrected before the caller sees it.
+#[test]
+fn inconsistent_replies_are_not_passed_on() {
+    let dir = Scratch::new();
+    let book = dir.file("b.epub", &epub3());
+    // A stand-in for the whole sandbox that answers with fixed replies.
+    let fake = |name: &str, open_reply: &str| {
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}';;\n*) echo '{open_reply}';;\nesac\n"
+        );
+        let path = dir.file(name, script.as_bytes());
+        Command::new("/bin/chmod")
+            .arg("+x")
+            .arg(&path)
+            .status()
+            .unwrap();
+        ReaderConfig {
+            bwrap_path: Some(path),
+            ..config()
+        }
+    };
+    let meta = r#"{"title":null,"authors":[],"identifiers":[],"languages":[],"epub_version":null,"protected":false}"#;
+
+    let empty = fake(
+        "empty",
+        &format!(r#"{{"Ok":{{"Book":{{"metadata":{meta},"chapters":[],"toc":[]}}}}}}"#),
+    );
+    let result = settle(|| {
+        format!(
+            "{:?}",
+            Reader::new(empty.clone())
+                .and_then(|r| r.open(&book))
+                .map(|_| ())
+        )
+    });
+    assert!(result.contains("HelperFailed"), "{result}");
+
+    let odd = fake(
+        "odd",
+        &format!(
+            r#"{{"Ok":{{"Book":{{"metadata":{meta},"chapters":[{{"index":9,"title":"a\u001bb","linear":true}}],"toc":[{{"title":"x","depth":4294967295,"target":{{"chapter":7,"anchor":null}}}}]}}}}}}"#
+        ),
+    );
+    let mut opened = None;
+    settle(
+        || match Reader::new(odd.clone()).and_then(|r| r.open(&book)) {
+            Ok(b) => {
+                opened = Some(b);
+                String::new()
+            }
+            Err(e) => format!("{e:?}"),
+        },
+    );
+    let opened = opened.expect("a corrected outline");
+    assert_eq!(opened.chapters()[0].index, 0);
+    assert_eq!(opened.chapters()[0].title.as_deref(), Some("ab"));
+    assert!(opened.toc()[0].depth <= 33);
+    assert_eq!(opened.toc()[0].target, None);
+}
+
+/// F6: a megabyte or more from almost nothing is refused by its ratio, and a
+/// run cannot unpack more than its total allowance.
+#[test]
+fn compression_ratio_and_total_unpacked_size_are_bounded() {
+    let dir = Scratch::new();
+    // 2 MiB of one repeated short line: far under the 16 MiB chapter limit,
+    // far over a 200:1 ratio.
+    let body = format!("<p>{}</p>", "a ".repeat(1024 * 1024));
+    let squeezed = dir.file("ratio.epub", &simple(&[&body], &[]));
+    let book = reader().open(&squeezed).unwrap();
+    match book.read_chapter(0) {
+        Err(ReaderError::LimitExceeded { what }) => assert!(what.contains("ratio"), "{what}"),
+        other => panic!("expected a ratio refusal, got {other:?}"),
+    }
+
+    let mut cfg = config();
+    cfg.limits.max_unpacked_bytes = 1500;
+    let lean = Reader::new(cfg).unwrap();
+    match lean.open(&dir.file("total.epub", &epub3())) {
+        Err(ReaderError::LimitExceeded { what }) => assert!(what.contains("total"), "{what}"),
+        other => panic!("expected a total-size refusal, got {other:?}"),
+    }
 }

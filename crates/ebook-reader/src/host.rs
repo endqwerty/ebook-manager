@@ -19,6 +19,8 @@ pub const HELPER_NAME: &str = "ebook-reader-helper";
 /// Environment variable that names the helper by absolute path.
 pub const HELPER_ENV: &str = "EBOOK_READER_HELPER";
 
+/// Deepest contents nesting the helper produces, counted from 0.
+const MAX_TOC_DEPTH: u32 = 33;
 const BWRAP_PLACES: [&str; 2] = ["/usr/bin/bwrap", "/bin/bwrap"];
 /// Read-only system library directories the helper's loader may need.
 const LIBRARY_DIRS: [&str; 4] = ["/usr/lib", "/usr/lib64", "/lib", "/lib64"];
@@ -111,7 +113,7 @@ impl Reader {
     pub fn open(&self, epub: &Path) -> Result<Book, ReaderError> {
         let source = Source::check(epub, &self.inner.limits)?;
         match self.run(Some(&source.path), &["open"])? {
-            Payload::Book(outline) => Ok(Book::new(self.clone(), source, outline)),
+            Payload::Book(outline) => Book::new(self.clone(), source, outline),
             _ => Err(unexpected()),
         }
     }
@@ -121,6 +123,8 @@ impl Reader {
         let mut cmd = Command::new(&inner.bwrap);
         cmd.args([
             "--unshare-all",
+            "--unshare-user",
+            "--disable-userns",
             "--die-with-parent",
             "--new-session",
             "--clearenv",
@@ -148,6 +152,7 @@ impl Reader {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::spawn::confine(&mut cmd);
 
         let mut child = cmd.spawn().map_err(|e| ReaderError::SandboxUnavailable {
             reason: format!("cannot start bwrap: {e}"),
@@ -269,9 +274,11 @@ fn find_helper(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
     if let Some(p) = configured {
         candidates.push(p.to_owned());
     } else {
+        // A development convenience. A release build takes its helper only
+        // from configuration or from beside the installed program.
         if let Some(p) = std::env::var_os(HELPER_ENV)
             .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
+            .filter(|p| cfg!(debug_assertions) && p.is_absolute())
         {
             candidates.push(p);
         }
@@ -363,12 +370,23 @@ pub struct Book {
 }
 
 impl Book {
-    fn new(reader: Reader, source: Source, outline: BookOutline) -> Book {
+    /// The outline came from the helper, which read an untrusted file. Check
+    /// it against what this crate promises its callers before handing it on.
+    fn new(reader: Reader, source: Source, outline: BookOutline) -> Result<Book, ReaderError> {
         let BookOutline {
             mut metadata,
             mut chapters,
             mut toc,
         } = outline;
+        let limits = &reader.inner.limits;
+        if chapters.is_empty()
+            || chapters.len() > limits.max_spine_items as usize
+            || toc.len() > limits.max_toc_entries as usize
+        {
+            return Err(ReaderError::HelperFailed {
+                detail: "inconsistent reply".into(),
+            });
+        }
         scrub_metadata(&mut metadata);
         let count = chapters.len() as u32;
         for (i, c) in chapters.iter_mut().enumerate() {
@@ -378,6 +396,7 @@ impl Book {
             }
         }
         for entry in &mut toc {
+            entry.depth = entry.depth.min(MAX_TOC_DEPTH);
             scrub(&mut entry.title);
             if entry.target.as_ref().is_some_and(|t| t.chapter >= count) {
                 entry.target = None;
@@ -386,13 +405,13 @@ impl Book {
                 scrub(a);
             }
         }
-        Book {
+        Ok(Book {
             reader,
             source,
             metadata,
             chapters,
             toc,
-        }
+        })
     }
 
     pub fn metadata(&self) -> &Metadata {
@@ -450,6 +469,11 @@ impl Book {
         let count = self.chapters.len() as u32;
         if let Some(t) = &mut chapter.title {
             scrub(t);
+        }
+        let max_blocks = self.reader.inner.limits.max_blocks_per_chapter as usize;
+        if chapter.blocks.len() > max_blocks {
+            chapter.blocks.truncate(max_blocks);
+            chapter.truncated = true;
         }
         for block in &mut chapter.blocks {
             if let crate::model::BlockKind::Heading { level } = &mut block.kind {

@@ -22,6 +22,10 @@ pub struct Limits {
     pub max_toc_entries: u32,
     /// Most blocks returned for one chapter. A longer chapter is cut and flagged.
     pub max_blocks_per_chapter: u32,
+    /// Most unpacked bytes one helper run may take out of the archive.
+    pub max_unpacked_bytes: u64,
+    /// Largest unpacked-to-packed ratio for an entry over 1 MiB unpacked.
+    pub max_compression_ratio: u32,
     /// Largest reply the host accepts from the helper.
     pub max_output_bytes: u64,
     /// Address-space limit the helper puts on itself.
@@ -39,6 +43,8 @@ impl Default for Limits {
             max_spine_items: 10_000,
             max_toc_entries: 20_000,
             max_blocks_per_chapter: 50_000,
+            max_unpacked_bytes: 64 * MIB,
+            max_compression_ratio: 200,
             max_output_bytes: 96 * MIB,
             memory_bytes: 768 * MIB,
         }
