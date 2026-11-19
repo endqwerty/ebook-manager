@@ -81,11 +81,17 @@ so [the view tests](../../tests/view.rs) include it directly.
 - One WebKit web process per view, and WebKit's shared network process.
   Nothing is cached or stored: the network session is ephemeral.
 
-## Two things that must stay as they are
+## Three things that must stay as they are
 
-WebKitGTK 2.54 aborts a web process, leaving a core dump, in two cases the
-tests found. Both are avoided in `view.rs` and guarded by
-`two_views_share_one_process_without_a_crash`.
+WebKitGTK 2.54 aborts a web process, leaving a core dump, in three cases the
+tests found. All are avoided in `view.rs`. The first two are guarded by
+`two_views_share_one_process_without_a_crash`, and all three by the test
+program failing on any core dump.
+
+- A web process shutting itself down when its view is destroyed. Now and
+  then, under load, it aborts in a timer's destructor. `View::shut`, and the
+  view's own drop, end the process outright first, which leaves no core
+  dump. Call `shut` before destroying the window that holds the view.
 
 - A second `WebKitWebContext` with its own memory limit. Every view shares
   one context, so the memory limit is the first view's.

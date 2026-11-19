@@ -493,6 +493,15 @@ impl View {
         Ok(View(inner))
     }
 
+    /// End the view's web process. Call it before the view's window is
+    /// destroyed, so WebKit never runs that process's own shutdown. See
+    /// `Drop for Inner`.
+    pub fn shut(&self) {
+        disarm(&self.0.watchdog);
+        self.0.load.replace(None);
+        self.0.view.terminate_web_process();
+    }
+
     pub fn widget(&self) -> &webkit6::WebView {
         &self.0.view
     }
@@ -797,6 +806,11 @@ fn disarm(slot: &Rc<RefCell<Option<glib::SourceId>>>) {
 
 impl Drop for Inner {
     fn drop(&mut self) {
+        // End the web process now instead of letting it shut itself down.
+        // WebKitGTK 2.54 sometimes aborts in that shutdown, in a timer's
+        // destructor, and an abort is a crash the reader would see. Ending
+        // it outright leaves no core dump, and nothing in it is needed.
+        self.view.terminate_web_process();
         disarm(&self.watchdog);
         BOOKS.with(|b| b.borrow_mut().remove(&self.token));
     }

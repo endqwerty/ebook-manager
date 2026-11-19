@@ -393,6 +393,7 @@ impl Reading {
         w.connect_unrealize(move |_| {
             if let Some(r) = weak.upgrade() {
                 r.flush();
+                r.view.shut();
             }
         });
         let r = reading.clone();
@@ -435,6 +436,9 @@ impl Reading {
                         pages,
                     }));
                 }
+                // The page has given its last answer. Its process ends here,
+                // before the window that holds its view is destroyed.
+                r.view.shut();
                 let Some(position) = r.position() else {
                     w.destroy();
                     return;

@@ -164,7 +164,8 @@ A failure sends the design back to C, A or the reader host process under
    ([SEC-10](../requirements/10-constraints.md#opening-untrusted-files)).
    The test program counts the records in `coredumpctl list` before its first
    test and ten seconds after its last, and fails on any new one, whatever
-   the tests asserted. A record appears some seconds after its crash. CI has
+   the tests asserted. A record has appeared as late as 19 seconds after its
+   crash, so the program waits 30. CI has
    no `coredumpctl`, so this runs on a developer's machine.
 7. **It cannot run in CI.** All of the above must pass on GitHub's
    `ubuntu-latest` under Xvfb with software rendering.
@@ -180,6 +181,9 @@ things the design now holds to.
   limit, and saving the compiled content filter again while a view was using
   it. Every view therefore shares one web context, and the filter is compiled
   once per process. `two_views_share_one_process_without_a_crash` guards it.
+- A web process left to shut itself down when its view is destroyed now and
+  then aborts, under load, in a timer's destructor. The reader ends the
+  process outright before the view goes, which leaves no core dump.
 - WebKit's memory limit ends a web process only while that process answers.
   See [The bounds on a chapter](#the-bounds-on-a-chapter).
 

@@ -267,6 +267,7 @@ impl Stage {
 
 impl Drop for Stage {
     fn drop(&mut self) {
+        self.view.shut();
         self.window.destroy();
         pause(Duration::from_millis(50));
     }
@@ -1278,7 +1279,9 @@ fn main() {
     // Users must never see a crash, so no test here may leave a core dump,
     // whatever it asserted. A dump is recorded some seconds after the crash.
     if let Some(before) = dumps {
-        std::thread::sleep(Duration::from_secs(10));
+        // Under load a record has appeared as late as 19 seconds after
+        // its crash.
+        std::thread::sleep(Duration::from_secs(30));
         let after = core_dumps().unwrap_or(before);
         if after > before {
             eprintln!(
