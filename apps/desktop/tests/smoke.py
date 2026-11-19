@@ -253,11 +253,16 @@ def capture(title, out):
     subprocess.run(["import", "-window", wid, str(out)], check=True)
 
 
-def markers(image):
-    text = subprocess.check_output(
+def words(image):
+    """The text on a screenshot. The page is drawn by a web view, so the
+    driver reads it the way a person does."""
+    return subprocess.check_output(
         ["tesseract", str(image), "stdout"], stderr=subprocess.DEVNULL, text=True
     )
-    return [int(n) for n in re.findall(r"Marker (\d+)", text)]
+
+
+def markers(image):
+    return [int(n) for n in re.findall(r"Marker (\d+)", words(image))]
 
 
 def size(title):
@@ -633,26 +638,19 @@ def run(binary, evidence, root):
         keys(evidence)
         click("Next")
         find("Chapter 2 of 2", contains=True)
-        view = find("", "text")
-        assert "Northern shore" in accessible_text(view)
         capture("The Lantern Atlas · Revised", evidence / "reader.png")
-        wid = subprocess.check_output(
-            [
-                "xdotool",
-                "search",
-                "--onlyvisible",
-                "--name",
-                "The Lantern Atlas · Revised",
-            ],
-            text=True,
-        ).splitlines()[-1]
-        xd("mousemove", "--window", wid, 300, 260, "click", "--repeat", 12, 5)
+        assert "Northern shore" in words(evidence / "reader.png")
+        for _ in range(3):
+            xd("key", "Right")
+            time.sleep(0.4)
+        find("Page 4 of", contains=True)
         time.sleep(0.6)
         capture("The Lantern Atlas · Revised", evidence / "scrolled.png")
         before = markers(evidence / "scrolled.png")
         assert before and before[0] > 0, before
-        # End the first process with the reader still open after scrolling settled.
-        stop(proc)
+        # End the first process with the reader still open after turning settled.
+        proc.terminate()
+        proc.wait(timeout=10)
         for attempt in range(3):
             if attempt:
                 focus("Ebook Manager")
@@ -663,10 +661,10 @@ def run(binary, evidence, root):
             select_book("lantern")
             key("Return")
             find("Chapter 2 of 2", contains=True)
-            assert "Northern shore" in accessible_text(find("", "text"))
+            find("Page 4 of", contains=True)
             capture("The Lantern Atlas · Revised", evidence / "resumed.png")
             after = markers(evidence / "resumed.png")
-            assert after and abs(after[0] - before[0]) <= 1, (before, after)
+            assert after == before, (before, after)
             print(
                 f"PASS first visible paragraph before close {before[0]}, after restart {after[0]}",
                 flush=True,

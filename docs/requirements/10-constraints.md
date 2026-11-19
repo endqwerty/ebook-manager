@@ -40,6 +40,7 @@ for proposed components and release audit requirements.
 | Speech | The platform's voices | Piper (GPL): only as something the user installs |
 | Fonts | Fonts under the SIL Open Font License | Audit the exact files and keep their notices. [Google Fonts' Atkinson Hyperlegible licence](https://github.com/google/fonts/blob/main/ofl/atkinsonhyperlegible/OFL.txt) |
 | Dictionaries | Dictionaries the user installs | Wiktionary data is CC BY-SA: attribute it and keep it apart from the code |
+| Drawing a chapter on Linux | WebKitGTK 6.0, whose [licence page](https://webkit.org/licensing-webkit/) gives its parts as LGPL version 2 or later and BSD | Use the system's or the Flatpak runtime's shared library, as for GTK. Do not link it statically or ship a copy without the LGPL's terms for doing so |
 | Storage | SQLite (public domain) | |
 
 - `LIC-1` (core) The app neither links nor bundles GPL or AGPL code. A tool under

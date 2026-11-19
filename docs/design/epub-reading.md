@@ -152,31 +152,38 @@ A failure sends the design back to C, A or the reader host process under
    page reads back. For every fixture chapter the page must report the helper's
    length, and the character at a set of offsets on each side of every element
    boundary must be the character the helper's text has there.
-5. **The drawing process can reach the network or grow without limit.** SEC-5
+5. **The drawing process can reach the network or run without limit.** SEC-5
    asks that drawing run in a separate process with no network and limits on
    time and memory. The test walks `/proc` for processes named
-   `WebKitWebProcess` whose chain of parents reaches the test, of which there
-   is one because the test has one view, and requires its network namespace
-   link to differ from the test's own. The view takes its memory limit and
-   watchdog time as arguments. With the limit at 64 MiB, a generated chapter
-   of 200,000 paragraphs must end with `web-process-terminated` and the
-   reason `ExceededMemoryLimit`. With the watchdog at 2 seconds, a call that
-   runs `for(;;){}` in the app's script world must end with the reason
-   `TerminatedByApi`. The next chapter must load after each. If the memory
-   case cannot be made to end the same way on every run, the test asserts
-   only that the limit is set, and the design records that the memory limit
-   is unproven. Ending the process must leave no core dump, because
-   [users must never see a crash](https://github.com/endqwerty/ebook-manager/pull/98).
-   The test compares the count from `coredumpctl list` before and after where
-   that command exists, which is not on CI.
-6. **It cannot run in CI.** All of the above must pass on GitHub's
+   `WebKitWebProcess` whose chain of parents reaches the test and requires
+   each one's network namespace link to differ from the test's own. With the
+   watchdog at 2 seconds, a call that runs `for(;;){}` in the app's script
+   world must end with `Event::Failed` and the next chapter must load.
+   Memory is under [The bounds on a chapter](#the-bounds-on-a-chapter).
+6. **A test leaves a core dump.** Users must never see a crash
+   ([SEC-10](../requirements/10-constraints.md#opening-untrusted-files)).
+   The test program counts the records in `coredumpctl list` before its first
+   test and ten seconds after its last, and fails on any new one, whatever
+   the tests asserted. A record appears some seconds after its crash. CI has
+   no `coredumpctl`, so this runs on a developer's machine.
+7. **It cannot run in CI.** All of the above must pass on GitHub's
    `ubuntu-latest` under Xvfb with software rendering.
 
-A throwaway probe on WebKitGTK 2.54.2 under Xvfb has already passed checks 1
-and 2, the dead-proxy case of check 3, and the namespace part of check 5. It
-found one thing the design must hold to: a meta refresh moves the view to a
-blank page even when its request is blocked, so `decide-policy` has to ignore
-navigation, and the test has to assert the view stayed.
+Checks 1 to 6 pass on WebKitGTK 2.54.2 under Xvfb. Building them found three
+things the design now holds to.
+
+- A meta refresh moves the view to a blank page even when its request is
+  blocked, so `decide-policy` ignores navigation and the test asserts the view
+  stayed.
+- A second view in the same process made WebKit abort a web process and leave
+  a core dump, by two routes: a second `WebKitWebContext` with its own memory
+  limit, and saving the compiled content filter again while a view was using
+  it. Every view therefore shares one web context, and the filter is compiled
+  once per process. `two_views_share_one_process_without_a_crash` guards it.
+- WebKit's memory limit ends a web process only while that process answers.
+  See [The bounds on a chapter](#the-bounds-on-a-chapter).
+
+Check 7 is unproven until the pull request's CI runs.
 
 **What WebKit's network process means for SEC-5.** The web process, which
 parses and draws the book's bytes, has no network of its own. WebKit's network
@@ -405,13 +412,13 @@ If a step fails, no book opens and the window shows the error.
 
 1. **The content filter.** A `WebKitUserContentFilterStore` at
    `$XDG_CACHE_HOME/ebook-manager/content-filters` compiles one rule list that
-   blocks every load whose address does not start with `ebook:`. The compiled
-   list is the only thing the reader writes to disk besides its settings.
-2. **A context of its own**, built with `WebKitMemoryPressureSettings`: a
-   limit of 1,024 MiB, a kill threshold of 1.0 and a poll interval of 1 second.
-   WebKit samples the web process's memory at that interval and ends it past
-   the limit. It is not a hard ceiling. The process could pass it between
-   samples.
+   blocks every load whose address does not start with `ebook:`. It is
+   compiled once per process and every view uses that copy. The compiled list
+   is the only thing the reader writes to disk besides its settings.
+2. **One web context for every reader view in the process**, built with
+   `WebKitMemoryPressureSettings`: a limit of 1,024 MiB, a kill threshold of
+   1.0 and a poll interval of 1 second. The `ebook:` scheme is registered on
+   it once and finds a view's book by the token in the address.
 3. **An ephemeral `WebKitNetworkSession`**, so no cookies, cache or storage
    reach disk. Its proxy is set to `http://127.0.0.1:9` with no ignored hosts,
    so a request that passed every other layer goes to a port nothing should
@@ -473,12 +480,33 @@ gives it `tabindex="0"` and the link role, and Enter activates it as a click
 does. Jumps and external links work from task 3. The footnote popover and
 Back arrive in task 5, and until then a footnote link is a jump.
 
-**The watchdog.** Every call into the script and every chapter load has 15
-seconds to answer. Past that the shell calls `terminate_web_process`, shows
-that the chapter could not be displayed, and the next load starts a new web
-process. `web-process-terminated` for any reason gets the same message.
-WebKit ends its processes without a core dump in both cases, which check 5
-confirms.
+### The bounds on a chapter
+
+SEC-5 asks for limits on time and memory. A chapter is bounded two ways, and
+each covers the case the other misses.
+
+- **Time.** Every chapter load and every call into the script has 15 seconds
+  to answer. Past that the shell calls `terminate_web_process` and shows that
+  the chapter took too long. This is what stops a chapter whose layout never
+  finishes: a generated chapter of 200,000 paragraphs was ended this way.
+- **Memory.** WebKit samples a web process's memory once a second and ends it
+  past the limit. The sample runs on the web process's main thread, so it
+  only happens while the process answers. A generated chapter of 30,000
+  paragraphs, with the limit lowered to 64 MiB, ended with
+  `ExceededMemoryLimit`. The 200,000-paragraph chapter did not, because layout
+  held the thread until the watchdog fired. So memory is not capped during
+  the 15 seconds a stuck chapter is allowed. In that time the web process can
+  use what memory the machine gives it. It has no network, and it sees files
+  only through WebKit's own sandbox.
+
+The memory case is not in the test suite: the limit belongs to the shared
+context, so it can only be lowered in a process of its own, and it takes 30
+seconds. It was run by hand and left no core dump. A cgroup around the web
+process would cap memory for good. That is with the helper's own missing
+cgroup, in [the crate README](../../crates/ebook-reader/README.md#the-sandbox).
+
+After either end the next load starts a new web process. WebKit ends its
+processes without a core dump in both cases.
 
 ### Pages and layout
 
@@ -501,7 +529,15 @@ over anything the book's sheets say for the same property.
 - **Page colours** are the four in [the reader design](interface-reader.md#page-colours),
   with their secondary colours. Until task 4 the page is Paper when the window
   is light and Grey when it is dark. The window's background takes the page
-  colour, so the view and the window are one surface.
+  colour, so the view and the window are one surface. The handler writes the
+  colours and the face into the `style` attribute of the wrapper's `html`
+  element, from values the shell checked, so a chapter opens in them with no
+  flash of another colour.
+- **The face** is the first of Literata, Noto Serif, Liberation Serif and
+  DejaVu Serif that the system has, which the shell finds through Pango. The
+  page is never given a name the system lacks: fontconfig answers an unknown
+  name with its default face, which is often not a serif. Bundling Literata,
+  as [the reader design](interface-reader.md#fonts) asks, is a later task.
 - **What the app's sheet owns.** Layout of `html` and `body`: their size,
   columns, overflow, margins, padding and position, all `!important`. Task 4
   adds a fixture style sheet that sets each of these and hides and moves text,
@@ -517,7 +553,11 @@ when `right_to_left` is set. A click in the middle third shows the controls
 from task 5 on. Until then both bars stay visible, as the current reader's
 controls do. The rest of the page does nothing. Keys are GTK's, as today. The script
 answers `turn(±1)` with whether it moved. At a chapter's edge it did not, and
-the shell loads the next or previous chapter on its first or last page.
+the shell loads the next or previous chapter on its first or last page. A
+reflow, from a new window size or a setting, goes back to the place the
+reader last chose by a turn or a jump. It does not move that place, so
+dragging a window through many widths does not creep toward the chapter's
+start.
 
 ### A place in the book
 
@@ -659,11 +699,13 @@ view are in `apps/desktop/tests/view.rs`.
    `truncated_markup_still_parses`.
 6. `ChapterInfo::size` is the entry's stated size, capped.
    `chapter_sizes_are_capped`.
-7. Checks 1 to 5 of [What would show this is wrong](#what-would-show-this-is-wrong).
+7. Checks 1 to 6 of [What would show this is wrong](#what-would-show-this-is-wrong).
    `the_app_script_runs_and_the_book_script_does_not`,
    `the_view_alone_blocks_scripts_requests_and_navigation`,
    `each_network_layer_blocks_alone`, `page_and_helper_agree_on_offsets`,
-   `the_web_process_has_no_network_and_is_ended_past_its_limits`.
+   `the_web_process_has_no_network_and_is_ended_past_its_limits`,
+   `two_views_share_one_process_without_a_crash`, and the core-dump count in
+   the test program's `main`.
 8. The page's own script world has no message handler, and a message with the
    wrong load number or an out-of-range value changes nothing.
    `the_bridge_accepts_only_its_own_world_and_valid_messages`.
@@ -671,9 +713,12 @@ view are in `apps/desktop/tests/view.rs`.
    the basic plane, opens on the page holding the same character at another
    font size and window width. Until task 4 the test sets the size through the
    same custom property the settings will use. `a_place_survives_reflow`.
-10. A turn forward on a chapter's last page opens the next chapter's first
-    page, and a turn back on its first page opens the previous chapter's last.
-    `turns_cross_chapters`.
+10. A turn stops at a chapter's first and last page, a chapter opens on its
+    last page or at an anchor when asked, and a chapter the book marks right to
+    left turns and keeps its place. `turns_cross_chapters`,
+    `right_to_left_chapters_turn_and_keep_their_place`. The smoke run checks
+    that the reader's window then opens the next chapter's first page and the
+    previous chapter's last.
 11. Each page colour the reader can show draws its page, text and secondary
     colour from the reader design's table: Paper and Grey in task 3, all four
     from task 4. `page_colours_match_the_design`.
@@ -682,9 +727,12 @@ view are in `apps/desktop/tests/view.rs`.
 13. The fraction read weighs chapters by size, handles a chapter that is not
     linear and sizes of 0, and is exactly 1 at the end of the last linear
     chapter. `fraction_weighs_chapters_by_size`.
-14. An external link opens nothing until the reader confirms, and an address
-    that is not `http`, `https` or `mailto` is never offered.
-    `external_links_ask_first`.
+14. Choosing a link opens nothing. A link into the book reaches the shell as
+    a chapter and an anchor, and a link out of it as an address, only if that
+    address is `http`, `https` or `mailto`. Clicks in the leading and trailing
+    quarters and the middle third reach the shell as those zones.
+    `links_and_taps_reach_the_shell_and_open_nothing`. The dialog that asks
+    before opening an address is in `reader.rs` and has no automated test.
 
 The [desktop smoke run](../../apps/desktop/README.md#exercise-the-desktop)
 keeps its walk and what it asserts: page keys move by a page without skipping
