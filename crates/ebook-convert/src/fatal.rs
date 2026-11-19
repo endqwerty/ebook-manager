@@ -23,6 +23,10 @@ const FATAL: [libc::c_int; 10] = [
 
 const ALT_STACK_BYTES: usize = 64 * 1024;
 
+/// The handler's stack. Static, so installing the handlers allocates nothing
+/// and cannot itself fail for lack of memory.
+static mut ALT_STACK: [u8; ALT_STACK_BYTES] = [0; ALT_STACK_BYTES];
+
 extern "C" fn stop(_: libc::c_int) {
     const NOTE: &[u8] = b"helper: stopped after a fatal error\n";
     #[allow(unsafe_code)]
@@ -35,30 +39,37 @@ extern "C" fn stop(_: libc::c_int) {
 }
 
 /// Install `stop` for every fatal signal, on its own stack so that a stack
-/// overflow can still be handled. Runs before any limit is set.
+/// overflow can still be handled, and unblock those signals in case the
+/// parent blocked them. A blocked fault would otherwise take the default
+/// action. This is the first thing `main` does and allocates nothing.
 pub(super) fn exit_on_fatal_signals() {
-    let stack: &'static mut [u8] = Vec::leak(vec![0u8; ALT_STACK_BYTES]);
     #[allow(unsafe_code)]
-    // SAFETY: the alternate stack is leaked, so it outlives the process's use
-    // of it. The handler only calls async-signal-safe functions. Both structs
-    // are fully initialised before the calls that read them.
+    // SAFETY: ALT_STACK is used only here, once, before any other code runs,
+    // and lives for the whole process. The handler only calls
+    // async-signal-safe functions. Every struct is fully initialised before
+    // the call that reads it.
     unsafe {
         let alt = libc::stack_t {
-            ss_sp: stack.as_mut_ptr().cast(),
+            ss_sp: std::ptr::addr_of_mut!(ALT_STACK).cast(),
             ss_flags: 0,
-            ss_size: stack.len(),
+            ss_size: ALT_STACK_BYTES,
         };
-        if libc::sigaltstack(&alt, std::ptr::null_mut()) != 0 {
-            libc::_exit(STOPPED);
-        }
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = stop as extern "C" fn(libc::c_int) as libc::sighandler_t;
         action.sa_flags = libc::SA_ONSTACK;
         libc::sigfillset(&mut action.sa_mask);
+        let mut fatal: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut fatal);
         for signal in FATAL {
-            if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
-                libc::_exit(STOPPED);
-            }
+            libc::sigaddset(&mut fatal, signal);
+        }
+        let installed = libc::sigaltstack(&alt, std::ptr::null_mut()) == 0
+            && FATAL
+                .iter()
+                .all(|&s| libc::sigaction(s, &action, std::ptr::null_mut()) == 0)
+            && libc::sigprocmask(libc::SIG_UNBLOCK, &fatal, std::ptr::null_mut()) == 0;
+        if !installed {
+            libc::_exit(STOPPED);
         }
     }
 }
