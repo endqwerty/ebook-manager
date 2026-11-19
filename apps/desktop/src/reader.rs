@@ -114,13 +114,19 @@ pub fn open(s: &Shelf, b: &Rc<Book>) {
             model: b,
             store: s.store.clone(),
             text,
-            picker: picker.clone(),
             previous: previous.clone(),
             next: next.clone(),
             status,
             offsets: RefCell::new(vec![]),
             shown: Cell::new(None),
+            pending_save: Cell::new(None),
             generation: Cell::new(0),
+        });
+        let weak = Rc::downgrade(&view);
+        scroll.vadjustment().connect_value_changed(move |_| {
+            if let Some(v) = weak.upgrade() {
+                v.queue_scroll_save();
+            }
         });
         let weak = Rc::downgrade(&view);
         picker.connect_selected_notify(move |p| {
@@ -178,12 +184,12 @@ struct View {
     model: Rc<Book>,
     store: store::Store,
     text: gtk::TextView,
-    picker: gtk::DropDown,
     previous: gtk::Button,
     next: gtk::Button,
     status: gtk::Label,
     offsets: RefCell<Vec<i32>>,
     shown: Cell<Option<u32>>,
+    pending_save: Cell<Option<glib::SourceId>>,
     generation: Cell<u64>,
 }
 impl View {
@@ -201,6 +207,26 @@ impl View {
             offset: block,
         })
     }
+    fn queue_scroll_save(self: &Rc<Self>) {
+        if let Some(timer) = self.pending_save.take() {
+            timer.remove();
+        }
+        if self.shown.get().is_none() {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        let timer =
+            glib::timeout_add_local_once(std::time::Duration::from_millis(350), move || {
+                if let Some(v) = weak.upgrade() {
+                    v.pending_save.take();
+                    if let Some(p) = v.position() {
+                        v.persist(p.chapter, p.offset);
+                    }
+                }
+            });
+        self.pending_save.set(Some(timer));
+    }
+
     fn persist(&self, chapter: u32, offset: u32) {
         let id = self.model.id.clone();
         let pos = ReadingPosition {
@@ -218,6 +244,56 @@ impl View {
             }
         });
     }
+    // A freshly filled TextView can still have the empty buffer's scroll range.
+    // Set the adjustment after layout, then verify the viewport on a later frame.
+    fn restore(self: &Rc<Self>, seq: u64, chapter: u32, block: u32, offset: i32, partial: bool) {
+        let weak = Rc::downgrade(self);
+        self.text.add_tick_callback(move |text, _| {
+            let Some(v) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if v.generation.get() != seq {
+                return glib::ControlFlow::Break;
+            }
+            let adjustment = text
+                .vadjustment()
+                .expect("scrolled text has a vertical adjustment");
+            let rect = text.visible_rect();
+            let (y, height) = text.line_yrange(&text.buffer().iter_at_offset(offset));
+            if rect.height() <= 0 || adjustment.page_size() <= 0.0 || height <= 0 {
+                return glib::ControlFlow::Continue;
+            }
+            let max = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            let delta = f64::from(y - rect.y());
+            let aligned = delta.abs() <= 1.0;
+            let last_page = adjustment.value() >= max - 0.5
+                && y >= rect.y()
+                && y < rect.y() + rect.height()
+                && text.line_yrange(&text.buffer().end_iter()).0 <= rect.y() + rect.height();
+            if block > 0 && !aligned && !last_page {
+                adjustment.set_value((adjustment.value() + delta).clamp(adjustment.lower(), max));
+                return glib::ControlFlow::Continue;
+            }
+            if block == 0 && adjustment.value() > adjustment.lower() + 0.5 {
+                adjustment.set_value(adjustment.lower());
+                return glib::ControlFlow::Continue;
+            }
+            v.shown.set(Some(chapter));
+            v.persist(chapter, block);
+            v.status.set_text(&format!(
+                "Chapter {} of {}{}",
+                chapter + 1,
+                v.book.chapters().len(),
+                if partial {
+                    " · Some content could not be displayed"
+                } else {
+                    ""
+                }
+            ));
+            glib::ControlFlow::Break
+        });
+    }
+
     fn load(self: &Rc<Self>, index: u32, block: u32) {
         self.shown.set(None);
         let seq = self.generation.get() + 1;
@@ -256,23 +332,9 @@ impl View {
                     let block = (block as usize).min(offsets.len().saturating_sub(1));
                     let buf = v.text.buffer();
                     buf.set_text(&body);
-                    let iter = buf.iter_at_offset(offsets.get(block).copied().unwrap_or(0));
-                    buf.move_mark(&buf.get_insert(), &iter);
-                    v.text
-                        .scroll_to_mark(&buf.get_insert(), 0.0, true, 0.0, 0.0);
+                    let offset = offsets.get(block).copied().unwrap_or(0);
                     v.offsets.replace(offsets);
-                    v.shown.set(Some(index));
-                    v.persist(index, block as u32);
-                    v.status.set_text(&format!(
-                        "Chapter {} of {}{}",
-                        v.picker.selected() + 1,
-                        v.book.chapters().len(),
-                        if partial {
-                            " · Some content could not be displayed"
-                        } else {
-                            ""
-                        }
-                    ));
+                    v.restore(seq, index, block as u32, offset, partial);
                 }
                 Ok(Err(e)) => v.status.set_text(&format!("Couldn’t read chapter · {e:#}")),
                 Err(_) => v.status.set_text("Chapter loading interrupted"),
