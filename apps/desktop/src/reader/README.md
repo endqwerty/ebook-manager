@@ -20,7 +20,7 @@ view::View::open(
 view.load(chapter, Landing::Start);       // or Landing::Offset(n), Landing::Anchor(..), Landing::End
 view.turn(1, false, |moved| { /* false at the chapter's edge */ });
 view.set_style(&[("--page", "#2b2b2e")]);   // now, and for chapters opened later
-view.current(|place| { /* Some((offset, page, pages)) after any turn already asked for */ });
+view.current(|place| { /* Some((chapter, offset, page, pages)) after any turn already asked for */ });
 ```
 
 A `Source` gives the view a `Document` (the children of an XHTML `body`) and
