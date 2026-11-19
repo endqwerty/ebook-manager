@@ -131,7 +131,7 @@ def expect_view(number):
     raise AssertionError(f"view {number} did not appear: {seen}")
 
 
-def first_row_titles(body, number):
+def visible_books(body, number, *, read_focus=False):
     # SHOWING alone includes GTK's overscan. Compare the item bounds with
     # the viewport and read the whole row even if its title is clipped.
     frame = body.get_extents(Atspi.CoordType.WINDOW)
@@ -144,19 +144,76 @@ def first_row_titles(body, number):
             bounds = item.get_extents(Atspi.CoordType.WINDOW)
             if bounds.y + bounds.height <= frame.y or bounds.y >= frame.y + frame.height:
                 continue
-            for label in walk(item):
-                title = label.get_name() or ""
-                if label.get_role_name() == "label" and title.startswith("Book "):
-                    rows.append((bounds.y, bounds.x, title))
-                    break
+            title = author = None
+            focused = False
+            for node in walk(item):
+                if read_focus:
+                    node.clear_cache()
+                    focused |= node.get_state_set().contains(Atspi.StateType.FOCUSED)
+                if node.get_role_name() == "label":
+                    name = node.get_name() or ""
+                    if name.startswith("Book "):
+                        title = name
+                        if not read_focus:
+                            break
+                    if read_focus and name.startswith("Author "):
+                        author = name
+            if title:
+                rows.append((bounds, (title, author), focused))
     except GLib.Error:
         return []
-    first_y = min((row[0] for row in rows), default=None)
-    return [title for y, _, title in sorted(rows) if y == first_y]
+    return sorted(rows, key=lambda row: (row[0].y, row[0].x))
+
+
+def first_row_titles(body, number):
+    rows = visible_books(body, number)
+    return [title for bounds, (title, _), _ in rows if bounds.y == rows[0][0].y]
+
+
+def wait_for_scroll(body, number, before, *, first_only=False):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        now = first_row_titles(body, number)
+        if now and (now[:1] != before[:1] if first_only else now != before):
+            return now
+        time.sleep(POLL)
+    raise AssertionError(f"the wheel did not move view {number} from {before!r}")
+
+
+def wait_for_wheel_stop(body):
+    """The top book can change several times as GTK finishes the wheel motion."""
+    bar = find("", "scroll bar", parent=body.get_parent())
+    deadline = time.monotonic() + 10
+    last = None
+    changed = time.monotonic()
+    while time.monotonic() < deadline:
+        value = Atspi.Value.get_current_value(bar)
+        now = time.monotonic()
+        if value != last:
+            changed, last = now, value
+        elif now - changed >= 0.25:
+            return
+        time.sleep(POLL)
+    raise AssertionError("the scrollbar continued to move after the wheel event")
+
+
+def focused_book(body, number):
+    return next((book for _, book, focused in visible_books(body, number, read_focus=True) if focused), None)
+
+
+def wait_for_focus(body, number, book=None):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        focused = focused_book(body, number)
+        if focused and (book is None or focused == book):
+            return focused
+        time.sleep(POLL)
+    visible = [(name, focused) for _, name, focused in visible_books(body, number, read_focus=True)]
+    raise AssertionError(f"view {number} has no visible focus on {book!r}. Visible books: {visible!r}")
 
 
 def view_switches():
-    """Scroll with focus outside the books and check all six transitions."""
+    """Check top row and visible book focus on all six transitions."""
     wid = focus("Ebook Manager")
     for source, target in [(2, 1), (1, 2), (2, 3), (3, 1), (1, 3), (3, 2)]:
         key(f"ctrl+{source}")
@@ -169,13 +226,7 @@ def view_switches():
         key("Escape", "ctrl+shift+a")
         before = first_row_titles(body, source)
         smoke.xd("mousemove", "--window", wid, 120, 400, "click", "--repeat", 60, "--delay", 15, 5)
-        deadline = time.monotonic() + 10
-        while True:
-            now = first_row_titles(body, source)
-            if now and now != before:
-                break
-            assert time.monotonic() < deadline, (source, before, now)
-            time.sleep(POLL)
+        wait_for_scroll(body, source, before)
         # Wait through the wheel animation before recording the first title.
         time.sleep(0.3)
         anchor = first_row_titles(body, source)[0]
@@ -191,6 +242,21 @@ def view_switches():
             assert time.monotonic() < deadline, (source, target, anchor, titles)
             time.sleep(POLL)
         print(f"PASS view {source} → {target}: {anchor!r}, first shown {titles[0]!r}", flush=True)
+        # Now focus a book low in the source viewport. The title and author
+        # together distinguish it from the other copies of the same title.
+        key(f"ctrl+{source}")
+        body = expect_view(source)
+        frame = body.get_extents(Atspi.CoordType.WINDOW)
+        bounds, book, _ = next(
+            row for row in reversed(visible_books(body, source, read_focus=True))
+            if row[0].y >= frame.y and row[0].y + row[0].height <= frame.y + frame.height
+        )
+        smoke.xd("mousemove", "--window", wid, bounds.x + bounds.width // 2,
+                 bounds.y + bounds.height // 2, "click", 1)
+        wait_for_focus(body, source, book)
+        key(f"ctrl+{target}")
+        wait_for_focus(expect_view(target), target, book)
+        print(f"PASS view {source} → {target} keeps focus visible on {book!r}", flush=True)
     key("ctrl+1")
 
 
@@ -305,9 +371,16 @@ def run(binary, fixture, root):
                 checked = True
                 # Turn the wheel over the first column, beside the import
                 # window, while the import runs.
-                smoke.xd("mousemove", "--window", wid, 60, 400, "click", "--repeat", 6, 5)
+                body = expect_view(1)
+                before = first_row_titles(body, 1)
+                assert before, "the grid had no visible titles before the wheel event"
+                smoke.xd("mousemove", "--window", wid, 60, 400, "click", "--repeat", 24, "--delay", 12, 5)
+                wait_for_scroll(body, 1, before, first_only=True)
+                wait_for_wheel_stop(body)
+                after = first_row_titles(body, 1)
+                assert after and after[0] != before[0], (before, after)
                 scrolled = settled()
-                assert {n for n, _ in scrolled} != {n for n, _ in placed}, scrolled
+                print(f"PASS import wheel moved the top title from {before[0]!r} to {after[0]!r}", flush=True)
                 # Rows, not blanks: every cell on screen names its book.
                 assert all(name.startswith("Book ") for name, _ in scrolled), scrolled
                 # Those looks took seconds, and changes went unseen meanwhile.

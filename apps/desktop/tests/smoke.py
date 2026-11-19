@@ -468,7 +468,7 @@ def check_diagnostics(root):
     if not log.exists():
         return
     diagnostic = re.compile(
-        r"\b(?:Gtk|Gdk|Gsk|GLib(?:-GObject|-GIO)?|Adwaita)-(?:WARNING|CRITICAL|ERROR)\b"
+        r"(?:^|\s)(?:[\w.-]+-)?(?:WARNING|CRITICAL|ERROR) \*\*:"
     )
     # GTK 4.24 on X11 also reports this on main when a reader drop-down
     # and its window repaint together. It is a duplicate frame timing report.
@@ -894,6 +894,15 @@ def table_headers(by_three):
     find("", "menu item")
     key(*["Down"] * 6, "Return")
     expect_headers(["Author", "Title", "Date Added", "Progress"])
+    wid = focus("Ebook Manager")
+    bounds = find("Author", "filler").get_extents(Atspi.CoordType.WINDOW)
+    xd("mousemove", "--window", wid, bounds.x + bounds.width // 2,
+       bounds.y + bounds.height // 2, "click", 3)
+    find("", "menu item")
+    key("Escape")
+    xd("mousemove", 2, 2)
+    expect_headers(["Author", "Title", "Date Added", "Progress"])
+    print("PASS Table header menu opens by right-click", flush=True)
     print("PASS sorting, hiding and moving columns from the table's headers", flush=True)
 
     def author_width():
@@ -932,18 +941,21 @@ def table_headers(by_three):
     wid = focus("Ebook Manager")
     key("ctrl+3")
     expect_headers(["Author", "Title", "Date Added", "Progress"])
+    pane = find("", "scroll pane")
+    decoration = size("Ebook Manager")[0] - pane.get_extents(Atspi.CoordType.WINDOW).width
+    assert decoration >= 0, decoration
     select_book("glass")
     key("Escape", "ctrl+Home", "ctrl+shift+a", "Up", "Menu")
     find("", "menu item")
-    xd("windowsize", "--sync", wid, 639, 680)
+    xd("windowsize", "--sync", wid, 639 + decoration, 680)
     find("View", "button")
     find("Orchard · 1", "label")
     assert not headers(), headers()
-    xd("windowsize", "--sync", wid, 640, 680)
+    xd("windowsize", "--sync", wid, 640 + decoration, 680)
     expect_headers(["Author", "Title", "Date Added", "Progress"])
-    assert size("Ebook Manager")[0] == 640, size("Ebook Manager")
+    assert find("", "scroll pane").get_extents(Atspi.CoordType.WINDOW).width == 640
 
-    xd("windowsize", "--sync", wid, 639, 680)
+    xd("windowsize", "--sync", wid, 639 + decoration, 680)
     find("View", "button")
     key("ctrl+2", "ctrl+3")
     xd("windowsize", "--sync", wid, 900, 680)
@@ -952,6 +964,34 @@ def table_headers(by_three):
     key("ctrl+1")
     print("PASS Table at 640, List at 639, and Ctrl+3 at 639 leaves the saved view alone", flush=True)
     return width + 24
+
+
+def book_menus_across_resize():
+    wid = focus("Ebook Manager")
+    for number, name in [(3, "Table"), (2, "List"), (1, "Grid")]:
+        key(f"ctrl+{number}")
+        select_book("glass")
+        key("Escape")
+        find(f"{len(GALLERY) + 1} books")
+        key("Menu")
+        menu = find("", "menu")
+        assert menu.get_state_set().contains(Atspi.StateType.SHOWING), name
+        for width in (639, 900):
+            xd("windowsize", "--sync", wid, width, 680)
+            if width == 639:
+                find("View", "button")
+            role = {1: "table", 2: "list", 3: "tree table"}[number]
+            if number == 3 and width == 639:
+                role = "list"
+            find("Books", role)
+            deadline = time.monotonic() + 5
+            while True:
+                menu.clear_cache()
+                if not menu.get_state_set().contains(Atspi.StateType.SHOWING):
+                    break
+                assert time.monotonic() < deadline, f"{name} book menu stayed open at {width}"
+                time.sleep(0.05)
+        print(f"PASS {name} book menu dismissed on resize and the library stayed usable", flush=True)
 
 
 def remembered(author_width):
@@ -1057,6 +1097,7 @@ def covers(binary, evidence, root, proc):
     try:
         find("A Field Guide to Tides")
         author_width = table_headers(by_three)
+        book_menus_across_resize()
         # Closing the window saves the choices.
         focus("Ebook Manager")
         key("ctrl+w")
