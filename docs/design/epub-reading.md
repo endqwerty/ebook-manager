@@ -116,9 +116,14 @@ be contained as SEC-5 asks, which is check 5 below.
 ### What would show this is wrong
 
 Task 3 starts with a test that settles these before any interface is written.
-It is a Rust integration test in `apps/desktop/tests/view.rs` that builds the
-view with the same `reader::view` code the reader ships, and runs with the
-workspace tests, which CI already runs under `dbus-run-session` and `xvfb-run`.
+It is `apps/desktop/tests/view.rs`. The desktop crate is a binary with no
+library to import, so the test file includes `src/reader/view.rs` with a
+`#[path]` attribute, and that file therefore uses nothing from the rest of
+the app. GTK must stay on one thread, so the test target sets
+`harness = false` and uses `libtest-mimic` with one thread, which gives each
+check below its own named test. It runs with the workspace tests, which CI
+already runs under `dbus-run-session` and `xvfb-run`. Its private bus has an
+empty service directory, so it starts none of the desktop's own services.
 A failure sends the design back to C, A or the reader host process under
 [Alternatives](#alternatives).
 
@@ -138,23 +143,32 @@ A failure sends the design back to C, A or the reader host process under
    and run its script, so a silent detector cannot pass.
 3. **Each network layer fails alone.** The test repeats check 2 three times,
    each with one of the content security policy, the content filter and the
-   dead proxy as the only network protection. The listener must see nothing
-   each time.
+   dead proxy as the only protection against loading pictures, style sheets
+   and fonts. Navigation policy stays on in all three, because a blocked
+   navigation still empties the view. The listener must see nothing each
+   time. The run with every protection off in check 2 is the positive control
+   for all three.
 4. **Offsets disagree.** A place is a count of text the helper made and the
    page reads back. For every fixture chapter the page must report the helper's
    length, and the character at a set of offsets on each side of every element
    boundary must be the character the helper's text has there.
 5. **The drawing process can reach the network or grow without limit.** SEC-5
    asks that drawing run in a separate process with no network and limits on
-   time and memory. The test finds the `WebKitWebProcess` among its own
-   descendants in `/proc` and requires its network namespace to differ from
-   the test's. It requires a chapter whose layout allocates past the memory
-   limit to end with `web-process-terminated` and the reason
-   `ExceededMemoryLimit`, a chapter whose script call does not answer to be
-   ended by the shell's watchdog, and the next chapter to load afterwards in
-   both cases. Ending the process must leave no core dump, because
+   time and memory. The test walks `/proc` for processes named
+   `WebKitWebProcess` whose chain of parents reaches the test, of which there
+   is one because the test has one view, and requires its network namespace
+   link to differ from the test's own. The view takes its memory limit and
+   watchdog time as arguments. With the limit at 64 MiB, a generated chapter
+   of 200,000 paragraphs must end with `web-process-terminated` and the
+   reason `ExceededMemoryLimit`. With the watchdog at 2 seconds, a call that
+   runs `for(;;){}` in the app's script world must end with the reason
+   `TerminatedByApi`. The next chapter must load after each. If the memory
+   case cannot be made to end the same way on every run, the test asserts
+   only that the limit is set, and the design records that the memory limit
+   is unproven. Ending the process must leave no core dump, because
    [users must never see a crash](https://github.com/endqwerty/ebook-manager/pull/98).
-   The test compares `coredumpctl list` before and after where that command exists.
+   The test compares the count from `coredumpctl list` before and after where
+   that command exists, which is not on CI.
 6. **It cannot run in CI.** All of the above must pass on GitHub's
    `ubuntu-latest` under Xvfb with software rendering.
 
@@ -205,7 +219,7 @@ block model stay for import, tests and footnote text.
 impl Book {
     /// One chapter as sanitised markup.
     pub fn read_content(&self, index: u32) -> Result<ChapterContent, ReaderError>;
-    /// One picture, or in task 4 one style sheet, from the book's manifest.
+    /// One picture from the book's manifest. Task 4 adds style sheets.
     pub fn read_resource(&self, id: ResourceId) -> Result<Resource, ReaderError>;
     /// Matches for `query` in one chapter, in reading order. Task 6.
     pub fn search(&self, chapter: u32, query: &str) -> Result<Vec<SearchHit>, ReaderError>;
@@ -224,8 +238,8 @@ pub struct ChapterContent {
     pub length: u32,
     /// The book's style sheets for this chapter, in cascade order. Empty until task 4.
     pub styles: Vec<ResourceId>,
-    /// The chapter's `xml:lang` or `lang` on `html`, else on `body`, else the
-    /// package's first language.
+    /// The first of: `xml:lang` on `html`, `lang` on `html`, the same two on
+    /// `body`, the package's first language.
     pub language: Option<String>,
     /// `dir="rtl"` on `html` or `body`.
     pub right_to_left: bool,
@@ -234,7 +248,7 @@ pub struct ChapterContent {
 }
 
 pub struct ResourceId(pub u32);
-pub enum ResourceKind { Png, Jpeg, Gif, Webp, Css }
+pub enum ResourceKind { Png, Jpeg, Gif, Webp }
 pub struct Resource { pub kind: ResourceKind, pub bytes: Vec<u8> }
 
 pub struct SearchHit {
@@ -252,10 +266,11 @@ as the archive directory states it, capped at the chapter limit, and 0 for an
 entry the archive lacks. It weighs chapters for [progress](#progress). The
 book controls that number, so it is used for nothing else.
 
-**A `ResourceId`** is the position of an `item` in the package document's
-manifest, counting from 0 in document order. `engine/package.rs` keeps the
-manifest as that ordered list. When two items share an `id` or a path, the
-first is the one references resolve to. An id means the same item for as long
+**A `ResourceId`** is the position of an `item` among the manifest items
+`engine/package.rs` accepts today, those with an `id` and an `href` that stays
+inside the book, counting from 0 in document order. `package.rs` keeps them as
+that ordered list. When two items share an `id` or a path, the first is the
+one references resolve to, a picture in the reading order included. An id means the same item for as long
 as the file is unchanged, which `Book` already checks on every call.
 `read_resource` accepts any id whose item has a picture media type, whether or
 not a chapter named it. The shell never sees a path.
@@ -264,6 +279,9 @@ not a chapter named it. The shell never sees a path.
 tokens `engine/xml.rs` produces, as `engine/text.rs` does, and writes XML
 itself. It never copies source bytes.
 
+- **Without a `body`.** Text and elements count as the body's children from
+  the first element on the list below, or the first text that is not only
+  whitespace. Whitespace before that is left out.
 - **Elements.** An element is matched by its local name and written without a
   prefix. The wrapper puts everything in the XHTML namespace. The sanitiser
   writes these and no others:
@@ -276,16 +294,20 @@ itself. It never copies source bytes.
   resolves to a picture is written as that `img`, because many books wrap
   their cover that way. Other `svg` and `math` add the unsupported-content
   warning. `form`, `fieldset` and `label` are left out and their text kept.
-- **Balance.** The sanitiser keeps a stack of the elements it has opened. An
-  end tag closes the nearest open element of that name and everything above
-  it. An end tag with no open element is ignored. `br hr img col wbr` are
-  written empty. Everything still open at the end is closed. Depth past 400
-  is not opened, as in `text.rs`.
+- **Balance.** The sanitiser keeps a stack of the elements it has written a
+  start tag for. Elements it leaves out or drops never enter it. An end tag
+  closes the nearest element of that name on the stack and everything above
+  it. An end tag with none is ignored. `br hr img col wbr` are written empty.
+  Everything still open at the end is closed. With 400 elements open, a
+  further one is left out and its content kept.
 - **Attributes.** Written only if the name is `id`, `class`, `lang`,
   `xml:lang` (as `lang`), `dir`, `title`, `alt`, `colspan`, `rowspan`, `start`,
-  `value`, or the EPUB namespace's `type`, matched as the token name
-  `epub:type` and written as `data-epub-type`. The first of a repeated name
-  wins. Values are written in double quotes with `&`, `<` and `"` escaped.
+  `value`, or the literal name `epub:type`, written as `data-epub-type`. The
+  tokenizer does not resolve namespaces, so another prefix bound to the EPUB
+  namespace is not recognised. The first attribute to produce a written name
+  wins. Values are written in double quotes with `&`, `<` and `"` escaped, a
+  tab or line end as a space, the characters left out of text left out, and
+  at most 1,024 characters.
   `style`, `srcset`, every `on…` name and everything else is left out. Inline
   `style` returns in task 4 through the CSS sanitiser.
 - **Links.** `a href` that resolves to a reading-order item, by the resolver
@@ -297,8 +319,9 @@ itself. It never copies source bytes.
 - **Pictures.** `img src` that resolves to a manifest item with the media type
   `image/png`, `image/jpeg`, `image/gif` or `image/webp` becomes
   `src="/r/<id>"`. Otherwise the element is replaced by its text alternative as
-  text. A remote source adds the remote-references warning (R6 of
-  [the reader spec](../../specs/epub-reader-mvp.md#reading)).
+  text. The remote-references warning is raised by the same test as R6
+  of [the reader spec](../../specs/epub-reader-mvp.md#reading), applied to
+  every start tag and `style` element read, dropped ones included.
 - **Text** is written with `&`, `<` and `>` escaped and `\r\n` and `\r` as
   `\n`. Tabs and line ends are kept. Every other control character,
   U+FEFF and any character XML 1.0 does not allow are left out. Nothing else changes, whitespace included.
@@ -307,11 +330,12 @@ itself. It never copies source bytes.
 - **Limits.** The chapter document is read under the existing chapter size
   limit. The sanitiser stops after writing 400,000 elements and text runs,
   closes what is open and sets `truncated`. Warnings cover what was read up to
-  that point. Markup that cannot be tokenised gives what was read and the
-  malformed-markup warning (R8).
-- **Other reading-order items.** A picture item gives one `img` for it. Any
-  other item that is not a text document gives empty markup and the
-  unsupported-content warning (R8).
+  that point. The tokenizer recovers from broken markup as it does for
+  `read_chapter`, and the chapter carries the malformed-markup warning (R8).
+- **Other reading-order items.** An item that is a PNG, JPEG, GIF or WebP
+  gives one `img` for it, and an error if the archive lacks the file. Any
+  other item that is not a text document, an SVG picture included, gives
+  empty markup and the unsupported-content warning (R8).
 
 For example, a chapter linked as the second reading-order item holds
 
@@ -397,10 +421,12 @@ If a step fails, no book opens and the window shows the error.
    `default-src 'none'; img-src ebook:; style-src ebook: 'unsafe-inline'; form-action 'none'; base-uri 'none'`.
    Resources are served with their checked type and
    `X-Content-Type-Options: nosniff`.
-7. **Navigation.** `decide-policy` allows a navigation only when it is the
-   chapter address the shell itself just asked the view to load, and ignores
-   every other navigation, new window and response. Permission requests are
-   denied.
+7. **Navigation.** `decide-policy` handles its three kinds apart. A
+   navigation action is allowed once, when its address is the chapter address
+   the shell just asked the view to load, and that permission is then spent.
+   Every other navigation action is ignored. A new-window action is ignored.
+   A response is allowed when its address starts with `ebook:` and ignored
+   otherwise. Permission requests are denied.
 8. **The bridge.** The app's script is a `WebKitUserScript` in a script world
    named `ebook-reader`, and the one message handler is registered for that
    world only. The page's own world has no `window.webkit.messageHandlers`.
@@ -413,11 +439,18 @@ for three things:
 
 - A new reading place, which the shell clamps to the chapter.
 - A jump to `/c/<n>#<anchor>`. The shell checks `n` against the reading order
-  and loads that chapter. The script in the new page finds the anchor.
+  and loads that chapter. The script in the new page finds the anchor, and
+  shows the chapter's start when there is none or it is missing.
 - An external address, from `data-external`. The shell accepts `http`, `https`
   and `mailto` only, shows the address in an `AdwAlertDialog`, and on Open
   passes it to `gtk::UriLauncher`, which hands it to the system's browser or
   mail program (SEC-7).
+
+The script handles a click on a link itself, cancels the default action and
+posts one of the last two. A `data-external` link has no `href`, so the script
+gives it `tabindex="0"` and the link role, and Enter activates it as a click
+does. Jumps and external links work from task 3. The footnote popover and
+Back arrive in task 5, and until then a footnote link is a jump.
 
 **The watchdog.** Every call into the script and every chapter load has 15
 seconds to answer. Past that the shell calls `terminate_web_process`, shows
@@ -459,8 +492,9 @@ over anything the book's sheets say for the same property.
 Turning follows [the reader design](interface-reader.md#turning-pages): the
 trailing quarter of the page and Right, Space and Page Down go forward, the
 leading quarter and Left, Shift+Space and Page Up go back, and the sides swap
-when `right_to_left` is set. A click in the middle third shows the controls.
-The rest of the page does nothing. Keys are GTK's, as today. The script
+when `right_to_left` is set. A click in the middle third shows the controls
+from task 5 on. Until then both bars stay visible, as the current reader's
+controls do. The rest of the page does nothing. Keys are GTK's, as today. The script
 answers `turn(±1)` with whether it moved. At a chapter's edge it did not, and
 the shell loads the next or previous chapter on its first or last page.
 
@@ -479,9 +513,11 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   one lands in a text node. If none does, as on a page that is one picture, it
   takes the start of the first text node that begins after the page's left
   edge, else the chapter's length. The shell stores the offset in the
-  library's `ReadingPosition` with the `version_id`, the chapter, the time and
-  [the fraction read](#progress), when a turn or scroll settles and when the
-  window closes, as today.
+  library's `ReadingPosition` with the `version_id` and the chapter, when a
+  turn or scroll settles and when the window closes, as today. The
+  [browsing work's catalogue change](https://github.com/endqwerty/ebook-manager/pull/94)
+  adds `last_read`, the time of saving, and `fraction` to that record. Task 3
+  is built on it and fills both, with [the fraction read](#progress).
 - **To restore,** the script turns the offset into a `Range`, finds its
   column, and shows that page. The same text comes back after the font or the
   window changes. Its line on the page can differ.
@@ -583,13 +619,15 @@ Each statement is checked by the test named after it. Tests of the engine are
 in `crates/ebook-reader/tests` and go through the real sandbox. Tests of the
 view are in `apps/desktop/tests/view.rs`.
 
-1. A chapter's markup parses as XML and holds only allow-listed elements and
-   attributes, whatever the source holds, including unclosed and misnested
-   tags, repeated attributes and prefixed elements.
+1. A chapter's markup, placed in the wrapper's `body`, parses as XML and holds
+   only allow-listed elements and attributes, whatever the source holds,
+   including unclosed and misnested tags, repeated attributes and prefixed
+   elements. Empty markup and markup that is text beside elements parse too.
    `markup_is_well_formed_and_keeps_only_the_allow_list`.
 2. A chapter with scripts, handlers, frames, forms, hidden text, remote
    pictures, remote styles and external links yields markup with no script,
-   no address but `/c/…` and `/r/…`, and the remote-references warning.
+   no `href` but `/c/…`, no `src` but `/r/…`, an outside address only in
+   `data-external`, and the remote-references warning.
    `hostile_markup_is_removed`.
 3. `length` equals the UTF-16 length of the text in `markup`, with a character
    outside the basic plane before the end. `length_counts_the_markup_text`.
@@ -615,8 +653,9 @@ view are in `apps/desktop/tests/view.rs`.
 10. A turn forward on a chapter's last page opens the next chapter's first
     page, and a turn back on its first page opens the previous chapter's last.
     `turns_cross_chapters`.
-11. Each page colour draws its page, text and secondary colour from the reader
-    design's table. `page_colours_match_the_design`.
+11. Each page colour the reader can show draws its page, text and secondary
+    colour from the reader design's table: Paper and Grey in task 3, all four
+    from task 4. `page_colours_match_the_design`.
 12. A search for a word split across an `em` boundary finds it, and choosing
     the result shows the page holding it. `search_crosses_inline_elements`.
 13. The fraction read weighs chapters by size, handles a chapter that is not
@@ -678,7 +717,7 @@ text view's AT-SPI text.
 | `…/reader/settings.rs` | Text settings, their file, and the properties sent to the page. |
 | `…/reader/panel.rs` | Contents, landmarks, Go to page and search results. |
 | `…/reader/progress.rs` | The fraction, the pace and the progress control. |
-| `apps/desktop/tests/view.rs` | The view tests. |
+| `apps/desktop/tests/view.rs` | The view tests, with `harness = false` and `libtest-mimic`. |
 | `apps/desktop/Cargo.toml`, `.github/workflows/check.yml`, `apps/desktop/README.md`, `docs/requirements/10-constraints.md` | `webkit6`, the `libwebkitgtk-6.0-dev` package in CI, WebKitGTK 6.0 (2.44 or later) as a requirement, and its licence row. WebKitGTK is LGPL and is used only as the system's shared library, as GTK is. |
 
 The crate README gains the three requests and what callers can rely on from
@@ -695,10 +734,11 @@ Each is one pull request that ends in a check.
    `ChapterInfo::size`, with `styles` empty. No change on screen. Check:
    behaviours 1 to 6. Covers the helper half of READ-18's default.
 3. **The web view reader.** WebKitGTK, the trust boundary, pages and turning
-   in both directions of text, resume by offset, the fraction and time saved
-   with the place, Paper and Grey following the window, pictures. It starts
-   with the tests of behaviour 7. Check: behaviours 7 to 11, the smoke run,
-   and screenshots in light and dark. Covers READ-1's resume, READ-2's pages
+   in both directions of text, resume by offset, the fraction and `last_read` saved
+   with the place, Paper and Grey following the window, pictures. Links jump inside the book and ask before leaving it. It
+   starts with the tests of behaviour 7, and is built on the catalogue pull
+   request that adds `fraction` and `last_read`. Check: behaviours 7 to 11, 13
+   and 14, the smoke run, and screenshots in light and dark. Covers READ-1's resume, READ-2's pages
    and full screen, READ-4's following the system, and READ-18's default.
 4. **Text settings and the book's own styles.** The settings popover, the CSS
    sanitiser, columns, scrolling, the page turn, all four colours, More
@@ -708,7 +748,7 @@ Each is one pull request that ends in a check.
    styles on. Covers READ-2, READ-3 and READ-4 apart from time of day.
 5. **Contents, progress and going back.** The panel, landmarks, the page list,
    the progress control and popover, the pace, the back button, footnotes, and
-   the controls' hiding. Check: behaviours 13 and 14 and a test per control,
+   the controls' hiding. Check: a test per control,
    including its accessible name and its key. Covers READ-1, READ-7 apart from
    the edition name, READ-10's first sentence, and READ-9's footnotes.
 6. **Search and the selection menu.** Check: behaviour 12. Covers READ-8 and
