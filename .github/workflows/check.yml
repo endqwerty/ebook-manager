@@ -35,7 +35,8 @@ jobs:
       - name: Install desktop and reader dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev bubblewrap xvfb dbus-x11 dosfstools
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev bubblewrap xvfb dbus-x11 dosfstools \
+            python3-gi gir1.2-atspi-2.0 at-spi2-core xdotool xauth imagemagick tesseract-ocr-eng
 
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f
         with:
@@ -46,6 +47,9 @@ jobs:
 
       - name: Run the workspace tests
         run: dbus-run-session -- xvfb-run -a cargo nextest run --workspace --locked --profile ci --no-fail-fast
+
+      - name: Import, read, restart and export from the desktop
+        run: /usr/bin/python3 apps/desktop/tests/smoke.py target/debug/ebook-manager "$RUNNER_TEMP/desktop-evidence"
 
       - name: Exercise mounted FAT32 card export
         run: |
