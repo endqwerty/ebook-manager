@@ -341,17 +341,22 @@ the helper's sandbox.
   the width and height as big-endian 32-bit numbers followed by the pixels.
   The library stores the digest and colours in the book record. The shell
   reads thumbnails straight from that folder on a loader thread and never
-  through the library's writer. It shows a file only if it is a regular
-  file and not a link, a PNG no larger than a thumbnail, and its pixels hash
-  to the digest it is named by. Any other counts as missing.
+  through the library's writer. The app writes one kind of file there and
+  reads only that kind: a regular file and not a link, of at most 512 KiB,
+  whose PNG header, read before anything is decoded, says eight bits a
+  channel of red, green and blue, no alpha, no palette, not interlaced, and
+  no larger than 256 by 384. Its pixels must hash to the digest it is named
+  by, and the picture shown is made from those hashed pixels. Any other
+  file counts as missing.
 - A book whose cover is missing, fails to decode or would need enlarging by
   more than three times is still imported, with no cover facts. The shell
   draws its binding set in type.
 - The thumbnail folder is a cache. When a book has a digest and no file, the
   shell shows the average colour and asks for the thumbnail again from the
   managed EPUB in the background. It installs the result only if its digest
-  equals the one in the record. Two books can share a cover, and each that
-  asked for it is tried before the cover is given up for the session.
+  equals the one in the record. Two books can share a cover. Each that has asked
+  for it by the time a repair fails is tried before the cover is given up,
+  and a book that asks later is tried then.
 - The word count and cover facts come from one helper request, the survey.
   The two results are independent: a cover that cannot be used leaves the
   word count, and an unknown word count leaves the cover. The count is
@@ -412,6 +417,10 @@ button that reveals a `GtkSearchBar`, and the window menu, which holds Small,
 Medium and Large cover sizes and Refresh library. On a window under 640 wide
 the view switch is a menu and Table is absent from it. Typing anywhere in the
 content opens the search bar with the typed text and moves focus to it.
+The window passes each key press and release to the search field's own key
+handling until the field is on screen with the focus, so the keys go
+through its input method and none typed while the bar opens is lost. The
+bar opens when there is text, so a dead key waits for its letter.
 The Sort menu's More opens the sort editor as a popover of three rows. Every
 menu, popover and the table's column menu opens and works from the keyboard.
 
@@ -445,18 +454,30 @@ flowchart LR
   the top. A view replaced because the catalogue changed, and not by the
   reader, keeps the first book on screen where it was and does not scroll to
   the focused one. With no book focused, the one found again is the first
-  selected. Where the reader is, is read when the new view has opened and
-  is about to be shown, and read again when its books have been found: if
-  the reader scrolled or selected meanwhile they are found again, three
-  times at most. The model notes each selected book's ID when its row is in
-  memory, so a selection outlives the page cache. A selected row whose page
-  never loaded has no ID to find it by and leaves the selection.
-- **When a view cannot be read.** Every page request ends in rows or in the
-  error state, which says why and offers Try Again. A failed refresh leaves
-  the open view readable. A place whose view was replaced or lost before
-  its row arrived reports that it is gone, and a command waiting on it says
-  so. When the catalogue file is replaced the read thread asks for a new
-  reader.
+  selected.
+- **The selection is a set of book IDs.** A row says whether its book is
+  selected when it arrives, so a new view is shown without finding the
+  selected books in it and cannot show a selection that is out of date. A
+  place selected before its row arrives is held by its rank until the row
+  comes, and is dropped if the view is replaced first. After a view is
+  shown the model asks which selected books it holds and drops the rest,
+  which is safe whenever the answer comes because it only removes books
+  that are not there.
+- **Placing the reader has one rule.** Their place is found in a view
+  before the view is shown; if they scrolled or moved the focus while it
+  was being found, the view is shown, the place they moved to is found
+  once, and if they have moved again by then the view stays where they
+  put it.
+- **When a view cannot be read.** The read thread answers every request,
+  with what was asked for or with the reason it cannot be given, and drops
+  none. The model decides what a reason means. For a view it has already
+  replaced there is nothing to do. For the view on screen, the view is
+  lost: its loaded rows stay, each place waiting for a row is told none
+  will come, a command waiting on one says so, and the query is opened
+  again. If that fails the window shows why and offers Try Again, which
+  starts a new read thread if the last one stopped. A refresh that fails
+  leaves the open view as it was. When the catalogue file is replaced the
+  read thread asks for a new reader.
 - **When the catalogue changes** (an import, an edit, a saved position), the
   write thread tells the window after each job. The model asks the read
   thread whether the catalogue changed and, if so, reopens the same query
