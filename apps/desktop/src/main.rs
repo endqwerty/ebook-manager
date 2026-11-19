@@ -179,7 +179,7 @@ impl Shelf {
             let s = self.clone();
             let b = book.clone();
             let btn = button(text, move || match action {
-                0 => reader::open(&s, &b),
+                0 => reader::open(&s.window, &s.store, &b),
                 1 => s.edit(&b),
                 _ => s.export(&b),
             });
