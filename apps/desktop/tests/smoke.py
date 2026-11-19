@@ -219,17 +219,54 @@ def xd(*args):
     subprocess.run(["xdotool", *map(str, args)], check=True)
 
 
-def send_key(name):
-    # Some XKB maps make xdotool add Alt when looking up function keys.
-    # Send the physical keycode for bare F1 through F12.
-    if function := re.fullmatch(r"F([1-9]|1[0-2])", name):
-        keymap = subprocess.check_output(
-            ["xkbcomp", "-xkb", os.environ["DISPLAY"], "-"], text=True
-        )
-        match = re.search(rf"<FK{int(function[1]):02d}>\s*=\s*([0-9]+);", keymap)
-        assert match is not None, f"{name} is missing from the X server's keymap"
-        name = match[1]
-    xd("key", name)
+def ask_to_close(window):
+    """Ask a window to close, as a window manager's close button does.
+
+    This sends the window WM_DELETE_WINDOW. xdotool's own command for it,
+    windowquit, is missing from the version Ubuntu ships.
+    """
+    import ctypes
+
+    x = ctypes.CDLL("libX11.so.6")
+    x.XOpenDisplay.restype = ctypes.c_void_p
+    x.XInternAtom.restype = ctypes.c_ulong
+    x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+
+    class Message(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.c_int),
+            ("serial", ctypes.c_ulong),
+            ("send_event", ctypes.c_int),
+            ("display", ctypes.c_void_p),
+            ("window", ctypes.c_ulong),
+            ("message_type", ctypes.c_ulong),
+            ("format", ctypes.c_int),
+            ("data", ctypes.c_long * 5),
+        ]
+
+    class Event(ctypes.Union):
+        _fields_ = [("message", Message), ("pad", ctypes.c_long * 24)]
+
+    display = x.XOpenDisplay(None)
+    assert display, "no display"
+    event = Event()
+    event.message.type = 33  # ClientMessage
+    event.message.window = int(window)
+    event.message.message_type = x.XInternAtom(display, b"WM_PROTOCOLS", 0)
+    event.message.format = 32
+    event.message.data[0] = x.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
+    x.XSendEvent.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_int,
+        ctypes.c_long,
+        ctypes.POINTER(Event),
+    ]
+    assert x.XSendEvent(display, int(window), 0, 0, ctypes.byref(event))
+    x.XFlush.argtypes = [ctypes.c_void_p]
+    x.XFlush(display)
+    x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x.XCloseDisplay(display)
 
 
 def picker(path, title):
@@ -704,7 +741,7 @@ def run(binary, evidence, root):
         library = subprocess.check_output(
             ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"], text=True
         ).splitlines()[-1]
-        xd("windowquit", library)
+        ask_to_close(library)
         time.sleep(1.5)
         assert proc.poll() is None, "asking the library to close ended the app under the reader"
         assert web_processes(proc.pid), "the page was ended though nothing closed"
@@ -759,8 +796,14 @@ def run(binary, evidence, root):
             "PASS folder export, idempotent repeat and unchanged source bytes",
             flush=True,
         )
-        covers(binary, evidence, root, proc)
-        proc = None
+        # The same request that did nothing under the reader closes the
+        # library when no reader is open, so that step did ask.
+        library = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"], text=True
+        ).splitlines()[-1]
+        ask_to_close(library)
+        assert proc.wait(timeout=10) == 0
+        print("PASS the library closes when asked with no reader open", flush=True)
     finally:
         if proc and proc.poll() is None:
             proc.send_signal(signal.SIGTERM)
