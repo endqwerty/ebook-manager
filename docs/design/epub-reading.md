@@ -576,7 +576,9 @@ the page. UTF-16 is the unit because the DOM measures text that way.
 - **Ready.** After a load the script waits for `document.fonts.ready`, for
   every picture to load or fail, and for two animation frames, and only then
   reports that it is ready. The shell then sets any properties changed while
-  the chapter was loading and names the landing place, in one call. After a
+  the chapter was loading and names the landing place, in one call. The
+  script reports no place before that call, so a resize in between cannot
+  pass off the first page as the reader's place. After a
   settings change the script waits for `document.fonts.ready` and two
   animation frames before it goes back to the held place.
 - **To save,** the script asks `caretRangeFromPoint` for the character at the
@@ -595,7 +597,9 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   text-less pages apart, so after a restart one in the middle of a chapter,
   or any but the last of several at its end, reopens on the next page with
   text or on the last page. While the chapter stays open the script holds a
-  text-less first or last page as that end, so a reflow keeps it showing. The shell opens a
+  text-less first or last page as that end, so a reflow keeps it showing,
+  and holds one in the middle by its number for as long as the chapter keeps
+  its page count. The shell opens a
   chapter on its first page by asking for that, and not for offset 0, so a
   chapter that begins with a picture begins there.
 - **To restore,** the script turns the offset into a `Range`, finds its

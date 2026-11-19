@@ -9,7 +9,10 @@
 	let starts = [];
 	let length = 0;
 	let ready = false;
-	let held = { offset: 0, edge: "start" };
+	// The shell has named the landing place. Nothing is reported before that:
+	// a resize in between would report the first page as the reader's place.
+	let landed = false;
+	let held = { offset: 0, edge: "start", textless: false, page: 0, pages: 1 };
 
 	const index = () => {
 		nodes = [];
@@ -133,20 +136,27 @@
 	// chapter it is held as that end, so a reflow keeps a chapter on its
 	// picture-only first or last page. In the middle it is held as the first
 	// text after it, which is all an offset can say.
+	// `chosen` is "end" when the reader asked for the chapter's end, which
+	// decides it on a one-page chapter where both ends are the same page.
 	const report = (chosen) => {
-		if (!ready) return;
+		if (!ready || !landed) return;
 		const offset = place();
 		if (chosen) {
-			const edge = !textless ? null : page() === 0 ? "start" : page() === pages() - 1 ? "end" : null;
-			held = { offset, edge };
+			const last = page() === pages() - 1;
+			const edge = !textless ? null : last && chosen === "end" ? "end" : page() === 0 ? "start" : last ? "end" : null;
+			held = { offset, edge, textless, page: page(), pages: pages() };
 		}
 		post({ kind: "place", load, offset, page: page(), pages: pages() });
 	};
 
 	// Show the held place again after the layout changed.
 	const restore = () => {
+		if (!landed) return;
 		if (held.edge === "start") show(0);
 		else if (held.edge === "end") show(pages() - 1);
+		// A text-less page in the middle keeps its number while the chapter
+		// keeps its page count. Otherwise only the text after it can be found.
+		else if (held.textless && held.pages === pages()) show(held.page);
 		else show(pageOfOffset(held.offset));
 		report();
 	};
@@ -177,7 +187,8 @@
 			} else {
 				show(pageOfOffset(to.offset || 0));
 			}
-			report(true);
+			landed = true;
+			report(to.end ? "end" : true);
 			return true;
 		},
 		// Turn by `by` pages. False at either edge of the chapter.

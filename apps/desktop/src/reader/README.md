@@ -61,7 +61,9 @@ so [the view tests](../../tests/view.rs) include it directly.
   last page. An offset cannot tell text-less pages apart, so one in the
   middle of a chapter, or any but the last of several at its end, comes back
   as the next page with text, or the last page. While the view stays open, a
-  text-less first or last page is held as that end and survives a reflow.
+  text-less first or last page is held as that end and survives a reflow,
+  and one in the middle keeps its number while the page count is unchanged.
+  No `Event::Place` is sent before the landing `load` asked for.
   `Landing::Start` is the first page whatever is on it.
 - **A chapter cannot run for ever.** A load that takes longer than
   `Config::watchdog` (15 seconds) ends the web process. So does each call

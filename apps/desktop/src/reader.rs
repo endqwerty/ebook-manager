@@ -381,6 +381,14 @@ impl Reading {
             }
         });
         next.connect_clicked(move |_| picker.set_selected(picker.selected() + 1));
+        // The window can also go without being asked, when the library
+        // closes under it. A place still waiting to be saved is sent then.
+        let weak = Rc::downgrade(&reading);
+        w.connect_unrealize(move |_| {
+            if let Some(r) = weak.upgrade() {
+                r.flush();
+            }
+        });
         let r = reading.clone();
         w.connect_close_request(move |w| {
             if let Some(timer) = r.pending_save.take() {
@@ -669,6 +677,24 @@ impl Reading {
                 }
             });
         self.pending_save.set(Some(timer));
+    }
+
+    /// Send a place that is waiting for its timer to the library now. The
+    /// save is handed over before this returns, so it does not depend on the
+    /// main loop running again. It is not waited for.
+    fn flush(&self) {
+        let Some(timer) = self.pending_save.take() else {
+            return;
+        };
+        timer.remove();
+        let Some(position) = self.position() else {
+            return;
+        };
+        let save = self.store.save_position(self.model.id.clone(), position);
+        let mut save = std::pin::pin!(save);
+        // The first poll queues the job for the library's thread.
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let _ = std::future::Future::poll(save.as_mut(), &mut context);
     }
 
     fn persist(&self) {

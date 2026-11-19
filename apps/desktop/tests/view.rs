@@ -929,6 +929,25 @@ fn pages_without_text_keep_their_place() -> Outcome {
     stage.open(0, Landing::Start)?;
     let (page, _) = reflowed(&stage)?;
     check!(page == 0, "a reflow left the first page for page {page}");
+    // A text-less page in the middle stays while the page count does: here
+    // a change of colour, which moves nothing.
+    stage.open(0, Landing::End)?;
+    check!(stage.turn(-1)?, "no turn back from the last page");
+    let (_, middle, pages) = stage.last_place().unwrap();
+    check!(
+        middle > 1 && middle < pages - 1,
+        "page {middle} of {pages} is not in the blank run"
+    );
+    stage.events.borrow_mut().clear();
+    stage.view.set_style(&[("--secondary", "#929294")]);
+    stage.wait("place after a restyle", |e| {
+        matches!(e, Event::Place { .. })
+    })?;
+    let (_, page, _) = stage.last_place().unwrap();
+    check!(
+        page == middle,
+        "a text-less page in the middle moved from {middle} to {page}"
+    );
     Ok(())
 }
 
