@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import gi
@@ -426,7 +427,7 @@ if __name__ == "__main__":
             services = Path(temp) / "no-services"
             services.mkdir()
             config = Path(temp) / "bus.conf"
-            config.write_text(BUS_CONFIG.format(services=services))
+            config.write_text(BUS_CONFIG.format(services=escape(str(services))))
             subprocess.run(
                 [
                     "xvfb-run",

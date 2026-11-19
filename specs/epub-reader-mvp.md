@@ -172,9 +172,10 @@ to the reader.
   process, the address-space limit bounds the whole sandbox. The helper is
   built so that arithmetic overflow stops it instead of wrapping, and a test
   checks the built helper for that. The host stops the sandbox after 15
-  seconds of wall-clock time. The helper never crashes: from the start of its
-  `main`, with those signals unblocked whatever the parent left, running out
-  of memory or stack, or any other signal that would dump core, ends it with
+  seconds of wall-clock time. The helper never crashes once its first step,
+  which allocates nothing, has installed its handlers and unblocked their
+  signals, whatever mask the parent left. After that, running out of memory or
+  stack, or any other signal that would dump core, ends it with
   `helper: stopped after a fatal error` and exit status 4, so the desktop
   reports no crash. A test raises each such signal and overflows the stack. A
   helper stopped by any of these is reported and the next call works.

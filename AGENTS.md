@@ -211,8 +211,9 @@ break a parser.
 - Expected failures, such as a limit being hit or a broken file, end with an
   error the caller can show, never a signal. A process that runs untrusted input
   must also turn a fatal signal into an ordinary exit. The reader helper does
-  both: [helper.rs](crates/ebook-reader/src/bin/helper.rs) exits with status 4
-  on any such signal, and a test raises each one.
+  both: [helper.rs](crates/ebook-reader/src/bin/helper.rs) installs handlers
+  as its first step and from then on exits with status 4 on any such signal.
+  A test raises each one.
 - Agents run builds and tests on the desktop Daniel uses, so a test that crashes
   a process sends him one crash notice per run, from every agent that runs it.
   When a change adds or alters a failure test, count `coredumpctl list
