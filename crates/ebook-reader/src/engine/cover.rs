@@ -72,20 +72,15 @@ fn decode(bytes: &[u8], max_pixels: u64) -> Option<RgbaImage> {
 
 /// The lenient JPEG decoder repairs a file that stops early and returns a
 /// picture with the missing part filled in, which is not the book's cover.
-/// Two checks refuse such a file. The picture data must be followed by an
-/// end-of-image marker, which a file that simply stops does not have. And
-/// the same decoder in its strict mode must accept the file, which catches
-/// data that runs out long before the marker's place. Bytes after the
+/// Two checks refuse such a file. Its segments and scans must lead, one
+/// after another, to an end-of-image marker, which a file that simply stops
+/// never reaches. And the same decoder in its strict mode must accept it,
+/// which catches data that runs out inside a scan. Bytes after the
 /// picture's end do not matter to either. Damage this decoder accepts is
 /// not caught: a file cut and then given an end marker, or a changed byte
 /// that still decodes, is used as it decodes.
 fn jpeg_is_whole(bytes: &[u8], width: u32, height: u32) -> bool {
-    let Some(scan) = first_scan(bytes) else {
-        return false;
-    };
-    // Inside picture data a 0xFF is always followed by a zero or a restart
-    // marker, so this pair can only be the end marker.
-    if !bytes[scan..].windows(2).any(|w| w == [0xFF, 0xD9]) {
+    if !reaches_its_end(bytes).unwrap_or(false) {
         return false;
     }
     let options = zune_core::options::DecoderOptions::default()
@@ -97,24 +92,39 @@ fn jpeg_is_whole(bytes: &[u8], width: u32, height: u32) -> bool {
         .is_ok()
 }
 
-/// Where the picture's first scan starts, found by stepping over the header
-/// segments by their lengths. A thumbnail embedded in a header segment is
-/// stepped over with it, so its own markers are not mistaken for the
-/// picture's.
-fn first_scan(bytes: &[u8]) -> Option<usize> {
+/// Step through the file as its structure says: each segment by its length,
+/// each scan's data up to the next marker. `Some(true)` on reaching the
+/// end-of-image marker that way, `None` when the bytes run out first. A
+/// marker's bytes inside a comment or an embedded thumbnail are stepped
+/// over with their segment and are not mistaken for the picture's.
+fn reaches_its_end(bytes: &[u8]) -> Option<bool> {
     let mut at = 2;
     loop {
         if *bytes.get(at)? != 0xFF {
-            return None;
+            return Some(false);
         }
-        match *bytes.get(at + 1)? {
+        let marker = *bytes.get(at + 1)?;
+        match marker {
+            // A fill byte before a marker.
             0xFF => at += 1,
-            0xDA => return Some(at),
+            0xD9 => return Some(true),
+            // Markers that stand alone.
             0x01 | 0xD0..=0xD8 => at += 2,
-            0xD9 => return None,
             _ => {
                 let len = u16::from_be_bytes([*bytes.get(at + 2)?, *bytes.get(at + 3)?]);
                 at += 2 + usize::from(len.max(2));
+                if marker == 0xDA {
+                    // Scan data runs to the next marker. Inside it a 0xFF is
+                    // followed by a zero, or is a restart marker or fill.
+                    loop {
+                        at += bytes.get(at..)?.iter().position(|b| *b == 0xFF)?;
+                        match *bytes.get(at + 1)? {
+                            0x00 | 0xD0..=0xD7 => at += 2,
+                            0xFF => at += 1,
+                            _ => break,
+                        }
+                    }
+                }
             }
         }
     }
@@ -275,6 +285,24 @@ mod tests {
                 "first {len} bytes"
             );
         }
+    }
+
+    /// The end must be reached through the file's structure. An end marker's
+    /// bytes inside a comment between two scans are not the end.
+    #[test]
+    fn an_end_marker_inside_a_segment_is_not_the_end() {
+        let scan = [0xFF, 0xDA, 0, 2, 0x12, 0xFF, 0x00, 0x34, 0xFF, 0xD3, 0x56];
+        let comment = [0xFF, 0xFE, 0, 4, 0xFF, 0xD9];
+        let mut file = vec![0xFF, 0xD8];
+        file.extend_from_slice(&scan);
+        file.extend_from_slice(&comment);
+        file.extend_from_slice(&scan);
+        assert_eq!(reaches_its_end(&file), None);
+        file.extend_from_slice(&[0xFF, 0xFF, 0xD9]);
+        assert_eq!(reaches_its_end(&file), Some(true));
+        file.extend_from_slice(b"anything after\xFF\xDA");
+        assert_eq!(reaches_its_end(&file), Some(true));
+        assert_eq!(reaches_its_end(&[0xFF, 0xD8, 0x00]), Some(false));
     }
 
     #[test]

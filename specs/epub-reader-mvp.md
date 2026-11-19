@@ -180,9 +180,9 @@ that take more than the package to find: a word count and a cover.
   is another type such as SVG, it fails to decode, it is a JPEG that a strict
   decode refuses, the decoder stops, or it
   would need enlarging more than three times. The pixel count is checked from
-  the header before any pixel is decoded. A JPEG must also have its
-  end marker after its picture data and pass a strict decode before it is
-  used, because the lenient decoder fills in the rest of a file that stops
+  the header before any pixel is decoded. A JPEG's segments and scans
+  must lead one after another to its end marker, and it must pass a strict
+  decode, before it is used, because the lenient decoder fills in the rest of a file that stops
   early. So a JPEG that stops anywhere before its end gives no cover. Bytes
   after the picture's end are ignored. Damage that this decoder accepts is
   not detected, and the cover is used as it decodes: a file cut and then
