@@ -14,6 +14,7 @@ Contributors and coding agents must follow the clean-room rule in
 
 ## Implementation design
 
+The [desktop MVP](docs/design/desktop-mvp.md) follows a reader from folder import to reading on an X4 Pro.
 Start with the [EPUB import walk-through](docs/design/catalogue.md). It includes
 the entity relationships, the import sequence and a runnable SQLite example.
 The [storage decision](docs/design/library-storage.md) explains recovery and the

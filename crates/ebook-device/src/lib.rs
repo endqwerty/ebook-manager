@@ -2,7 +2,7 @@
 
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Seek};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -53,20 +53,9 @@ fn regular_file(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-fn copy_and_hash(input: &mut File, output: &mut impl Write) -> io::Result<[u8; 32]> {
+fn digest(file: &mut File) -> io::Result<[u8; 32]> {
     let mut hash = Sha256::new();
-    let mut buffer = [0; 32 * 1024];
-    loop {
-        let count = match input.read(&mut buffer) {
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            result => result?,
-        };
-        if count == 0 {
-            break;
-        }
-        output.write_all(&buffer[..count])?;
-        hash.update(&buffer[..count]);
-    }
+    io::copy(file, &mut hash)?;
     Ok(hash.finalize().into())
 }
 
@@ -75,13 +64,13 @@ fn compare_existing(
     expected: [u8; 32],
     display: PathBuf,
 ) -> io::Result<ExportOutcome> {
-    if copy_and_hash(&mut existing, &mut io::sink())? == expected {
+    if digest(&mut existing)? == expected {
         return Ok(ExportOutcome::AlreadyPresent(display));
     }
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
         format!(
-            "{} already contains a different file. Choose another folder or change the book title.",
+            "{} already contains a different file. Choose another destination folder.",
             display.display()
         ),
     ))
@@ -99,38 +88,65 @@ pub fn export_epub(source: &Path, directory: &Path, title: &str) -> io::Result<E
     // Keep all filesystem operations on the selected directory if its mount point changes.
     let root = PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd()));
     let name = device_filename(title);
-    let target = root.join(&name);
-    let display = directory.join(name);
-    match regular_file(&target) {
-        Ok(existing) => {
-            return compare_existing(
-                existing,
-                copy_and_hash(&mut source, &mut io::sink())?,
-                display,
-            )
+    let expected = digest(&mut source)?;
+    let try_name = |source: &mut File, name: &str| {
+        copy_to(
+            source,
+            &dir,
+            &root,
+            &root.join(name),
+            directory.join(name),
+            expected,
+        )
+    };
+    match try_name(&mut source, &name) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            let suffix: String = expected[..8]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            let stem = name
+                .strip_suffix(".epub")
+                .expect("device filename has an EPUB extension");
+            try_name(&mut source, &format!("{stem}-{suffix}.epub"))
         }
+        result => result,
+    }
+}
+
+fn copy_to(
+    source: &mut File,
+    dir: &File,
+    root: &Path,
+    target: &Path,
+    display: PathBuf,
+    expected: [u8; 32],
+) -> io::Result<ExportOutcome> {
+    match regular_file(target) {
+        Ok(existing) => return compare_existing(existing, expected, display),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
     let mut staged = tempfile::Builder::new()
         .prefix(".ebook-")
         .suffix(".part")
-        .tempfile_in(&root)?;
-    let expected = copy_and_hash(&mut source, staged.as_file_mut())?;
+        .tempfile_in(root)?;
+    source.rewind()?;
+    io::copy(source, staged.as_file_mut())?;
     staged.as_file().sync_all()?;
     staged.as_file_mut().rewind()?;
-    if copy_and_hash(staged.as_file_mut(), &mut io::sink())? != expected {
+    if digest(staged.as_file_mut())? != expected {
         return Err(io::Error::other(
             "The copy on the device did not match the original",
         ));
     }
-    match staged.persist_noclobber(&target) {
+    match staged.persist_noclobber(target) {
         Ok(_) => {
             dir.sync_all()?;
             Ok(ExportOutcome::Copied(display))
         }
         Err(e) if e.error.kind() == io::ErrorKind::AlreadyExists => {
-            compare_existing(regular_file(&target)?, expected, display)
+            compare_existing(regular_file(target)?, expected, display)
         }
         Err(e) => Err(e.error),
     }

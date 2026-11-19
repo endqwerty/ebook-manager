@@ -15,7 +15,8 @@ a library stored on this computer. The first release path has five steps.
 4. Enable USB Drive mode in the X4 Pro CrossPoint fork, or mount its SD card.
    Choose the device folder and send an EPUB. Export the same book twice.
    Identical bytes at the destination should remain intact. A name collision
-   with another book should leave both the source and destination unchanged.
+   with another book should give the incoming book its own filename, keeping
+   both readable under their original catalogue titles.
 5. Recover the local catalogue from the library's portable records. Show a
    clear failure when a managed file or portable record is missing or damaged.
 
@@ -31,3 +32,5 @@ Exercise the entire journey using a generated multi-chapter publication, a
 duplicate, a changed copy, and a destination folder. Validate both the exported
 bytes and the visible shelf after restart. Claim on-device acceptance only after
 the copied book has actually been opened on the intended firmware.
+
+[Library import](../requirements/01-library.md#importing), [reader](../requirements/04-reading.md) and [device transfer](../requirements/07-devices.md#sending) requirements define the larger release. The first export covers mounted storage (DEV-1) and parts of DEV-13. Embedded metadata export (DEV-15) remains open.

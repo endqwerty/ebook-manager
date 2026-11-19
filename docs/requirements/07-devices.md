@@ -20,7 +20,7 @@ Devices no longer all appear as a USB drive. This decides the design.
 | Android phone or tablet | MTP | |
 | iPhone, iPad | No USB file access for other apps | Wi-Fi routes only |
 
-- `DEV-1` (core) Send books to a device that mounts as a drive.
+- `DEV-1` (core) Send books to a device that mounts as a drive. The [mounted EPUB exporter](../../specs/mounted-epub-export.md) implements the copy to a selected folder on Linux.
 - `DEV-2` (core) Send books to a device that speaks MTP, on macOS, Linux and
   Windows, with no helper app. MTP has its own rules: listing is slow, a file's size
   must be known before sending, a file cannot be changed in place, and only one
