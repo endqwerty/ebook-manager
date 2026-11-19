@@ -133,27 +133,33 @@ control with its own row background, separators, selection and swipe actions.
 The shelf shows books by their spines, standing in rows on shelves. It is the one
 view meant to look like the real thing: the books have rounded spines, bands and
 labels, they stand on a board with depth, and a selected book tips out from the
-top as if a finger had hooked it. The realism comes from shape, light and
-shadow. There is still no wood grain, leather or any other texture, so the shelf
-takes the platform's colours and works in light and dark.
+top as if a finger had hooked it. The books are bound in a soft cloth like
+velvet, and the shelf is a recess with a back, sides in shadow and a board with
+a top and a front. The realism comes from shape, light, shadow and one fine
+cloth grain. There is no wood grain and no picture of any material, and every
+colour has a value for light and for dark.
 
 | Part | Value |
 |---|---|
 | Height | Every spine in the view is the same height: 144 at the small size, 192 at medium and 240 at large. |
 | Thickness | From the book's length, so a long book looks long: 16 plus one unit for each 12,000 words, rounded to the nearest whole unit and never over 48. A book of 96,000 words is 24 and one of 384,000 or more is 48. A book of unknown length is 24, a middle value. The shelf does not mark it as unknown. |
 | Colour | The catalogue stores a spine colour for each book at import: the most common colour on the cover's leading tenth, or failing that on the whole cover. A book with no cover image uses its binding colour. |
+| Stamping | The type is pressed into the cloth. Light type has a line of black at 40% one unit below it, and dark type a line of white at 30%. Bands and labels have the same. |
 | Type colour | `#f1e6cc` or `#23190a`, whichever has the higher contrast with the spine colour. If that is under 4.5:1, change the spine colour and keep the type: mix the spine colour toward white when the type is `#23190a` and toward black when it is `#f1e6cc`, in sRGB, 5% at a time, and stop at the first step that reaches 4.5:1. A spine of `#808080` takes `#23190a` at 4.38:1, so it becomes `#868686` at 4.77:1. |
 | Title | One line in the serif, semibold, 12 units, laid out by the platform's text system in the title's own direction and then turned a quarter turn clockwise, so a left-to-right title reads from the top of the spine down. It starts 10 from the top. It is truncated with an ellipsis at the end of the title in reading order. A right-to-left title is laid out right to left before the turn, so it too begins at the top. Where the platform has vertical text layout, a Chinese, Japanese or Korean title uses it, with its characters upright and any Latin run turned. Where it has not, the title is turned like any other. |
 | Author | The family name only, at the foot, 10 from the bottom, in the UI font at 10 units, turned the same way. Left out when the spine is under 24 thick, or when the title, the name and 24 between them do not fit the height. The title is truncated only after the author is gone. |
 | Edge | The cover's edge line, inside the spine's outline. |
-| Round | A spine is lit from the front and curves away at its sides. Across its thickness: black at 22% at each long edge fading to nothing by 30% of the thickness, and a highlight of white at 10% down the middle fifth. Under 20 thick the highlight is left out. |
+| Viewpoint | The shelf is seen from a little above eye level, so every book shows the top of its pages and the board shows its top surface. This is what lets a tipped book look right: it shows more of a top that every book already shows. |
+| Top | Above each spine's top edge, a strip 4 units tall: the top of the book, going away from the reader. It is as wide as the spine at its near edge and 12% narrower at its far edge, centred. The outer 2 units at each side are the boards, in the spine colour darkened by 25%. Between them are the pages, `#ece5d6` in light appearance and `#bfb8a9` in dark, with lines of the same colour darkened by 18% every 3 units. |
+| Cloth | Spines are bound in a soft cloth with a nap, like velvet. Velvet is darkest where it faces the reader and catches light where it curves away. Across the thickness, from one long edge to the other: black at 30% at the edge, white at 14% at 14% of the way, black at 6% at 38%, black at 10% in the middle, and the same mirrored. Down the height: white at 6% at the top fading to nothing at 40%, then to black at 8% at the foot. |
+| Grain | Over the cloth, a fine even noise: a square tile 128 units across of monochrome noise with features about 1 unit wide, made once from a fixed seed, blended in overlay at 35%. It is the one texture in the app. It is made by the shell and is not a picture of any material. |
 | Head and tail | A shade of black at 12% over the top 6 units and the bottom 6, fading toward the middle, where a spine turns over at its ends. |
 | Bands | Each book has one of three spine styles, chosen by the same hash that picks a binding colour, taken modulo 3. Plain: nothing more. Banded: two rules 1 unit thick across the spine in the type colour at 45%, 8 and 12 from the top, and two more the same distances from the foot. Labelled: the title sits on a label, a block in the type colour with the spine colour as its type, 6 in from each long edge and 6 beyond the title at each end, with corners of 1. |
 | Corners | 1 unit at the top. Square at the foot, where the spine stands. |
 | Gap | 1 between spines, filled with black at 35%, the dark between two books that touch. |
-| Board | Each row stands on a board as wide as the content and 10 thick, in the platform's secondary fill colour. Its top edge has a line 1 unit thick, white at 35% in light appearance and at 10% in dark, where the light catches it. Under the board a shadow 8 units deep fades from black at 14% to nothing in light appearance and from 40% in dark. |
-| Back | Behind the spines, as wide as the content and as tall as they are, the back of the shelf: the platform's secondary fill colour with a shade of black from 10% at the top to nothing halfway down, the shadow of the board above. In dark appearance the shade starts at 30%. |
-| Standing | Where the spines meet the board, a shade 3 units tall across the whole row, black at 25% fading upward. Books do not float. |
+| Board | Each row stands on a board as wide as the content. Its top surface shows as a strip 7 units tall under the spines' feet, and its front face as a strip 12 tall under that. Top surface: `#f1ece3` in light appearance and `#3b3a3e` in dark. Front face: from `#e3ddd2` at its top to `#d1cabd` at its foot in light, and from `#2c2b2e` to `#222124` in dark, with a line 1 unit thick at its top edge, white at 45% in light and 12% in dark. Under the board a shadow 10 units deep fades from black at 18% to nothing in light and from 50% in dark. |
+| Back | Behind the spines, as wide as the content and 14 units taller than they are, the back of the shelf: `#d5cec2` in light appearance and `#2a292e` in dark, with the grain at 20%. Three shades give it depth. From the top, black at 24% fading to nothing halfway down, the shadow of the board above, 45% in dark. From each side, black at 14% fading to nothing by 8% of the width, 30% in dark. And each book casts a soft shadow onto the back toward the trailing side, 8 units out, black at 30%, which shows where a row ends. |
+| Standing | Where the spines meet the board, the books cast a shade onto its top surface: black at 28% at their feet fading to nothing across the 7 units. Books do not float. |
 | Rows | Spines fill a row from the leading edge and wrap. 28 separates the foot of one board's shadow from the tops of the next row. |
 
 - The type on a spine is artwork, like the type on a binding, and does not count
@@ -164,14 +170,13 @@ takes the platform's colours and works in light and dark.
   Series by series, and the date sorts by year. A new group starts a new row.
   Its name sits above the row at the leading edge in the caption style and
   secondary colour. Any other sort has no groups and the spines run on.
-- Pointer over a spine: it tips 4 degrees, the start of the move below, and a
-  tooltip gives the title and author.
+- Pointer over a spine: it tips 4 degrees and its top strip grows to 6, the
+  start of the move below, and a tooltip gives the title and author.
 - A selected book tips out from the top. The spine turns 10 degrees about its
   bottom edge, its top coming toward the reader, drawn in perspective from a
   distance of 800 units, so the top looks a little wider and nearer while the
-  foot stays on the board. Above the top edge a strip 5 units tall shows the
-  tops of the pages, in `#ece5d6` in light appearance and `#bfb8a9` in dark,
-  with the edge line.
+  foot stays on the board. Its top strip grows from 4 units to 9, because more
+  of the top now faces the reader.
 - A tipped book casts the cover's ambient shadow onto its neighbours and keeps
   its place. Nothing in the row moves along, so the row holds its shape while
   the reader moves through it or selects a run of books, each of which tips.
@@ -191,8 +196,9 @@ takes the platform's colours and works in light and dark.
   tap opens book details.
 - Reading state is not drawn on a spine. It is in the tooltip, in book details
   and in the accessible name, which reads the title, the author and the state.
-- Under More contrast the round, head and standing shades, the back's shade and
-  the shadows are removed. Each spine gets a 1 unit outline in the primary text
+- Under More contrast the cloth's shading, the grain, the head and standing
+  shades, the back's shades and the shadows are removed, and the back and board
+  take the platform's window colour. Each spine gets a 1 unit outline in the primary text
   colour and the board gets one too. A selected spine still tips and its
   outline is 2 units in the accent colour.
 - The shelf uses the system's text scale for nothing. Spine type is a fixed
@@ -282,11 +288,13 @@ and extending a selection without a dropped frame before the shelf ships there.
    replaced a selected spine with its cover and reflowed the row. A tip is a
    transform, so the row does not change. A focused spine can still show its
    cover in a preview.
-3. **The shelf is drawn with depth and without materials.** The first version
-   stood spines on a hairline. Asked to make it feel more real, the page now
-   draws a board, a back, rounded spines, bands and labels, all from shade and
-   the platform's own fill colours. Wood grain was turned down because it cannot
-   follow the system's colours or its dark appearance.
+3. **The shelf is drawn as a real one, seen from a little above.** The first
+   version stood flat spines on a hairline. Asked for a shelf that feels real,
+   books with a velvety feel, a better background and a viewing angle that makes
+   the tip look right, the page now draws cloth with a nap and a grain, the tops
+   of the books, and a recess with a back and a board. Its colours are warm
+   neutrals given for light and dark, in place of the platform's fill colours,
+   which were flat and cold. Wood grain is still left out.
 4. **Index letters are in the serif.** This adds a fourth place for the serif
    in the library window. A letter standing alone is the plainest library cue
    there is.

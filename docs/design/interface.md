@@ -55,7 +55,8 @@ Things the app never draws: wood, leather, cloth or paper textures, page curls,
 gilt, drop caps or ornaments in the interface, and book-shaped custom controls.
 They date the app and fight the platform's materials. One view, the
 [shelf](interface-views.md#shelf), draws books and their shelf with depth, from
-shade and the platform's own colours and still without textures.
+shade and one fine cloth grain, and still without wood or any picture of a
+material.
 
 ## Rules for the content layer
 
