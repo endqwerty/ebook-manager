@@ -2,7 +2,7 @@
 
 use super::archive::Archive;
 use super::package::{self, Package};
-use super::{encoding, isolation, paths, text, toc, truncate_chars};
+use super::{encoding, is_text_document, isolation, paths, survey, text, toc, truncate_chars};
 use crate::model::{Block, BlockKind, Chapter, ChapterInfo, ChapterWarning, Limits, Link, Target};
 use crate::wire::{
     BookOutline, Payload, ProbeReport, Response, WireError, WireErrorKind, BOOK_IN_SANDBOX,
@@ -12,7 +12,8 @@ use std::fs::File;
 use std::io::Write;
 
 /// Run the helper. `args` excludes the program name:
-/// `probe` | `metadata <limits>` | `open <limits>` | `chapter <limits> <index>`,
+/// `probe` | `metadata <limits>` | `open <limits>` | `survey <limits>` |
+/// `chapter <limits> <index>`,
 /// followed by the CPU-seconds allowance where a limits argument is present.
 pub fn main(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("overflow-probe") {
@@ -90,6 +91,11 @@ fn dispatch(args: &[String]) -> Result<Payload, WireError> {
     match op {
         "metadata" => Ok(Payload::Metadata(package.metadata)),
         "open" => open(&mut archive, package, &limits).map(Payload::Book),
+        "survey" => Ok(Payload::Survey(survey::survey(
+            &mut archive,
+            &package,
+            &limits,
+        ))),
         "chapter" => {
             let index: u32 = args.get(3).and_then(|s| s.parse().ok()).ok_or_else(usage)?;
             chapter(&mut archive, &package, &limits, index).map(Payload::Chapter)
@@ -153,14 +159,6 @@ fn toc_title(toc: &[crate::model::TocEntry], chapter: u32) -> Option<String> {
     toc.iter()
         .find(|e| e.target.as_ref().is_some_and(|t| t.chapter == chapter) && !e.title.is_empty())
         .map(|e| e.title.clone())
-}
-
-fn is_text_document(media_type: &str, path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    matches!(media_type, "application/xhtml+xml" | "text/html")
-        || [".xhtml", ".html", ".htm", ".xml"]
-            .iter()
-            .any(|ext| lower.ends_with(ext))
 }
 
 fn chapter(

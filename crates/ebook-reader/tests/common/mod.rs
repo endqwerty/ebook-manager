@@ -297,3 +297,126 @@ pub fn write(scratch: &Scratch, name: &str, bytes: &[u8]) -> PathBuf {
 pub fn exists(path: &Path) -> bool {
     path.exists()
 }
+
+/// The parts of a generated EPUB that the survey and metadata tests vary.
+/// Chapters become `OEBPS/c<i>.xhtml`, linear unless listed in `nonlinear`.
+#[derive(Default)]
+pub struct Parts<'a> {
+    pub version: &'a str,
+    pub metadata: &'a str,
+    pub manifest: &'a str,
+    pub spine_attrs: &'a str,
+    pub spine_extra: &'a str,
+    pub chapters: &'a [&'a str],
+    pub nonlinear: &'a [usize],
+    pub files: &'a [(&'a str, &'a [u8])],
+}
+
+pub fn package(p: Parts) -> Vec<u8> {
+    let mut manifest = String::from(p.manifest);
+    let mut spine = String::new();
+    for i in 0..p.chapters.len() {
+        manifest.push_str(&format!(
+            r#"<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>"#
+        ));
+        let linear = if p.nonlinear.contains(&i) {
+            r#" linear="no""#
+        } else {
+            ""
+        };
+        spine.push_str(&format!(r#"<itemref idref="c{i}"{linear}/>"#));
+    }
+    spine.push_str(p.spine_extra);
+    let version = if p.version.is_empty() {
+        "3.0"
+    } else {
+        p.version
+    };
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+<dc:identifier id="id">parts-1</dc:identifier><dc:title>Parts</dc:title><dc:language>en</dc:language>
+{}
+</metadata>
+<manifest>{manifest}</manifest><spine{}>{spine}</spine></package>"#,
+        p.metadata, p.spine_attrs
+    );
+    let docs: Vec<(String, String)> = p
+        .chapters
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (format!("OEBPS/c{i}.xhtml"), xhtml("c", b)))
+        .collect();
+    let mut files: Vec<(&str, &[u8])> = vec![
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+    ];
+    for (name, doc) in &docs {
+        files.push((name, doc.as_bytes()));
+    }
+    files.extend_from_slice(p.files);
+    zip(&files)
+}
+
+/// An EPUB 3 book with one chapter of `text` and `image` as its declared
+/// cover, stored under `name` with the given media type.
+pub fn with_cover(image: &[u8], name: &str, media_type: &str, spine_attrs: &str) -> Vec<u8> {
+    let manifest = format!(
+        r#"<item id="cov" href="images/{name}" media-type="{media_type}" properties="cover-image"/>"#
+    );
+    let path = format!("OEBPS/images/{name}");
+    package(Parts {
+        manifest: &manifest,
+        spine_attrs,
+        chapters: &["<p>Three short words.</p>"],
+        files: &[(&path, image)],
+        ..Parts::default()
+    })
+}
+
+pub const RED: [u8; 3] = [200, 30, 30];
+pub const GREEN: [u8; 3] = [30, 160, 60];
+pub const BLUE: [u8; 3] = [30, 30, 200];
+
+/// A cover with a red tenth on the left, a blue tenth on the right and
+/// green between, encoded in `format`.
+pub fn striped(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+    picture(width, height, format, |x, _| {
+        let c = if x < width / 10 {
+            RED
+        } else if x >= width - width / 10 {
+            BLUE
+        } else {
+            GREEN
+        };
+        [c[0], c[1], c[2], 255]
+    })
+}
+
+/// Encode a picture painted pixel by pixel as RGBA. JPEG drops the alpha.
+pub fn picture(
+    width: u32,
+    height: u32,
+    format: image::ImageFormat,
+    paint: impl Fn(u32, u32) -> [u8; 4],
+) -> Vec<u8> {
+    let rgba = image::RgbaImage::from_fn(width, height, |x, y| image::Rgba(paint(x, y)));
+    let img = if format == image::ImageFormat::Jpeg {
+        image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(rgba).to_rgb8())
+    } else {
+        image::DynamicImage::ImageRgba8(rgba)
+    };
+    let mut out = Cursor::new(Vec::new());
+    img.write_to(&mut out, format).unwrap();
+    out.into_inner()
+}
+
+/// Channels within `tolerance` of each other, for lossy formats.
+pub fn near(actual: ebook_reader::Rgb, expected: [u8; 3], tolerance: u8) -> bool {
+    [actual.r, actual.g, actual.b]
+        .iter()
+        .zip(expected)
+        .all(|(a, e)| a.abs_diff(e) <= tolerance)
+}
