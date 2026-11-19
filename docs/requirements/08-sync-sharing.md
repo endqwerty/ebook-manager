@@ -43,8 +43,8 @@ at once.
 ## Ways to connect
 
 The owner asked for libraries managed "on other devices or locally". These are the
-arrangements the design must allow. Which to build first is an open decision in the
-[README](README.md).
+arrangements the design must allow. Build direct sync on the home network first. Hosted and shared-storage
+sync will reuse the exchange of changes. See [library storage](../design/library-storage.md).
 
 - `SYNC-20` (expected) A hosted library: one machine, such as a desktop or a home
   server, holds the files, and the others connect to it.
