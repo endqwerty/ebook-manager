@@ -42,6 +42,10 @@ def epub(path, revised=False):
                 f"<p>Marker {n}. A lantern shines along the shore.</p>"
                 for n in range(80)
             )
+            # Chapter one ends in a paragraph longer than a page, so its last
+            # page is not the top of its last paragraph.
+            if filename == "a":
+                paragraphs += f"<p>{'The tide turns. ' * 150}Marker 80 ends it.</p>"
             archive.writestr(
                 f"{filename}.xhtml",
                 f'<html xmlns="{ns}"><head><title>{title}</title></head><body><h1>{title}</h1><p>{"Second edition" if revised else "First edition"}</p>{paragraphs}</body></html>',
@@ -134,10 +138,10 @@ def keys(evidence):
         xd("key", key)
         time.sleep(0.4)
 
-    def page(name):
+    def page(name, blank=False):
         capture(title, evidence / name)
         found = markers(evidence / name)
-        assert found, name
+        assert found or blank, name
         return found
 
     first = page("page-1.png")
@@ -158,16 +162,18 @@ def keys(evidence):
         assert turns < 30, "Right never reached chapter two"
         if any("Chapter 2 of 2" in (n.get_name() or "") for n in walk(Atspi.get_desktop(0))):
             break
-        turned = page("page-turned.png")
-        assert turned[0] <= shown[-1] + 1 and turned[-1] > shown[-1], (shown, turned)
-        shown = turned
-    assert shown[-1] == 79, shown
+        # Pages inside the closing paragraph show no marker.
+        turned = page("page-turned.png", blank=True)
+        if turned:
+            assert turned[0] <= shown[-1] + 1 and turned[-1] > shown[-1], (shown, turned)
+            shown = turned
+    assert shown[-1] == 80, shown
     assert page("chapter-2.png")[0] == 0
     press("Left")
     find("Chapter 1 of 2", contains=True)
-    assert page("chapter-1-end.png")[-1] == 79
+    assert page("chapter-1-end.png", blank=True)[-1:] == [80]
     print(
-        f"PASS arrow and page keys: {turns} turns through chapter one without a skipped paragraph, back from chapter two to its end",
+        f"PASS arrow and page keys: {turns} turns through chapter one without a skipped paragraph, back from chapter two to its last page",
         flush=True,
     )
     windowed = size(title)

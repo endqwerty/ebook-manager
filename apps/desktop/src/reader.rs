@@ -134,7 +134,7 @@ pub fn open(s: &Shelf, b: &Rc<Book>) {
             store: s.store.clone(),
             text,
             picker: picker.clone(),
-            arrival: Cell::new(0),
+            arrival: Cell::default(),
             previous: previous.clone(),
             next: next.clone(),
             status,
@@ -195,7 +195,7 @@ pub fn open(s: &Shelf, b: &Rc<Book>) {
             });
             glib::Propagation::Stop
         });
-        view.load(pos.chapter, pos.block);
+        view.load(pos.chapter, Landing::Block(pos.block));
     });
 }
 
@@ -204,6 +204,20 @@ fn toggle_full_screen(w: &gtk::Window) {
         w.unfullscreen()
     } else {
         w.fullscreen()
+    }
+}
+
+/// Where a chapter opens.
+#[derive(Clone, Copy)]
+enum Landing {
+    /// With this block at the top of the page.
+    Block(u32),
+    /// On its last page.
+    End,
+}
+impl Default for Landing {
+    fn default() -> Self {
+        Self::Block(0)
     }
 }
 
@@ -253,8 +267,8 @@ struct View {
     store: store::Store,
     text: gtk::TextView,
     picker: gtk::DropDown,
-    /// Block to land on when the picker next changes chapter.
-    arrival: Cell<u32>,
+    /// Where to land when the picker next changes chapter.
+    arrival: Cell<Landing>,
     previous: gtk::Button,
     next: gtk::Button,
     status: gtk::Label,
@@ -281,6 +295,13 @@ impl View {
             return true;
         }
         let focus = gtk::prelude::GtkWindowExt::focus(&w);
+        let in_popover = focus
+            .as_ref()
+            .is_some_and(|f| f.ancestor(gtk::Popover::static_type()).is_some());
+        if key == Key::Escape && w.is_fullscreen() && !in_popover {
+            w.unfullscreen();
+            return true;
+        }
         if focus
             .as_ref()
             .is_some_and(|f| f == &self.picker || f.is_ancestor(&self.picker))
@@ -290,7 +311,6 @@ impl View {
         let reading = focus.is_none_or(|f| f == self.text);
         let back = modifiers.contains(ModifierType::SHIFT_MASK);
         match key {
-            Key::Escape if w.is_fullscreen() => w.unfullscreen(),
             Key::Right | Key::KP_Right | Key::Page_Down | Key::KP_Page_Down => {
                 self.turn(Turn::Forward)
             }
@@ -364,7 +384,7 @@ impl View {
             }
             Turn::Back if top <= first => {
                 if chapter > 0 {
-                    self.arrival.set(u32::MAX);
+                    self.arrival.set(Landing::End);
                     self.picker.set_selected(chapter - 1);
                 }
             }
@@ -433,7 +453,9 @@ impl View {
     }
     // A freshly filled TextView can still have the empty buffer's scroll range.
     // Set the adjustment after layout, then verify the viewport on a later frame.
-    fn restore(self: &Rc<Self>, seq: u64, chapter: u32, block: u32, offset: i32, partial: bool) {
+    /// `target` is the block to put at the top and its buffer offset, or
+    /// `None` for the chapter's last page.
+    fn restore(self: &Rc<Self>, seq: u64, chapter: u32, target: Option<(u32, i32)>, partial: bool) {
         let weak = Rc::downgrade(self);
         self.text.add_tick_callback(move |text, _| {
             let Some(v) = weak.upgrade() else {
@@ -446,11 +468,28 @@ impl View {
                 .vadjustment()
                 .expect("scrolled text has a vertical adjustment");
             let rect = text.visible_rect();
-            let (y, height) = text.line_yrange(&text.buffer().iter_at_offset(offset));
+            let buffer = text.buffer();
+            let anchor = target.map_or_else(|| buffer.end_iter(), |t| buffer.iter_at_offset(t.1));
+            let (y, height) = text.line_yrange(&anchor);
             if rect.height() <= 0 || adjustment.page_size() <= 0.0 || height <= 0 {
                 return glib::ControlFlow::Continue;
             }
             let max = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+            let Some((block, _)) = target else {
+                if adjustment.value() < max - 0.5 {
+                    adjustment.set_value(max);
+                    return glib::ControlFlow::Continue;
+                }
+                if y > rect.y() + rect.height() {
+                    return glib::ControlFlow::Continue;
+                }
+                v.shown.set(Some(chapter));
+                if let Some(p) = v.position() {
+                    v.persist(chapter, p.offset);
+                }
+                v.show_chapter(chapter, partial);
+                return glib::ControlFlow::Break;
+            };
             let delta = f64::from(y - rect.y());
             let aligned = delta.abs() <= 1.0;
             let last_page = adjustment.value() >= max - 0.5
@@ -467,21 +506,25 @@ impl View {
             }
             v.shown.set(Some(chapter));
             v.persist(chapter, block);
-            v.status.set_text(&format!(
-                "Chapter {} of {}{}",
-                chapter + 1,
-                v.book.chapters().len(),
-                if partial {
-                    " · Some content could not be displayed"
-                } else {
-                    ""
-                }
-            ));
+            v.show_chapter(chapter, partial);
             glib::ControlFlow::Break
         });
     }
 
-    fn load(self: &Rc<Self>, index: u32, block: u32) {
+    fn show_chapter(&self, chapter: u32, partial: bool) {
+        self.status.set_text(&format!(
+            "Chapter {} of {}{}",
+            chapter + 1,
+            self.book.chapters().len(),
+            if partial {
+                " · Some content could not be displayed"
+            } else {
+                ""
+            }
+        ));
+    }
+
+    fn load(self: &Rc<Self>, index: u32, landing: Landing) {
         self.shown.set(None);
         let seq = self.generation.get() + 1;
         self.generation.set(seq);
@@ -516,13 +559,17 @@ impl View {
             }
             match result {
                 Ok(Ok((body, offsets, partial))) => {
-                    let block = (block as usize).min(offsets.len().saturating_sub(1));
-                    let buf = v.text.buffer();
-                    buf.set_text(&body);
-                    let offset = offsets.get(block).copied().unwrap_or(0);
+                    let target = match landing {
+                        Landing::Block(block) => {
+                            let block = (block as usize).min(offsets.len().saturating_sub(1));
+                            Some((block as u32, offsets.get(block).copied().unwrap_or(0)))
+                        }
+                        Landing::End => None,
+                    };
+                    v.text.buffer().set_text(&body);
                     v.offsets.replace(offsets);
                     v.text.grab_focus();
-                    v.restore(seq, index, block as u32, offset, partial);
+                    v.restore(seq, index, target, partial);
                 }
                 Ok(Err(e)) => v.status.set_text(&format!("Couldn’t read chapter · {e:#}")),
                 Err(_) => v.status.set_text("Chapter loading interrupted"),
