@@ -23,8 +23,16 @@ fn inspect_returns_import_metadata_for_epub3() {
     assert_eq!(
         m.identifiers,
         vec![
-            Identifier { scheme: Some("uuid".into()), value: "3f1c2a9e-0000-4000-8000-00000000abcd".into(), is_unique_id: true },
-            Identifier { scheme: Some("isbn".into()), value: "9780000000019".into(), is_unique_id: false },
+            Identifier {
+                scheme: Some("uuid".into()),
+                value: "3f1c2a9e-0000-4000-8000-00000000abcd".into(),
+                is_unique_id: true
+            },
+            Identifier {
+                scheme: Some("isbn".into()),
+                value: "9780000000019".into(),
+                is_unique_id: false
+            },
         ]
     );
     assert_eq!(m.languages, ["en"]);
@@ -43,9 +51,19 @@ fn inspect_returns_import_metadata_for_epub2() {
     assert_eq!(m.authors[0].name, "Edith Marsh");
     assert_eq!(m.authors[0].sort_name.as_deref(), Some("Marsh, Edith"));
     assert_eq!(m.identifiers[0].scheme.as_deref(), Some("uuid"));
-    assert_eq!(m.identifiers[0].value, "11111111-2222-4333-8444-555555555555");
+    assert_eq!(
+        m.identifiers[0].value,
+        "11111111-2222-4333-8444-555555555555"
+    );
     assert!(m.identifiers[0].is_unique_id);
-    assert_eq!(m.identifiers[1], Identifier { scheme: Some("isbn".into()), value: "978-0-00-000002-6".into(), is_unique_id: false });
+    assert_eq!(
+        m.identifiers[1],
+        Identifier {
+            scheme: Some("isbn".into()),
+            value: "978-0-00-000002-6".into(),
+            is_unique_id: false
+        }
+    );
     assert_eq!(m.epub_version.as_deref(), Some("2.0"));
 }
 
@@ -66,8 +84,11 @@ fn inspect_depends_only_on_the_bytes() {
 fn chapters_follow_the_reading_order() {
     let dir = Scratch::new();
     let book = reader().open(&dir.file("book.epub", &epub3())).unwrap();
-    let got: Vec<(u32, Option<&str>, bool)> =
-        book.chapters().iter().map(|c| (c.index, c.title.as_deref(), c.linear)).collect();
+    let got: Vec<(u32, Option<&str>, bool)> = book
+        .chapters()
+        .iter()
+        .map(|c| (c.index, c.title.as_deref(), c.linear))
+        .collect();
     assert_eq!(
         got,
         vec![
@@ -78,7 +99,9 @@ fn chapters_follow_the_reading_order() {
             (4, None, false),
         ]
     );
-    let firsts: Vec<String> = (1..4).map(|i| book.read_chapter(i).unwrap().blocks[0].text()).collect();
+    let firsts: Vec<String> = (1..4)
+        .map(|i| book.read_chapter(i).unwrap().blocks[0].text())
+        .collect();
     assert_eq!(firsts, ["Chapter One", "Chapter Two", "Chapter Three"]);
 }
 
@@ -95,18 +118,45 @@ fn chapter_text_is_readable() {
         got,
         vec![
             (BlockKind::Heading { level: 1 }, "Chapter One".into()),
-            (BlockKind::Paragraph, "The keeper\u{2019}s boat came in on the morning tide\u{2014}late, as\u{a0}always.".into()),
-            (BlockKind::Paragraph, "\u{201c}You\u{2019}re the new one,\u{201d} she said.".into()),
+            (
+                BlockKind::Paragraph,
+                "The keeper\u{2019}s boat came in on the morning tide\u{2014}late, as\u{a0}always."
+                    .into()
+            ),
+            (
+                BlockKind::Paragraph,
+                "\u{201c}You\u{2019}re the new one,\u{201d} she said.".into()
+            ),
             (BlockKind::Heading { level: 2 }, "The Storm".into()),
             (BlockKind::Paragraph, "Wind first.\nThen rain.".into()),
             (BlockKind::Quote, "Keep the lamp lit.".into()),
-            (BlockKind::Paragraph, "See the note1, the next chapter and the society page.".into()),
+            (
+                BlockKind::Paragraph,
+                "See the note1, the next chapter and the society page.".into()
+            ),
             (BlockKind::Separator, "".into()),
-            (BlockKind::ListItem { depth: 1, ordinal: None }, "oil".into()),
-            (BlockKind::ListItem { depth: 1, ordinal: None }, "wick".into()),
+            (
+                BlockKind::ListItem {
+                    depth: 1,
+                    ordinal: None
+                },
+                "oil".into()
+            ),
+            (
+                BlockKind::ListItem {
+                    depth: 1,
+                    ordinal: None
+                },
+                "wick".into()
+            ),
         ]
     );
-    let italic: Vec<&str> = ch.blocks[1].spans.iter().filter(|s| s.italic).map(|s| s.text.trim()).collect();
+    let italic: Vec<&str> = ch.blocks[1]
+        .spans
+        .iter()
+        .filter(|s| s.italic)
+        .map(|s| s.text.trim())
+        .collect();
     assert_eq!(italic, ["morning"]);
 }
 
@@ -124,9 +174,24 @@ fn links_are_returned_as_data() {
     assert_eq!(
         links,
         vec![
-            ("note".into(), Link::Internal(Target { chapter: 4, anchor: Some("n1".into()) })),
-            ("next chapter".into(), Link::Internal(Target { chapter: 2, anchor: Some("second".into()) })),
-            ("society page".into(), Link::External("https://example.com/lighthouses?x=1".into())),
+            (
+                "note".into(),
+                Link::Internal(Target {
+                    chapter: 4,
+                    anchor: Some("n1".into())
+                })
+            ),
+            (
+                "next chapter".into(),
+                Link::Internal(Target {
+                    chapter: 2,
+                    anchor: Some("second".into())
+                })
+            ),
+            (
+                "society page".into(),
+                Link::External("https://example.com/lighthouses?x=1".into())
+            ),
         ]
     );
     let notes = book.read_chapter(4).unwrap();
@@ -142,7 +207,13 @@ fn contents_navigate_to_chapters_and_anchors() {
     let got: Vec<Row> = book
         .toc()
         .iter()
-        .map(|e| (e.title.as_str(), e.depth, e.target.as_ref().map(|t| (t.chapter, t.anchor.as_deref()))))
+        .map(|e| {
+            (
+                e.title.as_str(),
+                e.depth,
+                e.target.as_ref().map(|t| (t.chapter, t.anchor.as_deref())),
+            )
+        })
         .collect();
     assert_eq!(
         got,
@@ -157,7 +228,9 @@ fn contents_navigate_to_chapters_and_anchors() {
     );
     let storm = book.toc()[1].target.clone().unwrap();
     let ch = book.read_chapter(storm.chapter).unwrap();
-    let block = ch.block_for_anchor(storm.anchor.as_deref().unwrap()).unwrap();
+    let block = ch
+        .block_for_anchor(storm.anchor.as_deref().unwrap())
+        .unwrap();
     assert_eq!(ch.blocks[block as usize].text(), "The Storm");
     assert_eq!(ch.block_for_anchor("page2"), Some(2));
 }
@@ -170,9 +243,22 @@ fn epub2_book_reads_with_ncx_contents() {
     let toc: Vec<(&str, u32, Option<&str>)> = book
         .toc()
         .iter()
-        .map(|e| (e.title.as_str(), e.depth, e.target.as_ref().and_then(|t| t.anchor.as_deref())))
+        .map(|e| {
+            (
+                e.title.as_str(),
+                e.depth,
+                e.target.as_ref().and_then(|t| t.anchor.as_deref()),
+            )
+        })
         .collect();
-    assert_eq!(toc, vec![("The North Road", 0, None), ("A Detour", 1, Some("detour")), ("The South Road", 0, None)]);
+    assert_eq!(
+        toc,
+        vec![
+            ("The North Road", 0, None),
+            ("A Detour", 1, Some("detour")),
+            ("The South Road", 0, None)
+        ]
+    );
     assert_eq!(book.toc()[2].target.as_ref().unwrap().chapter, 1);
     let one = book.read_chapter(0).unwrap();
     assert_eq!(
@@ -186,7 +272,10 @@ fn epub2_book_reads_with_ncx_contents() {
         ]
     );
     assert_eq!(one.block_for_anchor("detour"), Some(3));
-    assert_eq!(texts(&book.read_chapter(1).unwrap()), ["The South Road", "Home again."]);
+    assert_eq!(
+        texts(&book.read_chapter(1).unwrap()),
+        ["The South Road", "Home again."]
+    );
 }
 
 /// R6: nothing active or remote comes out of a chapter.
@@ -195,13 +284,27 @@ fn active_content_never_reaches_the_host() {
     let dir = Scratch::new();
     let book = reader().open(&dir.file("book.epub", &epub3())).unwrap();
     let ch = book.read_chapter(3).unwrap();
-    assert_eq!(texts(&ch), ["Chapter Three", "The last chapter.", "", "The end."]);
+    assert_eq!(
+        texts(&ch),
+        ["Chapter Three", "The last chapter.", "", "The end."]
+    );
     assert_eq!(ch.blocks[2].kind, BlockKind::Image);
     let mut all = ch.plain_text();
     for block in &ch.blocks {
-        all.push_str(&format!("{:?}{:?}", block.anchors, block.spans.iter().map(|s| &s.link).collect::<Vec<_>>()));
+        all.push_str(&format!(
+            "{:?}{:?}",
+            block.anchors,
+            block.spans.iter().map(|s| &s.link).collect::<Vec<_>>()
+        ));
     }
-    for needle in ["tracker", "script", "pwned", "onclick", "iframe", "invisible"] {
+    for needle in [
+        "tracker",
+        "script",
+        "pwned",
+        "onclick",
+        "iframe",
+        "invisible",
+    ] {
         assert!(!all.contains(needle), "{needle} leaked: {all}");
     }
     let cover = book.read_chapter(0).unwrap();
@@ -222,17 +325,41 @@ fn position_round_trips_through_the_host() {
         let book = reader().open(&path).unwrap();
         let ch = book.read_chapter(1).unwrap();
         let block = ch.block_for_anchor("storm").unwrap() + 1;
-        Position { chapter: ch.index, block }.to_string()
+        Position {
+            chapter: ch.index,
+            block,
+        }
+        .to_string()
     };
     assert_eq!(saved, "epubpos1:1:4");
 
     let book = reader().open(&path).unwrap();
     let pos = book.clamp(saved.parse().unwrap());
     let ch = book.read_chapter(pos.chapter).unwrap();
-    assert_eq!(ch.blocks[pos.block as usize].text(), "Wind first.\nThen rain.");
+    assert_eq!(
+        ch.blocks[pos.block as usize].text(),
+        "Wind first.\nThen rain."
+    );
 
-    assert_eq!(book.clamp(Position { chapter: 99, block: 7 }), Position { chapter: 4, block: 0 });
-    for bad in ["", "epubpos1:1", "epubpos2:1:1", "epubpos1:-1:0", "epubpos1:1:2:3", "epubpos1:99999999999:0", "epubpos1: 1:0"] {
+    assert_eq!(
+        book.clamp(Position {
+            chapter: 99,
+            block: 7
+        }),
+        Position {
+            chapter: 4,
+            block: 0
+        }
+    );
+    for bad in [
+        "",
+        "epubpos1:1",
+        "epubpos2:1:1",
+        "epubpos1:-1:0",
+        "epubpos1:1:2:3",
+        "epubpos1:99999999999:0",
+        "epubpos1: 1:0",
+    ] {
         assert!(bad.parse::<Position>().is_err(), "{bad:?} parsed");
     }
 }
@@ -241,7 +368,13 @@ fn position_round_trips_through_the_host() {
 #[test]
 fn damaged_markup_is_read_as_far_as_possible() {
     let dir = Scratch::new();
-    let bytes = simple(&["<p>Good start.</p><p>Then <b>trouble</p><p>and more text.</p><p class=\"x", "<p>Fine.</p>"], &[]);
+    let bytes = simple(
+        &[
+            "<p>Good start.</p><p>Then <b>trouble</p><p>and more text.</p><p class=\"x",
+            "<p>Fine.</p>",
+        ],
+        &[],
+    );
     let book = reader().open(&dir.file("b.epub", &bytes)).unwrap();
     let ch = book.read_chapter(0).unwrap();
     assert_eq!(ch.blocks[0].text(), "Good start.");
@@ -257,7 +390,10 @@ fn long_chapters_are_cut_at_the_block_limit() {
     let body = "<p>Line of text in a very long chapter.</p>\n".repeat(3000);
     let mut cfg = config();
     cfg.limits.max_blocks_per_chapter = 1000;
-    let book = ebook_reader::Reader::new(cfg).unwrap().open(&dir.file("b.epub", &simple(&[&body], &[]))).unwrap();
+    let book = ebook_reader::Reader::new(cfg)
+        .unwrap()
+        .open(&dir.file("b.epub", &simple(&[&body], &[])))
+        .unwrap();
     let ch = book.read_chapter(0).unwrap();
     assert_eq!(ch.blocks.len(), 1000);
     assert!(ch.truncated);
@@ -283,5 +419,79 @@ fn a_novel_sized_book_is_read_within_bounds() {
     }
     assert!(words > 600_000, "{words}");
     let elapsed = started.elapsed();
-    assert!(elapsed.as_secs() < 30, "reading every chapter took {elapsed:?}");
+    assert!(
+        elapsed.as_secs() < 30,
+        "reading every chapter took {elapsed:?}"
+    );
+}
+
+/// R6: a chapter that refers to remote resources says so; nothing is fetched.
+#[test]
+fn remote_references_are_flagged() {
+    let dir = Scratch::new();
+    let book = reader().open(&dir.file("book.epub", &epub3())).unwrap();
+    assert_eq!(
+        book.read_chapter(3).unwrap().warnings,
+        [ChapterWarning::RemoteReferences]
+    );
+    assert!(book.read_chapter(2).unwrap().warnings.is_empty());
+}
+
+/// R7: a saved block index is brought into the chapter that was read, and an
+/// empty chapter has nowhere to scroll.
+#[test]
+fn saved_blocks_are_clamped_to_the_chapter() {
+    let dir = Scratch::new();
+    let opf = br#"<package version="3.0"><metadata/><manifest>
+        <item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>
+        <item id="f" href="font.otf" media-type="font/otf"/></manifest>
+        <spine><itemref idref="a"/><itemref idref="f"/></spine></package>"#;
+    let bytes = zip(&[
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", opf),
+        (
+            "OEBPS/a.xhtml",
+            b"<html><body><p>One.</p><p>Two.</p></body></html>",
+        ),
+        ("OEBPS/font.otf", b"not text"),
+    ]);
+    let book = reader().open(&dir.file("b.epub", &bytes)).unwrap();
+    let text = book.read_chapter(0).unwrap();
+    assert_eq!(text.clamp_block(0), Some(0));
+    assert_eq!(text.clamp_block(1), Some(1));
+    assert_eq!(text.clamp_block(u32::MAX), Some(1));
+    let empty = book.read_chapter(1).unwrap();
+    assert_eq!(empty.warnings, [ChapterWarning::UnsupportedContent]);
+    assert_eq!(empty.clamp_block(5), None);
+}
+
+/// R8: a picture in the reading order, SVG or raster, is a placeholder.
+#[test]
+fn pictures_in_the_reading_order_are_placeholders() {
+    let dir = Scratch::new();
+    let opf = br#"<package version="3.0"><metadata/><manifest>
+        <item id="s" href="plate.svg" media-type="image/svg+xml"/>
+        <item id="p" href="plate.png" media-type="image/png"/>
+        <item id="g" href="gone.png" media-type="image/png"/></manifest>
+        <spine><itemref idref="s"/><itemref idref="p"/><itemref idref="g"/></spine></package>"#;
+    let bytes = zip(&[
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", opf),
+        (
+            "OEBPS/plate.svg",
+            b"<svg xmlns='http://www.w3.org/2000/svg'><text>drawn words</text></svg>",
+        ),
+        ("OEBPS/plate.png", b"\x89PNG"),
+    ]);
+    let book = reader().open(&dir.file("b.epub", &bytes)).unwrap();
+    for index in [0, 1] {
+        let ch = book.read_chapter(index).unwrap();
+        assert_eq!(ch.blocks.len(), 1);
+        assert_eq!(ch.blocks[0].kind, BlockKind::Image);
+        assert!(ch.warnings.is_empty());
+    }
+    assert!(matches!(
+        book.read_chapter(2),
+        Err(ebook_reader::ReaderError::InvalidBook { .. })
+    ));
 }

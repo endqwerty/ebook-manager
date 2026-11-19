@@ -21,7 +21,10 @@ pub fn main(args: &[String]) -> i32 {
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    match serde_json::to_writer(&mut out, &response).map_err(|e| e.to_string()).and_then(|_| out.flush().map_err(|e| e.to_string())) {
+    match serde_json::to_writer(&mut out, &response)
+        .map_err(|e| e.to_string())
+        .and_then(|_| out.flush().map_err(|e| e.to_string()))
+    {
         Ok(()) => 0,
         Err(_) => 3,
     }
@@ -31,14 +34,28 @@ fn usage() -> WireError {
     WireError::new(WireErrorKind::Usage, "bad helper arguments")
 }
 
-fn restrict(limits: &Limits, cpu_seconds: u64) {
+/// Lower this process's own limits. Hard and soft are set together, so they
+/// cannot be raised again. A limit that cannot be set is a reason not to run.
+fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
     let set = |resource, value: u64| {
-        let _ = setrlimit(resource, Rlimit { current: Some(value), maximum: Some(value) });
+        setrlimit(
+            resource,
+            Rlimit {
+                current: Some(value),
+                maximum: Some(value),
+            },
+        )
+        .map_err(|e| {
+            WireError::new(
+                WireErrorKind::NotIsolated,
+                format!("cannot set a resource limit: {e}"),
+            )
+        })
     };
-    set(Resource::As, limits.memory_bytes);
-    set(Resource::Cpu, cpu_seconds.max(1));
-    set(Resource::Core, 0);
-    set(Resource::Nofile, 32);
+    set(Resource::As, limits.memory_bytes)?;
+    set(Resource::Cpu, cpu_seconds.max(1))?;
+    set(Resource::Core, 0)?;
+    set(Resource::Nofile, 32)
 }
 
 fn dispatch(args: &[String]) -> Result<Payload, WireError> {
@@ -48,7 +65,7 @@ fn dispatch(args: &[String]) -> Result<Payload, WireError> {
         None => Limits::default(),
     };
     let cpu = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
-    restrict(&limits, cpu);
+    restrict(&limits, cpu)?;
     isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why))?;
     if op == "probe" {
         return Ok(Payload::Probe(ProbeReport { isolated: true }));
@@ -70,7 +87,10 @@ fn dispatch(args: &[String]) -> Result<Payload, WireError> {
 
 fn readable(package: &Package) -> Result<(), WireError> {
     if package.metadata.protected {
-        return Err(WireError::new(WireErrorKind::Protected, "the book declares encrypted content"));
+        return Err(WireError::new(
+            WireErrorKind::Protected,
+            "the book declares encrypted content",
+        ));
     }
     if package.spine.is_empty() {
         return Err(WireError::invalid("the book lists no chapters"));
@@ -78,17 +98,42 @@ fn readable(package: &Package) -> Result<(), WireError> {
     Ok(())
 }
 
-fn open(archive: &mut Archive, package: Package, limits: &Limits) -> Result<BookOutline, WireError> {
+fn open(
+    archive: &mut Archive,
+    package: Package,
+    limits: &Limits,
+) -> Result<BookOutline, WireError> {
     readable(&package)?;
-    let toc = toc::load(archive, &package, limits);
-    let chapters = (0..package.spine.len() as u32)
-        .map(|index| ChapterInfo {
-            index,
-            title: toc_title(&toc, index),
-            linear: package.spine[index as usize].linear,
+    let toc = toc::load(archive, &package, limits)?;
+    // One pass over the contents: the first label that points into each chapter.
+    let mut titles: Vec<Option<&str>> = vec![None; package.spine.len()];
+    for entry in &toc {
+        let slot = entry
+            .target
+            .as_ref()
+            .and_then(|t| titles.get_mut(t.chapter as usize));
+        if let Some(slot) = slot {
+            if slot.is_none() && !entry.title.is_empty() {
+                *slot = Some(&entry.title);
+            }
+        }
+    }
+    let chapters = package
+        .spine
+        .iter()
+        .zip(&titles)
+        .enumerate()
+        .map(|(index, (item, title))| ChapterInfo {
+            index: index as u32,
+            title: title.map(str::to_owned),
+            linear: item.linear,
         })
         .collect();
-    Ok(BookOutline { metadata: package.metadata, chapters, toc })
+    Ok(BookOutline {
+        metadata: package.metadata,
+        chapters,
+        toc,
+    })
 }
 
 fn toc_title(toc: &[crate::model::TocEntry], chapter: u32) -> Option<String> {
@@ -100,7 +145,9 @@ fn toc_title(toc: &[crate::model::TocEntry], chapter: u32) -> Option<String> {
 fn is_text_document(media_type: &str, path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     matches!(media_type, "application/xhtml+xml" | "text/html")
-        || [".xhtml", ".html", ".htm", ".xml"].iter().any(|ext| lower.ends_with(ext))
+        || [".xhtml", ".html", ".htm", ".xml"]
+            .iter()
+            .any(|ext| lower.ends_with(ext))
 }
 
 fn chapter(
@@ -111,9 +158,12 @@ fn chapter(
 ) -> Result<Chapter, WireError> {
     readable(package)?;
     let item = package.spine.get(index as usize).ok_or_else(|| {
-        WireError::new(WireErrorKind::ChapterOutOfRange, package.spine.len().to_string())
+        WireError::new(
+            WireErrorKind::ChapterOutOfRange,
+            package.spine.len().to_string(),
+        )
     })?;
-    let toc = toc::load(archive, package, limits);
+    let toc = toc::load(archive, package, limits)?;
     let mut out = Chapter {
         index,
         title: toc_title(&toc, index),
@@ -121,8 +171,17 @@ fn chapter(
         truncated: false,
         warnings: Vec::new(),
     };
-    if item.media_type.starts_with("image/") && item.media_type != "image/svg+xml" {
-        out.blocks.push(Block { kind: BlockKind::Image, spans: Vec::new(), anchors: Vec::new() });
+    if item.media_type.starts_with("image/") {
+        if !archive.contains(&item.path) {
+            return Err(WireError::invalid(
+                "a picture in the reading order is missing",
+            ));
+        }
+        out.blocks.push(Block {
+            kind: BlockKind::Image,
+            spans: Vec::new(),
+            anchors: Vec::new(),
+        });
         return Ok(out);
     }
     if !is_text_document(&item.media_type, &item.path) {
@@ -137,9 +196,12 @@ fn chapter(
         let href = href.trim();
         if paths::is_external(href) {
             let lower = href.to_ascii_lowercase();
-            let allowed = ["http://", "https://", "mailto:"].iter().any(|p| lower.starts_with(p));
+            let allowed = ["http://", "https://", "mailto:"]
+                .iter()
+                .any(|p| lower.starts_with(p));
             let tidy = !href.chars().any(|c| c.is_control() || c.is_whitespace());
-            return (allowed && tidy && href.len() <= 2048).then(|| Link::External(href.to_owned()));
+            return (allowed && tidy && href.len() <= 2048)
+                .then(|| Link::External(href.to_owned()));
         }
         let local = paths::resolve(&item.path, href)?;
         let chapter = *chapters.get(local.path.as_str())?;
@@ -151,6 +213,9 @@ fn chapter(
     };
     let extracted = text::extract(&source, limits.max_blocks_per_chapter as usize, &resolve);
     out.truncated = extracted.truncated;
+    if extracted.remote_references {
+        out.warnings.push(ChapterWarning::RemoteReferences);
+    }
     if extracted.malformed {
         out.warnings.push(ChapterWarning::MalformedMarkup);
     }

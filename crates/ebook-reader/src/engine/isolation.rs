@@ -5,7 +5,9 @@ use std::path::Path;
 
 /// Returns why the process does not look sandboxed, or `Ok` when it does.
 pub fn verify() -> Result<(), String> {
-    for dir in ["/proc", "/home", "/etc", "/tmp", "/run", "/var", "/root", "/sys", "/dev"] {
+    for dir in [
+        "/proc", "/home", "/etc", "/tmp", "/run", "/var", "/root", "/sys", "/dev",
+    ] {
         if Path::new(dir).exists() {
             return Err(format!("{dir} is visible"));
         }

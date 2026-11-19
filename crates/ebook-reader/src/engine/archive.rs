@@ -11,6 +11,7 @@ use zip::{CompressionMethod, ZipArchive};
 pub struct Archive {
     zip: ZipArchive<File>,
     folded: Option<HashMap<String, Option<usize>>>,
+    encrypted_entries: bool,
 }
 
 impl Archive {
@@ -27,7 +28,19 @@ impl Archive {
         if zip.len() > limits.max_archive_entries as usize {
             return Err(WireError::limit("number of files in the book"));
         }
-        Ok(Archive { zip, folded: None })
+        let mut zip = zip;
+        let mut encrypted_entries = false;
+        for index in 0..zip.len() {
+            if zip.by_index_raw(index).is_ok_and(|entry| entry.encrypted()) {
+                encrypted_entries = true;
+                break;
+            }
+        }
+        Ok(Archive {
+            zip,
+            folded: None,
+            encrypted_entries,
+        })
     }
 
     fn index_of(&mut self, name: &str) -> Option<usize> {
@@ -47,7 +60,14 @@ impl Archive {
             }
             self.folded = Some(map);
         }
-        self.folded.as_ref().and_then(|m| m.get(&name.to_lowercase()).copied().flatten())
+        self.folded
+            .as_ref()
+            .and_then(|m| m.get(&name.to_lowercase()).copied().flatten())
+    }
+
+    /// Some entry is ZIP-encrypted, wherever it is in the archive.
+    pub fn has_encrypted_entries(&self) -> bool {
+        self.encrypted_entries
     }
 
     pub fn contains(&mut self, name: &str) -> bool {
@@ -65,7 +85,10 @@ impl Archive {
                 .by_index_raw(index)
                 .map_err(|e| WireError::invalid(format!("unreadable entry: {e}")))?;
             if raw.encrypted() {
-                return Err(WireError::new(WireErrorKind::Protected, "encrypted ZIP entry"));
+                return Err(WireError::new(
+                    WireErrorKind::Protected,
+                    "encrypted ZIP entry",
+                ));
             }
             match raw.compression() {
                 CompressionMethod::Stored | CompressionMethod::Deflated => {}
@@ -87,7 +110,7 @@ impl Archive {
         let mut out = Vec::new();
         // The declared size is the book's claim. Stop on actual output.
         entry
-            .take(cap + 1)
+            .take(cap.saturating_add(1))
             .read_to_end(&mut out)
             .map_err(|e| WireError::invalid(format!("damaged entry {}: {e}", short(name))))?;
         if out.len() as u64 > cap {

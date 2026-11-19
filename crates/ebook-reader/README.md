@@ -13,8 +13,35 @@ use ebook_reader::{Reader, ReaderConfig};
 let reader = Reader::new(ReaderConfig::default())?;   // proves the sandbox works
 let meta = reader.inspect(path)?;                     // import: title, authors, identifiers
 let book = reader.open(path)?;                        // reading
+for info in book.chapters() { /* index, title, linear; zero-based, reading order */ }
+for entry in book.toc() { /* title, depth, target: Option<Target> */ }
 let chapter = book.read_chapter(0)?;                  // blocks of text
 ```
+
+`inspect` and `open` are separate on purpose: a book can import and still
+refuse to open, for example when `Metadata::protected` is set.
+
+Following a link or contents entry, and resuming:
+
+```rust
+// A Target is a chapter index and an optional anchor.
+let chapter = book.read_chapter(target.chapter)?;
+let block = target.anchor.as_deref().and_then(|a| chapter.block_for_anchor(a)).unwrap_or(0);
+
+// Save on quit: the chapter shown and its first visible block.
+let saved = Position { chapter: chapter.index, block }.to_string();
+
+// Restore after a restart. Bad saved text means start at the beginning.
+let pos = book.clamp(saved.parse().unwrap_or_default());
+let chapter = book.read_chapter(pos.chapter)?;
+match chapter.clamp_block(pos.block) {
+    Some(block) => { /* scroll to this block */ }
+    None => { /* the chapter has no blocks */ }
+}
+```
+
+A chapter read can succeed and still carry `warnings` or `truncated`; those
+are notes for the reader, not failures.
 
 Every call blocks while one helper process runs, usually a few milliseconds.
 Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
@@ -40,15 +67,15 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
 
 ## Helper discovery
 
-The first existing file wins. `PATH` is never searched.
+`PATH` is never searched. When `ReaderConfig::helper_path` is set, only that
+path is used. Otherwise the first existing file wins:
 
-1. `ReaderConfig::helper_path`
-2. The `EBOOK_READER_HELPER` environment variable, if it is an absolute path
-3. `<directory of the running program>/ebook-reader-helper`
-4. `<directory of the running program>/../libexec/ebook-manager/ebook-reader-helper`
+1. The `EBOOK_READER_HELPER` environment variable, if it is an absolute path
+2. `<directory of the running program>/ebook-reader-helper`
+3. `<directory of the running program>/../libexec/ebook-manager/ebook-reader-helper`
 
 Cargo does not build a dependency's binaries. An application that depends on
-this crate builds the helper itself and installs it by rule 3 or 4:
+this crate builds the helper itself and installs it by rule 2 or 3:
 
 ```sh
 cargo build --release --manifest-path crates/ebook-reader/Cargo.toml --bin ebook-reader-helper
@@ -67,7 +94,7 @@ capabilities, an empty environment and a read-only root that contains only:
 - `/usr/lib`, `/usr/lib64`, `/lib`, `/lib64`: the host's libraries, for the loader
 
 Before reading anything the helper limits its own address space, CPU time, open
-files and core dumps, then checks that `/proc`, `/home`, `/etc` and similar
+files and core dumps, and stops if any of those cannot be set. It then checks that `/proc`, `/home`, `/etc` and similar
 paths are absent, that it cannot write, and that it has no network route. The
 host adds a wall-clock deadline and a cap on the reply size, and kills the
 sandbox when either is passed. Defaults are in `Limits` and
@@ -90,9 +117,8 @@ cargo run --example epub-dump -- book.epub      # needs EBOOK_READER_HELPER or a
 ```
 
 The end-to-end tests need a working `bwrap` with unprivileged user namespaces
-and fail without one. On Ubuntu 24.04 and GitHub's `ubuntu-latest` runners that
-means installing `bubblewrap` and running
-`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` first.
+and fail without one. On GitHub's `ubuntu-latest` runners the distribution's
+`bubblewrap` package is enough.
 
 Fixtures are generated in `tests/common/mod.rs`. Add a case there when a real
 book shows a markup habit the tests do not cover; never commit a real book.

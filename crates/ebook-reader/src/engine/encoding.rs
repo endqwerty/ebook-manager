@@ -44,7 +44,9 @@ fn utf16(bytes: &[u8], big_endian: bool) -> String {
             u16::from_le_bytes([p[0], p[1]])
         }
     });
-    char::decode_utf16(units).map(|r| r.unwrap_or('\u{fffd}')).collect()
+    char::decode_utf16(units)
+        .map(|r| r.unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 /// The `encoding` named in an XML declaration at the start of the document.

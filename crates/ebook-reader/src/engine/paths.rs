@@ -39,7 +39,10 @@ pub fn resolve(base: &str, href: &str) -> Option<Local> {
     let decoded = percent_decode(path_part);
     let mut parts: Vec<&str> = Vec::new();
     if decoded.is_empty() {
-        return Some(Local { path: base.to_owned(), fragment });
+        return Some(Local {
+            path: base.to_owned(),
+            fragment,
+        });
     }
     if !decoded.starts_with('/') {
         let mut dirs: Vec<&str> = base.split('/').collect();
@@ -58,7 +61,10 @@ pub fn resolve(base: &str, href: &str) -> Option<Local> {
     if parts.is_empty() {
         return None;
     }
-    Some(Local { path: parts.join("/"), fragment })
+    Some(Local {
+        path: parts.join("/"),
+        fragment,
+    })
 }
 
 fn percent_decode(s: &str) -> String {
@@ -90,13 +96,31 @@ mod tests {
 
     #[test]
     fn resolves_relative_references_inside_the_container() {
-        assert_eq!(p("OEBPS/content.opf", "text/ch1.xhtml"), Some(("OEBPS/text/ch1.xhtml".into(), None)));
-        assert_eq!(p("OEBPS/text/ch1.xhtml", "../nav.xhtml#toc"), Some(("OEBPS/nav.xhtml".into(), Some("toc".into()))));
-        assert_eq!(p("OEBPS/a.xhtml", "#note%201"), Some(("OEBPS/a.xhtml".into(), Some("note 1".into()))));
-        assert_eq!(p("content.opf", "My%20Chapter.xhtml"), Some(("My Chapter.xhtml".into(), None)));
+        assert_eq!(
+            p("OEBPS/content.opf", "text/ch1.xhtml"),
+            Some(("OEBPS/text/ch1.xhtml".into(), None))
+        );
+        assert_eq!(
+            p("OEBPS/text/ch1.xhtml", "../nav.xhtml#toc"),
+            Some(("OEBPS/nav.xhtml".into(), Some("toc".into())))
+        );
+        assert_eq!(
+            p("OEBPS/a.xhtml", "#note%201"),
+            Some(("OEBPS/a.xhtml".into(), Some("note 1".into())))
+        );
+        assert_eq!(
+            p("content.opf", "My%20Chapter.xhtml"),
+            Some(("My Chapter.xhtml".into(), None))
+        );
         assert_eq!(p("a/b.opf", "/c/d.xhtml"), Some(("c/d.xhtml".into(), None)));
-        assert_eq!(p("a/b.opf", "./c.xhtml?x=1"), Some(("a/c.xhtml".into(), None)));
-        assert_eq!(p("a/b.opf", "100%.xhtml"), Some(("a/100%.xhtml".into(), None)));
+        assert_eq!(
+            p("a/b.opf", "./c.xhtml?x=1"),
+            Some(("a/c.xhtml".into(), None))
+        );
+        assert_eq!(
+            p("a/b.opf", "100%.xhtml"),
+            Some(("a/100%.xhtml".into(), None))
+        );
     }
 
     #[test]

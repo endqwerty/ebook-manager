@@ -54,7 +54,10 @@ pub struct WireError {
 
 impl WireError {
     pub fn new(kind: WireErrorKind, detail: impl Into<String>) -> Self {
-        WireError { kind, detail: detail.into() }
+        WireError {
+            kind,
+            detail: detail.into(),
+        }
     }
     pub fn invalid(detail: impl Into<String>) -> Self {
         Self::new(WireErrorKind::Invalid, detail)
