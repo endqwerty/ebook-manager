@@ -10,4 +10,7 @@ The Linux [conversion crate](../crates/ebook-convert/README.md) creates a reflow
 
 - **E6** Before opening any input or setting resource limits, the single-threaded helper installs fatal signal handlers on an alternate stack. A fatal signal ends the helper with exit code 4. The host returns `Error::ConversionStopped` and discards staging. This implements SEC-10 for the converter process.
 
+- **E7** The reader converts the declared older-format text, in order. A possible second edition in the same file does not prevent conversion of a readable first edition. When the input indicates a possible newer-format copy, the report says that copy was not read. Text after a skipped script or style remains in the reading copy.
+- **E8** The report records repaired metadata, dropped descriptive fields and guide entries, changed heading levels, flattened preformatted text or alignment, and generated navigation labels when those changes occur.
+
 The caller owns catalogue links and history. Source locations and annotation identifiers are not mapped across formats.
