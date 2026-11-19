@@ -15,8 +15,12 @@ pub enum Request {
         serial: u64,
         query: Query,
         cancel: Cancel,
-        /// Answer `Unchanged` when the open view still matches the catalogue.
-        only_if_changed: bool,
+        /// The view the model is showing, if any.
+        showing: Option<ViewToken>,
+        /// The model asks only because the catalogue may have changed. If
+        /// the reader's view is the one the model is showing and nothing
+        /// has changed, the answer is `Unchanged`.
+        refresh: bool,
     },
     /// Where these books are in a view. `tag` comes back with the answer.
     Locate {
@@ -30,13 +34,13 @@ pub enum Request {
     },
 }
 
-/// Why a view's rows or ranks could not be given.
-#[derive(Debug)]
+/// Why the books asked for could not be found in a view.
+#[derive(Debug, PartialEq)]
 pub enum Why {
     /// The view is not the reader's any more: a later open replaced it.
     NotCurrent,
-    /// The view could not be read, and the text says why.
-    Failed(String),
+    /// The view could not be read.
+    Unreadable,
 }
 
 /// One for every request, whatever became of it.
@@ -45,6 +49,9 @@ pub enum Reply {
         serial: u64,
         view: OpenView,
     },
+    /// The view the model named as the one it is showing is the reader's
+    /// own, and the catalogue has not changed since it opened. Never said
+    /// of any other view.
     Unchanged {
         serial: u64,
     },
@@ -54,7 +61,9 @@ pub enum Reply {
         message: String,
     },
     /// A newer open made this one pointless before it finished.
-    Cancelled,
+    Cancelled {
+        serial: u64,
+    },
     Located {
         tag: u64,
         ranks: Vec<Option<u32>>,
@@ -68,9 +77,11 @@ pub enum Reply {
         page: u32,
         rows: Vec<BrowseRow>,
     },
+    /// The page cannot be given: the view is not the reader's any more, or
+    /// it could not be read. Either way the view has no more rows to give.
     NoPage {
         token: ViewToken,
-        why: Why,
+        page: u32,
     },
 }
 
@@ -79,21 +90,25 @@ pub enum Reply {
 struct Reader {
     store: Store,
     reader: Option<BrowseReader>,
+    /// The reader's own view: what it was opened for, its token and count.
+    held: Option<(Query, ViewToken, u32)>,
 }
 
 impl Reader {
     fn run<T>(
         &mut self,
-        mut call: impl FnMut(&mut BrowseReader) -> anyhow::Result<T>,
+        mut call: impl FnMut(&mut BrowseReader, &Option<(Query, ViewToken, u32)>) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
         for attempt in 0..2 {
             if self.reader.is_none() {
                 self.reader = Some(self.store.call(|library| library.browse_reader())?);
+                self.held = None;
             }
             let reader = self.reader.as_mut().expect("the reader was just made");
-            match call(reader) {
+            match call(reader, &self.held) {
                 Err(e) if e.is::<CatalogueReplaced>() => {
                     self.reader = None;
+                    self.held = None;
                     if attempt == 1 {
                         return Err(e);
                     }
@@ -120,8 +135,7 @@ fn open(reader: &mut BrowseReader, query: &Query, cancel: &Cancel) -> anyhow::Re
 fn why(error: Option<anyhow::Error>) -> Why {
     match error {
         Some(e) if e.is::<StaleView>() => Why::NotCurrent,
-        Some(e) => Why::Failed(format!("{e:#}")),
-        None => Why::Failed("The library is not open.".into()),
+        _ => Why::Unreadable,
     }
 }
 
@@ -134,6 +148,7 @@ pub fn serve(
     let mut reader = Reader {
         store,
         reader: None,
+        held: None,
     };
     for request in requests {
         let reply = match request {
@@ -141,18 +156,38 @@ pub fn serve(
                 serial,
                 query,
                 cancel,
-                only_if_changed,
+                showing,
+                refresh,
             } => {
-                let opened = reader.run(|reader| {
-                    if only_if_changed && !reader.changed()? {
-                        return Ok(None);
+                let opened = reader.run(|reader, held| {
+                    let fresh = held
+                        .as_ref()
+                        .filter(|(asked, ..)| *asked == query)
+                        .map(|(_, token, count)| (*token, *count));
+                    match fresh {
+                        Some((token, count)) if !reader.changed()? => {
+                            if refresh && showing == Some(token) {
+                                return Ok(None);
+                            }
+                            // The reader holds this very view, and the
+                            // model is not showing it. It is given again.
+                            let first = reader.window(token, 0, PAGE)?;
+                            Ok(Some(OpenView {
+                                token,
+                                count,
+                                first,
+                            }))
+                        }
+                        _ => open(reader, &query, &cancel).map(Some),
                     }
-                    open(reader, &query, &cancel).map(Some)
                 });
                 match opened {
-                    Ok(Some(view)) => Reply::Opened { serial, view },
+                    Ok(Some(view)) => {
+                        reader.held = Some((query, view.token, view.count));
+                        Reply::Opened { serial, view }
+                    }
                     Ok(None) => Reply::Unchanged { serial },
-                    Err(e) if e.is::<Cancelled>() => Reply::Cancelled,
+                    Err(e) if e.is::<Cancelled>() => Reply::Cancelled { serial },
                     Err(e) => Reply::Failed {
                         serial,
                         message: format!("{e:#}"),
@@ -179,10 +214,7 @@ pub fn serve(
                     .map(|reader| reader.window(token, page * PAGE, PAGE))
                 {
                     Some(Ok(rows)) => Reply::Page { token, page, rows },
-                    failed => Reply::NoPage {
-                        token,
-                        why: why(failed.and_then(Result::err)),
-                    },
+                    _ => Reply::NoPage { token, page },
                 }
             }
         };
@@ -236,7 +268,8 @@ mod tests {
                     serial: self.serial,
                     query,
                     cancel,
-                    only_if_changed: false,
+                    showing: None,
+                    refresh: false,
                 })
                 .unwrap();
             self.replies.recv_blocking().unwrap()
@@ -288,17 +321,17 @@ mod tests {
         assert!(matches!(thread.page(view.token), Reply::Page { rows, .. } if rows.len() == 1));
         // The catalogue file goes, as when it is being rebuilt.
         std::fs::rename(app.join("library.sqlite"), app.join("aside")).unwrap();
-        match thread.page(view.token) {
-            Reply::NoPage {
-                token,
-                why: Why::Failed(message),
+        assert!(
+            matches!(thread.page(view.token), Reply::NoPage { token, .. } if token == view.token),
+            "the page request went unanswered or was served"
+        );
+        assert!(matches!(
+            thread.locate(view.token, vec![]),
+            Reply::NotLocated {
+                why: Why::Unreadable,
                 ..
-            } => {
-                assert_eq!(token, view.token);
-                assert!(!message.is_empty());
             }
-            _ => panic!("the page request went unanswered or was served"),
-        }
+        ));
     }
 
     #[test]
@@ -329,15 +362,14 @@ mod tests {
         add(&app, "First");
         let mut thread = Thread::start(&app);
         let a = opened(thread.open());
-        let b = opened(thread.open());
+        let other = Query {
+            text: "first".into(),
+            sort: vec![],
+        };
+        let b = opened(thread.ask(other, Cancel::default()));
+        assert_ne!(a.token, b.token);
         assert!(matches!(thread.open_badly(), Reply::Failed { .. }));
-        assert!(matches!(
-            thread.page(a.token),
-            Reply::NoPage {
-                why: Why::NotCurrent,
-                ..
-            }
-        ));
+        assert!(matches!(thread.page(a.token), Reply::NoPage { .. }));
         assert!(matches!(
             thread.locate(a.token, vec![]),
             Reply::NotLocated {
@@ -351,6 +383,47 @@ mod tests {
             thread.locate(b.token, vec![b.first[0].id.clone(), "missing".into()]),
             Reply::Located { tag: 7, ranks } if ranks == [Some(0), None]
         ));
+    }
+
+    #[test]
+    fn unchanged_is_only_ever_said_of_the_view_the_model_names() {
+        let folder = tempfile::tempdir().unwrap();
+        let app = folder.path().join("app");
+        add(&app, "First");
+        let mut thread = Thread::start(&app);
+        let a = opened(thread.open());
+        let refresh = |thread: &mut Thread, showing| {
+            thread.serial += 1;
+            thread
+                .requests
+                .send(Request::Open {
+                    serial: thread.serial,
+                    query: Query::default(),
+                    cancel: Cancel::default(),
+                    showing,
+                    refresh: true,
+                })
+                .unwrap();
+            thread.replies.recv_blocking().unwrap()
+        };
+        // The model shows the reader's own view and nothing has changed.
+        assert!(matches!(
+            refresh(&mut thread, Some(a.token)),
+            Reply::Unchanged { .. }
+        ));
+        // The model shows nothing, or shows some other view: it is given
+        // the reader's view, which is the same one while nothing changed.
+        assert_eq!(opened(refresh(&mut thread, None)).token, a.token);
+        let other = Query {
+            text: "first".into(),
+            sort: vec![],
+        };
+        let b = opened(thread.ask(other, Cancel::default()));
+        // The reader now holds B. A model still showing A asks whether A
+        // changed, and is not told it is unchanged.
+        let again = opened(refresh(&mut thread, Some(a.token)));
+        assert_ne!(again.token, b.token);
+        assert_eq!(again.count, 1);
     }
 
     #[test]
@@ -379,7 +452,12 @@ mod tests {
                     let cancel = Cancel::default();
                     cancel.cancel();
                     assert!(
-                        matches!(thread.ask(Query::default(), cancel), Reply::Cancelled),
+                        // Cancelled, unless the reader already holds the
+                        // view asked for and gives it again.
+                        matches!(
+                            thread.ask(Query::default(), cancel),
+                            Reply::Cancelled { .. } | Reply::Opened { .. }
+                        ),
                         "step {step}"
                     );
                 }
@@ -397,13 +475,11 @@ mod tests {
                     let served = matches!(reply, Reply::Page { .. } | Reply::Located { .. });
                     let refused = matches!(
                         reply,
-                        Reply::NoPage {
-                            why: Why::NotCurrent,
-                            ..
-                        } | Reply::NotLocated {
-                            why: Why::NotCurrent,
-                            ..
-                        }
+                        Reply::NoPage { .. }
+                            | Reply::NotLocated {
+                                why: Why::NotCurrent,
+                                ..
+                            }
                     );
                     assert!(
                         if current { served } else { refused },

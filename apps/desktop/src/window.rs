@@ -34,6 +34,9 @@ struct Library {
     failed: adw::StatusPage,
     /// Counts placements, so a late scroll correction can tell it is stale.
     placed: Cell<u64>,
+    /// Counts what the reader does to the books with the wheel, the
+    /// pointer or a key, any of which can move them.
+    moved: Rc<Cell<u64>>,
     surveying: Cell<bool>,
 }
 
@@ -156,12 +159,16 @@ impl Library {
         let weak = Rc::downgrade(self);
         let frames = Cell::new(0);
         let top_offset = was.top_offset;
+        let moved = self.moved.get();
         self.grid.add_tick_callback(move |_, _| {
             let Some(library) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
             frames.set(frames.get() + 1);
-            if library.placed.get() != serial || frames.get() > 10 {
+            // The correction gives way to a later placement and to the
+            // reader: if they have scrolled, clicked or pressed a key in
+            // the books since, the view stays where they put it.
+            if library.placed.get() != serial || library.moved.get() != moved || frames.get() > 10 {
                 return glib::ControlFlow::Break;
             }
             if frames.get() < 2 {
@@ -195,9 +202,12 @@ impl Library {
 
     /// Runs `command` with the ID of each selected book.
     fn with_selection(self: &Rc<Self>, command: impl FnOnce(&Rc<Self>, Vec<String>) + 'static) {
+        // The books are those selected now, when the command is given,
+        // whatever is selected by the time their rows have arrived.
+        let targets = self.model.targets();
         let library = self.clone();
         glib::spawn_future_local(async move {
-            match library.model.selected().await {
+            match targets.ids().await {
                 Some(books) if !books.is_empty() => command(&library, books),
                 Some(_) => {}
                 // A selected row was still loading when the list was
@@ -412,8 +422,9 @@ impl Library {
 
 /// Whether a key moves about or commands something, and so is not text
 /// for the search field. With the search field focused and not yet on
-/// screen, Space and the editing keys are text too.
-fn commands(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType, in_field: bool) -> bool {
+/// screen, or a dead key waiting for its letter, Space and the editing keys
+/// are text too, and so is Escape for the dead key it cancels.
+fn commands(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType, text: bool) -> bool {
     use glib::translate::IntoGlib;
     use gtk::gdk::{Key, ModifierType};
     let held = ModifierType::CONTROL_MASK | ModifierType::ALT_MASK | ModifierType::SUPER_MASK;
@@ -422,8 +433,7 @@ fn commands(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType, in_field: boo
     }
     let moves = matches!(
         key,
-        Key::Escape
-            | Key::Return
+        Key::Return
             | Key::KP_Enter
             | Key::ISO_Enter
             | Key::Tab
@@ -439,8 +449,8 @@ fn commands(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType, in_field: boo
             | Key::Menu
             | Key::Insert
     ) || (Key::F1.into_glib()..=Key::F35.into_glib()).contains(&key.into_glib());
-    let edits = matches!(key, Key::space | Key::BackSpace | Key::Delete);
-    moves || (edits && !in_field)
+    let edits = matches!(key, Key::Escape | Key::space | Key::BackSpace | Key::Delete);
+    moves || (edits && !text)
 }
 
 fn books_exported(count: usize) -> String {
@@ -575,6 +585,7 @@ pub fn open(app: &adw::Application) {
             no_match: status_page("No books match"),
             failed: status_page("The library could not be opened"),
             placed: Cell::new(0),
+            moved: Rc::default(),
             surveying: Cell::new(false),
         }
     });
@@ -654,7 +665,7 @@ pub fn open(app: &adw::Application) {
                 .map(|library| library.anchors())
                 .unwrap_or_default()
         }),
-        changed: Box::new(move || {
+        changed: Box::new(move |_| {
             let Some(library) = for_changed.upgrade() else {
                 return;
             };
@@ -700,6 +711,31 @@ pub fn open(app: &adw::Application) {
             }
         });
     }
+    // Whatever the reader does to the books that can move them is counted,
+    // so a scroll correction still to come can give way to it.
+    let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let moved = library.moved.clone();
+    wheel.connect_scroll(move |_, _, _| {
+        moved.set(moved.get() + 1);
+        glib::Propagation::Proceed
+    });
+    library.scrolled.add_controller(wheel);
+    let press = gtk::GestureClick::builder()
+        .button(0)
+        .propagation_phase(gtk::PropagationPhase::Capture)
+        .build();
+    let moved = library.moved.clone();
+    press.connect_pressed(move |_, _, _, _| moved.set(moved.get() + 1));
+    library.scrolled.add_controller(press);
+    let pressed = gtk::EventControllerKey::new();
+    pressed.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let moved = library.moved.clone();
+    pressed.connect_key_pressed(move |_, _, _, _| {
+        moved.set(moved.get() + 1);
+        glib::Propagation::Proceed
+    });
+    library.scrolled.add_controller(pressed);
     // The Menu key and Shift+F10 open the menu for the focused book.
     let keys = gtk::ShortcutController::new();
     let weak = Rc::downgrade(&library);
@@ -755,8 +791,11 @@ pub fn open(app: &adw::Application) {
     // that move about or command something are left where they are.
     let typing = gtk::EventControllerKey::new();
     typing.set_propagation_phase(gtk::PropagationPhase::Capture);
+    // A dead key has been passed on and its letter has not come yet.
+    let composing = Rc::new(Cell::new(false));
     let pass = {
         let weak = Rc::downgrade(&library);
+        let composing = composing.clone();
         move |typing: &gtk::EventControllerKey, key: gtk::gdk::Key, modifiers| {
             let library = weak.upgrade()?;
             let field = {
@@ -780,14 +819,19 @@ pub fn open(app: &adw::Application) {
             if ready || (in_text && !in_field) {
                 return None;
             }
-            (!commands(key, modifiers, in_field) && typing.forward(&field))
-                .then_some((library, field))
+            // While a dead key waits, Escape and Backspace cancel it and
+            // Space completes it, as they do in a text field.
+            let text = in_field || composing.get();
+            (!commands(key, modifiers, text) && typing.forward(&field)).then_some((library, field))
         }
     };
     let pressed = pass.clone();
     typing.connect_key_pressed(move |typing, key, _, modifiers| {
+        use gtk::gdk::Key;
+        let ends = matches!(key, Key::Escape | Key::BackSpace | Key::space);
         match pressed(typing, key, modifiers) {
             Some((library, field)) => {
+                composing.set(field.text().is_empty() && !ends);
                 // The search opens when there is text. A dead key gives
                 // none yet, and moving the focus now would make the input
                 // method forget it.
@@ -801,7 +845,12 @@ pub fn open(app: &adw::Application) {
                 }
                 glib::Propagation::Stop
             }
-            None => glib::Propagation::Proceed,
+            None => {
+                if ends {
+                    composing.set(false);
+                }
+                glib::Propagation::Proceed
+            }
         }
     });
     typing.connect_key_released(move |typing, key, _, modifiers| {

@@ -504,6 +504,12 @@ def run(binary, evidence, root):
         assert field.get_state_set().contains(Atspi.StateType.SHOWING)
         assert Atspi.Text.get_text(field, 0, -1) == "é", Atspi.Text.get_text(field, 0, -1)
         key("Escape")
+        # Backspace cancels a dead key that is waiting for its letter.
+        xd("key", "--delay", "100", "dead_acute", "BackSpace", "e")
+        time.sleep(0.5)
+        field = find("Search library", "entry")
+        assert Atspi.Text.get_text(field, 0, -1) == "e", Atspi.Text.get_text(field, 0, -1)
+        key("Escape")
         select_book("mira")
         find("The Lantern Atlas")
         key("F2")
