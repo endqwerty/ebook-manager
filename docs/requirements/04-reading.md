@@ -6,14 +6,20 @@ meet.
 ## Text
 
 The [Linux desktop reader](../../specs/desktop-mvp.md#read-and-export) covers
-chapter navigation, continuous scrolling, page turns from the keyboard, a
-full-screen view and version-specific resume within a chapter (parts of READ-1,
-READ-2 and READ-71).
+READ-2 whole: pages or continuous scrolling, one or two columns, a slide, a
+cross-fade or no page turn, and full screen. It covers parts of the others:
+resume to the character and a chapter list (READ-1); font, size, weight,
+spacing, margins, justification and hyphenation, with the book's own styles
+still to come (READ-3); the four page colours, colours of the reader's own
+and following the system, with time of day still to come (READ-4); scripts
+and remote resources off, with no way yet to allow them (READ-18); and page
+turns and the reader's controls from the keyboard (READ-71).
 
 - `READ-1` (core) Open a book at the place the user left it. Show a table of
   contents, landmarks and the page list when the book has one.
 - `READ-2` (core) Paged or continuous scrolling, one or two columns, and a choice
-  of page-turn animation including none. The reader can fill the screen.
+  of page-turn animation including none. The reader can fill the screen. Done
+  on the Linux desktop.
 - `READ-3` (core) Font family, size and weight, line, letter and word spacing,
   margins, justification, hyphenation, and the choice between the book's own styles
   and the user's.

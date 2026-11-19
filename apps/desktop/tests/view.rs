@@ -106,6 +106,11 @@ impl Source for Chapters {
     }
 }
 
+thread_local! {
+    /// The width the next test window opens at.
+    static WIDTH: std::cell::Cell<i32> = const { std::cell::Cell::new(900) };
+}
+
 /// A view in a window, the events it has sent, and ways to wait on both.
 struct Stage {
     view: View,
@@ -159,7 +164,7 @@ impl Stage {
         );
         let view = built.take().unwrap()?;
         let window = gtk::Window::builder()
-            .default_width(900)
+            .default_width(WIDTH.with(|w| w.get()))
             .default_height(700)
             .child(view.widget())
             .build();
@@ -268,6 +273,40 @@ impl Stage {
             "no answer to a turn"
         );
         Ok(out.take().unwrap())
+    }
+
+    /// Turn, and give the place the turn told the shell before it answered,
+    /// or `None` at the chapter's edge.
+    fn turned(&self, by: i32, animate: bool) -> Result<Option<(u32, u32)>, Failed> {
+        self.events.borrow_mut().clear();
+        let answered = Rc::new(RefCell::new(None));
+        let slot = answered.clone();
+        let seen = self.events.clone();
+        self.view.turn(by, animate, move |moved| {
+            slot.replace(Some((moved, seen.borrow().last().cloned())));
+        });
+        check!(
+            spin(|| answered.borrow().is_some(), Duration::from_secs(20)),
+            "no answer to a turn"
+        );
+        match answered.take().unwrap() {
+            (false, _) => Ok(None),
+            (
+                true,
+                Some(Event::Place {
+                    offset,
+                    page,
+                    moved: true,
+                    ..
+                }),
+            ) => Ok(Some((offset, page))),
+            (true, other) => Err(format!("a turn moved and told {other:?}").into()),
+        }
+    }
+
+    /// Where the text is scrolled to, along the way it moves.
+    fn scrolled(&self) -> Result<String, Failed> {
+        self.app("const r = document.documentElement; return Math.round(r.classList.contains('scroll') ? r.scrollTop : r.scrollLeft)")
     }
 }
 
@@ -1173,6 +1212,285 @@ fn a_move_carries_its_place_and_a_reflow_does_not_move_it() -> Outcome {
     Ok(())
 }
 
+/// Set properties and wait for the page to have gone back to its place.
+fn restyle(stage: &Stage, properties: &[(&str, &str)]) -> Result<(u32, u32, u32), Failed> {
+    stage.events.borrow_mut().clear();
+    stage.view.set_style(properties);
+    stage.wait("place after a setting", |e| {
+        matches!(e, Event::Place { .. })
+    })?;
+    Ok(stage.last_place().unwrap())
+}
+
+/// Each text setting changes what the page computes for its text.
+fn text_settings_reach_the_page() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    stage.open(0, Landing::Start)?;
+    let computed = |stage: &Stage, property: &str| {
+        stage.app(&format!(
+            "return getComputedStyle(document.querySelector('p')).{property}"
+        ))
+    };
+    let root: f64 = stage
+        .app("return parseFloat(getComputedStyle(document.documentElement).fontSize)")?
+        .parse()
+        .unwrap();
+    restyle(&stage, &[("--size", "1.5")])?;
+    let larger: f64 = computed(&stage, "fontSize")?
+        .trim_end_matches("px")
+        .parse()
+        .unwrap();
+    check!(
+        (larger / root - 1.5).abs() < 0.01,
+        "size 1.5 gave {larger} from {root}"
+    );
+    restyle(&stage, &[("--size", "1"), ("--weight", "600")])?;
+    check!(computed(&stage, "fontWeight")? == "600", "weight");
+    restyle(&stage, &[("--line", "2")])?;
+    let line: f64 = computed(&stage, "lineHeight")?
+        .trim_end_matches("px")
+        .parse()
+        .unwrap();
+    check!(
+        (line / root - 2.0).abs() < 0.05,
+        "line height 2 gave {line} at {root}"
+    );
+    restyle(&stage, &[("--letter", "0.1em"), ("--word", "0.2em")])?;
+    let letter: f64 = computed(&stage, "letterSpacing")?
+        .trim_end_matches("px")
+        .parse()
+        .unwrap();
+    let word: f64 = computed(&stage, "wordSpacing")?
+        .trim_end_matches("px")
+        .parse()
+        .unwrap();
+    check!(
+        (letter / root - 0.1).abs() < 0.01 && (word / root - 0.2).abs() < 0.01,
+        "spacing {letter} {word}"
+    );
+    restyle(&stage, &[("--align", "justify"), ("--hyphens", "auto")])?;
+    check!(computed(&stage, "textAlign")? == "justify", "justification");
+    check!(computed(&stage, "hyphens")? == "auto", "hyphenation");
+    restyle(&stage, &[("--font", "'DejaVu Sans', sans-serif")])?;
+    check!(
+        computed(&stage, "fontFamily")?.contains("DejaVu Sans"),
+        "font"
+    );
+    // Margins: the side margin scales, and the line never passes the measure.
+    let left = |stage: &Stage| -> Result<f64, Failed> {
+        Ok(stage
+            .app("return document.querySelector('p').getBoundingClientRect().left")?
+            .parse()
+            .unwrap())
+    };
+    stage.window.set_default_size(700, 700);
+    pause(Duration::from_millis(400));
+    restyle(&stage, &[("--margin", "1")])?;
+    let medium = left(&stage)?;
+    restyle(&stage, &[("--margin", "1.5")])?;
+    let wide = left(&stage)?;
+    check!(
+        (medium - 48.0).abs() < 1.0 && (wide - 72.0).abs() < 1.0,
+        "margins {medium} {wide}"
+    );
+    Ok(())
+}
+
+/// Two columns show when asked for and the window fits them, with the
+/// margins' width between them, and turning still moves a whole page.
+fn two_columns_when_they_fit() -> Outcome {
+    // The private display is 1,280 wide, so the text is set small enough for
+    // two columns of 60 characters to fit a 1,200 window.
+    WIDTH.with(|w| w.set(1200));
+    let stage = Stage::new(one(long_chapter()), |_| {});
+    WIDTH.with(|w| w.set(900));
+    let stage = stage?;
+    stage.view.set_style(&[("--size", "0.8")]);
+    let (_, _, _, one_column) = stage.open(0, Landing::Start)?;
+    check!(
+        spin(
+            || stage.app("return innerWidth").is_ok_and(|w| w == "1200"),
+            Duration::from_secs(10)
+        ),
+        "the window is {} wide, not 1200 (gtk window {}x{}, view {}, ratio {})",
+        stage.app("return innerWidth")?,
+        stage.window.width(),
+        stage.window.height(),
+        stage.view.widget().width(),
+        stage.app("return devicePixelRatio + ' ' + screen.width")?
+    );
+    let (_, _, two_column) = restyle(&stage, &[("--columns", "2")])?;
+    check!(
+        stage.app("return document.documentElement.classList.contains('two')")? == "true",
+        "two columns were not used in a wide window"
+    );
+    check!(
+        two_column < one_column,
+        "two columns gave {two_column} pages, one gave {one_column}"
+    );
+    // The page holds two columns: paragraphs at two left edges, both on screen.
+    let edges = stage.app("const xs = new Set(); for (const p of document.querySelectorAll('p')) { const r = p.getBoundingClientRect(); if (r.left >= 0 && r.right <= innerWidth) xs.add(Math.round(r.left)); } return [...xs].sort((a, b) => a - b).join(',')")?;
+    let edges: Vec<f64> = edges.split(',').filter_map(|e| e.parse().ok()).collect();
+    check!(edges.len() == 2, "columns start at {edges:?}");
+    let column = (1200.0 - 4.0 * 48.0) / 2.0;
+    check!(
+        (edges[0] - 48.0).abs() < 2.0 && (edges[1] - (48.0 + column + 96.0)).abs() < 2.0,
+        "columns start at {edges:?}"
+    );
+    check!(stage.turn(1)?, "no turn");
+    check!(
+        stage.app("return Math.round(document.documentElement.scrollLeft)")? == "1200",
+        "a turn did not move one page"
+    );
+    // A window too narrow for two columns of 60 characters shows one.
+    stage.events.borrow_mut().clear();
+    stage.window.set_default_size(800, 800);
+    stage.wait("place after a resize", |e| matches!(e, Event::Place { .. }))?;
+    pause(Duration::from_millis(300));
+    check!(
+        stage.app("return document.documentElement.classList.contains('two')")? == "false",
+        "two columns in a narrow window"
+    );
+    Ok(())
+}
+
+/// Continuous scrolling keeps the place when it is switched on and off,
+/// turns by a screen, and reports where a scroll ends as a move. A change
+/// of setting in scrolling is a reflow and keeps the place.
+fn scrolling_keeps_the_place() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    let (length, _, _, paged) = stage.open(0, Landing::Offset(9000))?;
+    let (held, _, _) = stage.last_place().unwrap();
+    let (offset, _, screens) = restyle(&stage, &[("--flow", "scroll")])?;
+    check!(
+        stage.app("return document.documentElement.scrollWidth <= innerWidth + 1")? == "true",
+        "scrolling text is wider than the window"
+    );
+    check!(screens > 1, "scrolling has {screens} screens");
+    check!(
+        offset.abs_diff(held) < 400,
+        "switching to scrolling moved from {held} to {offset}"
+    );
+    let Some((after, _)) = stage.turned(1, false)? else {
+        return Err("no turn in scrolling".into());
+    };
+    check!(
+        after > offset,
+        "a turn in scrolling went from {offset} to {after}"
+    );
+    // A scroll by hand is a move, reported when it settles. Only a move is
+    // waited for: the turn above is not reported again when its scroll
+    // settles, and a reflow is not a move.
+    stage.events.borrow_mut().clear();
+    stage.app("document.documentElement.scrollTop += 700; return 1")?;
+    let Event::Place {
+        offset: scrolled, ..
+    } = stage.wait("a move after a scroll", |e| {
+        matches!(e, Event::Place { moved: true, .. })
+    })?
+    else {
+        unreachable!()
+    };
+    check!(
+        scrolled > after && scrolled < length,
+        "a scroll went from {after} to {scrolled}"
+    );
+    // A setting changed while scrolling reflows and keeps the place, and
+    // the scroll it makes is not a move.
+    stage.events.borrow_mut().clear();
+    stage.view.set_style(&[("--size", "1.2")]);
+    stage.wait("place after a setting", |e| {
+        matches!(e, Event::Place { .. })
+    })?;
+    pause(Duration::from_millis(600));
+    let reports: Vec<(u32, bool)> = stage
+        .events
+        .borrow()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Place { offset, moved, .. } => Some((*offset, *moved)),
+            _ => None,
+        })
+        .collect();
+    check!(
+        reports.iter().all(|&r| r == (scrolled, false)),
+        "a setting in scrolling reported {reports:?}, the place was {scrolled}"
+    );
+    restyle(&stage, &[("--size", "1")])?;
+    // The last screen is the chapter's end, and nothing turns past it.
+    stage.open(0, Landing::End)?;
+    check!(!stage.turn(1)?, "a turn past the end of scrolling moved");
+    // Back in pages, the same text is showing.
+    stage.open(0, Landing::Offset(scrolled))?;
+    let (offset, page, pages) = restyle(&stage, &[("--flow", "paged")])?;
+    check!(
+        pages == paged && page > 0,
+        "back in pages: page {page} of {pages}, was {paged}"
+    );
+    check!(
+        offset <= scrolled && scrolled - offset < 3000,
+        "back in pages at {offset}, was {scrolled}"
+    );
+    Ok(())
+}
+
+/// A turn answers with the place it leads to when the page slides or fades
+/// there, in pages and in scrolling, though the text has not moved when
+/// the answer is made. Where the animation ends is not reported again.
+fn an_animated_turn_answers_with_the_place_it_leads_to() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    for (flow, turn) in [
+        ("paged", "slide"),
+        ("paged", "fade"),
+        ("scroll", "slide"),
+        ("scroll", "fade"),
+    ] {
+        stage.view.set_style(&[("--flow", flow), ("--turn", turn)]);
+        // The turn animates: right after it the text is still where it was.
+        stage.open(0, Landing::Start)?;
+        let probe = stage.app("const r = document.documentElement; const at = () => Math.round(r.classList.contains('scroll') ? r.scrollTop : r.scrollLeft); const before = at(); const answer = __reader.turn(1, true); return [before, at(), answer !== ''].join(' ')")?;
+        let probe: Vec<&str> = probe.split(' ').collect();
+        check!(
+            probe[0] == probe[1] && probe[2] == "true",
+            "{flow} {turn}: the turn did not animate: {probe:?}"
+        );
+        // The same turn without animation, from the same place.
+        stage.open(0, Landing::Start)?;
+        let Some((plain, plain_page)) = stage.turned(1, false)? else {
+            return Err(format!("{flow} {turn}: no turn").into());
+        };
+        let landed = stage.scrolled()?;
+        // The animated turn tells the same place, the first character of
+        // the page it leads to, and ends there.
+        let (_, start, _, _) = stage.open(0, Landing::Start)?;
+        let Some((offset, page)) = stage.turned(1, true)? else {
+            return Err(format!("{flow} {turn}: no animated turn").into());
+        };
+        check!(
+            offset == plain && page == plain_page && offset > start,
+            "{flow} {turn}: the animated turn told {offset} on page {page}, a plain one {plain} on page {plain_page}, from {start}"
+        );
+        pause(Duration::from_millis(1200));
+        check!(
+            stage.scrolled()? == landed,
+            "{flow} {turn}: the animation ended at {}, the turn at {landed}",
+            stage.scrolled()?
+        );
+        let places = stage
+            .events
+            .borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Place { .. }))
+            .count();
+        check!(
+            places == 1,
+            "{flow} {turn}: the turn was told {places} times: {:?}",
+            stage.events.borrow()
+        );
+    }
+    Ok(())
+}
+
 /// A book through the real sandboxed helper, as the reader serves it.
 struct Helper(ebook_reader::Book);
 
@@ -1669,6 +1987,13 @@ const TESTS: &[Test] = &[
     (
         "pages_without_text_keep_their_place",
         pages_without_text_keep_their_place,
+    ),
+    ("text_settings_reach_the_page", text_settings_reach_the_page),
+    ("two_columns_when_they_fit", two_columns_when_they_fit),
+    ("scrolling_keeps_the_place", scrolling_keeps_the_place),
+    (
+        "an_animated_turn_answers_with_the_place_it_leads_to",
+        an_animated_turn_answers_with_the_place_it_leads_to,
     ),
     (
         "a_move_carries_its_place_and_a_reflow_does_not_move_it",

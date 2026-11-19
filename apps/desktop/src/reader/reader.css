@@ -7,10 +7,23 @@
 	/* The shell names an installed face. A name the system lacks would be
 	   swapped for its default face, which is often not a serif. */
 	--font: serif;
+	/* The reader's text settings. The shell sets these; see settings.rs. */
 	--size: 1;
+	--weight: 400;
 	--line: 1.5;
-	--side: 48px;
-	--block: 72px;
+	--letter: 0em;
+	--word: 0em;
+	--margin: 1;
+	--align: start;
+	--hyphens: manual;
+	--columns: 1;
+	--flow: paged;
+	--turn: slide;
+	/* A line of 60 to 70 characters, centred, never wider. */
+	--measure: 34em;
+	--edge: calc(48px * var(--margin));
+	--side: max(var(--edge), calc((100vw - var(--measure)) / 2));
+	--block: calc(72px * var(--margin));
 	color-scheme: only light;
 }
 html {
@@ -25,7 +38,10 @@ html {
 	overflow: hidden !important;
 	font-family: var(--font);
 	font-size: calc(1.15rem * var(--size));
+	font-weight: var(--weight);
 	line-height: var(--line);
+	letter-spacing: var(--letter);
+	word-spacing: var(--word);
 	-webkit-text-size-adjust: none;
 	overflow-wrap: break-word;
 }
@@ -46,8 +62,31 @@ body {
 	overflow: visible !important;
 	background: none !important;
 	color: inherit;
-	text-align: start;
-	hyphens: manual;
+	text-align: var(--align);
+	hyphens: var(--hyphens);
+	transition: none;
+}
+/* Two columns to a page: the margins' width between them, so every column
+   is as far from the next as the page's edge is from its first. */
+html.two {
+	--side: var(--edge);
+}
+html.two body {
+	column-width: calc((100vw - 4 * var(--side)) / 2) !important;
+}
+/* Continuous scrolling: the same document in normal flow. */
+html.scroll {
+	overflow-x: hidden !important;
+	overflow-y: auto !important;
+}
+html.scroll body {
+	height: auto !important;
+	min-height: 100vh;
+	column-width: auto !important;
+	column-gap: normal !important;
+}
+html.fading body {
+	opacity: 0;
 }
 p { margin: 0 0 0.8em; }
 h1, h2, h3, h4, h5, h6 { line-height: 1.25; break-after: avoid; margin: 1.2em 0 0.6em; }
@@ -74,4 +113,5 @@ a[href], a[data-external] { color: inherit !important; text-decoration: underlin
 ::highlight(found) { background: color-mix(in srgb, var(--secondary) 40%, transparent); }
 @media (prefers-reduced-motion: no-preference) {
 	html.slide { scroll-behavior: smooth; }
+	html.fade body { transition: opacity 120ms ease; }
 }

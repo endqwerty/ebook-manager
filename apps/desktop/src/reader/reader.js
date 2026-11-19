@@ -58,18 +58,70 @@
 	};
 
 	const rtl = () => getComputedStyle(root).direction === "rtl";
+	const setting = (name) => getComputedStyle(root).getPropertyValue(name).trim();
+	// Continuous scrolling instead of pages. Set by `layout`.
+	let scrolling = false;
 	const width = () => root.clientWidth || innerWidth;
-	const pages = () => Math.max(1, Math.round(root.scrollWidth / width()));
-	const page = () => Math.round(Math.abs(root.scrollLeft) / width());
-	const show = (n, smooth) => {
-		const target = Math.max(0, Math.min(n, pages() - 1)) * width() * (rtl() ? -1 : 1);
+	const height = () => root.clientHeight || innerHeight;
+	// In scrolling a "page" is a screenful, so progress and turning still work.
+	const pages = () =>
+		scrolling
+			? Math.max(1, Math.ceil((root.scrollHeight - 1) / height()))
+			: Math.max(1, Math.round(root.scrollWidth / width()));
+	const page = () =>
+		scrolling
+			? Math.min(pages() - 1, Math.round(root.scrollTop / height()))
+			: Math.round(Math.abs(root.scrollLeft) / width());
+	// The scroll position along the way the text moves.
+	const at = () => (scrolling ? root.scrollTop : root.scrollLeft);
+	// Where a slide or a fade that has not finished is going, or null.
+	let aim = null;
+	// Where the app last put the text. A scroll that settles anywhere else
+	// was the reader's own.
+	let expect = 0;
+	// The fade's second half, until it runs.
+	let fading = 0;
+	// Scroll to `x` at once, or as a slide. Going anywhere at once ends a
+	// slide or a fade that has not finished.
+	const goTo = (x, smooth) => {
+		clearTimeout(fading);
+		root.classList.remove("fading");
 		root.classList.toggle("slide", !!smooth);
-		root.scrollLeft = target;
+		if (scrolling) root.scrollTop = x;
+		else root.scrollLeft = x;
 		if (!smooth) root.classList.remove("slide");
+		aim = smooth ? x : null;
+		expect = smooth ? x : at();
+	};
+	// Fade the page out, go to `x`, and fade it back in.
+	const fadeTo = (x) => {
+		clearTimeout(fading);
+		root.classList.add("fade", "fading");
+		aim = x;
+		expect = x;
+		fading = setTimeout(() => goTo(x, false), 120);
+	};
+	// Show page `n` at once.
+	const show = (n) => {
+		const to = Math.max(0, Math.min(n, pages() - 1));
+		if (scrolling) goTo(Math.min(to * height(), Math.max(0, root.scrollHeight - height())), false);
+		else goTo(to * width() * (rtl() ? -1 : 1), false);
+	};
+
+	// Apply the settings that change the document's shape: two columns when
+	// asked for and the window fits two of 60 characters, and scrolling.
+	const layout = () => {
+		scrolling = setting("--flow") === "scroll";
+		root.classList.toggle("scroll", scrolling);
+		const em = parseFloat(getComputedStyle(root).fontSize) || 16;
+		const edge = 48 * (parseFloat(setting("--margin")) || 1);
+		const fits = (width() - 4 * edge) / 2 >= 30 * em;
+		root.classList.toggle("two", !scrolling && setting("--columns") === "2" && fits);
 	};
 
 	// The page a point of the document falls on, from its place on screen now.
-	const pageOfX = (x) => {
+	const pageOfX = (x, y) => {
+		if (scrolling) return Math.floor((root.scrollTop + y + 1) / height());
 		// After a resize the scroll offset is not yet a whole number of pages.
 		const along = rtl() ? width() - x : x;
 		return Math.floor((Math.abs(root.scrollLeft) + along) / width());
@@ -91,7 +143,7 @@
 		}
 		const rects = range.getClientRects();
 		const rect = rects.length ? rects[0] : range.getBoundingClientRect();
-		return pageOfX(rect.left + 1);
+		return pageOfX(rect.left + 1, rect.top);
 	};
 
 	// Whether the page showing has any text on it. Set by `place`.
@@ -105,8 +157,11 @@
 		const side = parseFloat(style.paddingLeft) || 0;
 		const top = parseFloat(style.paddingTop) || 0;
 		const w = width();
-		const h = root.clientHeight || innerHeight;
-		for (let y = top + 2; y < h - top; y += 12) {
+		const h = height();
+		// In scrolling the top margin has scrolled away with the page.
+		const first = scrolling ? 2 : top + 2;
+		const last = scrolling ? h : h - top;
+		for (let y = first; y < last; y += 12) {
 			for (const x of rtl() ? [w - side - 2, w / 2] : [side + 2, w / 2]) {
 				const range = document.caretRangeFromPoint(x, y);
 				if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
@@ -165,16 +220,30 @@
 		post({ kind: "place", load, ...settle_place(chosen) });
 	};
 
+	// Show the page holding an offset. In scrolling the offset is brought to
+	// the top of the screen, where a place is read from.
+	const showOffset = (offset) => {
+		show(pageOfOffset(offset));
+		const at = scrolling && offset > 0 && offset < length ? locate(offset) : null;
+		if (at) {
+			const range = document.createRange();
+			range.setStart(at[0], at[1]);
+			range.collapse(true);
+			goTo(root.scrollTop + range.getBoundingClientRect().top, false);
+		}
+	};
+
 	// Show the held place again after the layout changed.
 	const restore = () => {
 		reflowing = false;
+		layout();
 		if (!landed) return;
 		if (held.edge === "start") show(0);
 		else if (held.edge === "end") show(pages() - 1);
 		// A text-less page in the middle keeps its number while the chapter
 		// keeps its page count. Otherwise only the text after it can be found.
 		else if (held.textless && held.pages === pages()) show(held.page);
-		else show(pageOfOffset(held.offset));
+		else showOffset(held.offset);
 		report();
 	};
 
@@ -193,7 +262,7 @@
 				const element = document.getElementById(to.anchor);
 				if (element) {
 					const rect = element.getBoundingClientRect();
-					show(pageOfX(rect.left + 1));
+					show(pageOfX(rect.left + 1, rect.top));
 				} else {
 					show(0);
 				}
@@ -202,25 +271,54 @@
 			} else if (to.page !== undefined) {
 				show(to.page);
 			} else {
-				show(pageOfOffset(to.offset || 0));
+				showOffset(to.offset || 0);
 			}
 			landed = true;
 			report(to.end ? "end" : true);
 			return true;
 		},
-		// Turn by `by` pages. False at either edge of the chapter.
+		// Turn by `by` pages, or in scrolling by a screenful less a line, so
+		// the eye keeps its place. `smooth` uses the reader's page turn: a
+		// slide, a fade or none, and none when the system asks for less
+		// motion.
+		//
+		// The answer is the new place, so the shell learns of the turn and
+		// where it led in one step. "" means the chapter's edge. The place is
+		// read at the destination before any animation starts: the text goes
+		// there, the place is read, and only then does it go back and slide
+		// or fade. All of that is one task, so nothing is drawn in between.
+		// A turn made while another is still animating starts from where
+		// that one is going.
 		turn(by, smooth) {
-			// The answer is the new place, so the shell learns of the turn
-			// and where it led in one step. "" means the chapter's edge.
-			const next = page() + by;
-			if (!ready || !landed || next < 0 || next >= pages()) return "";
-			show(next, smooth);
+			if (!ready || !landed) return "";
+			const before = at();
+			let target;
+			if (scrolling) {
+				const from = aim === null ? before : aim;
+				const line = parseFloat(getComputedStyle(root).lineHeight) || 24;
+				const most = Math.max(0, root.scrollHeight - height());
+				target = Math.max(0, Math.min(most, from + by * Math.max(40, height() - line)));
+				if (Math.abs(target - from) < 1) return "";
+			} else {
+				const next = (aim === null ? page() : Math.round(Math.abs(aim) / width())) + by;
+				if (next < 0 || next >= pages()) return "";
+				target = next * width() * (rtl() ? -1 : 1);
+			}
+			goTo(target, false);
 			const now = settle_place(true);
+			const motion = smooth && matchMedia("(prefers-reduced-motion: no-preference)").matches;
+			const kind = motion ? setting("--turn") : "none";
+			if (kind === "slide" || kind === "fade") {
+				goTo(before, false);
+				if (kind === "slide") goTo(target, true);
+				else fadeTo(target);
+			}
 			return [now.offset, now.page, now.pages, now.move].join(",");
 		},
 		// Set custom properties with no reflow handling, before a landing.
 		assign(properties) {
 			assign(properties);
+			layout();
 			return true;
 		},
 		// Set custom properties, keeping the place. A new face can change
@@ -265,6 +363,27 @@
 		if (link && event.key === "Enter") link.click();
 	});
 
+	// Scrolling settles 150 ms after its last step. A slide has finished by
+	// then. In scrolling, a scroll by wheel, keys or scroll bar is a move,
+	// reported where it settles. Where the app put the text was reported
+	// when it was put there, and a reflow keeps the held place.
+	let scrolled = 0;
+	const settled = () => {
+		aim = null;
+		if (!scrolling || !ready || !landed || reflowing) return;
+		if (Math.abs(at() - expect) < 1) return;
+		expect = at();
+		report(true);
+	};
+	addEventListener(
+		"scroll",
+		() => {
+			clearTimeout(scrolled);
+			scrolled = setTimeout(settled, 150);
+		},
+		true,
+	);
+
 	let resizing = 0;
 	addEventListener("resize", () => {
 		if (!ready) return;
@@ -294,6 +413,7 @@
 			),
 		);
 		index();
+		layout();
 		settle(() => {
 			ready = true;
 			post({ kind: "ready", load, length, pages: pages(), body: true });

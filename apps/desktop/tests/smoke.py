@@ -353,6 +353,90 @@ def web_processes(app):
     return found
 
 
+def pixel(image, x, y):
+    """The colour of one point of a screenshot, as rrggbb."""
+    return subprocess.check_output(
+        [shutil.which("magick") or "convert", str(image), "-format", f"%[hex:p{{{x},{y}}}]", "info:"],
+        text=True,
+    ).strip()[:6].lower()
+
+
+def settings(evidence):
+    """Change the text size and the page colour, and find both kept after the reader closes."""
+    title = "The Lantern Atlas · Revised"
+
+    def pages():
+        label = find("Chapter ", "label", contains=True)
+        return int(re.search(r"Page \d+ of (\d+)", label.get_name()).group(1))
+
+    def read():
+        select_book("lantern")
+        key("Return")
+        find("Page ", contains=True)
+
+    def swatch(name):
+        find("Text settings", "toggle button").do_action(0)
+        find(name, "toggle button").do_action(0)
+        time.sleep(0.6)
+        key("Escape")
+        time.sleep(0.3)
+
+    read()
+    time.sleep(0.5)
+    before = pages()
+    capture(title, evidence / "settings-before.png")
+    assert pixel(evidence / "settings-before.png", 20, 300) == "f4ecd8", pixel(
+        evidence / "settings-before.png", 20, 300
+    )
+    find("Text settings", "toggle button").do_action(0)
+    find("Larger text", "button")
+    time.sleep(0.4)
+    subprocess.run(
+        ["import", "-window", "root", str(evidence / "text-settings.png")], check=True
+    )
+    click("More")
+    find("Reset", "button")
+    time.sleep(0.5)
+    subprocess.run(
+        ["import", "-window", "root", str(evidence / "text-settings-more.png")], check=True
+    )
+    click("Back")
+    for _ in range(3):
+        click("Larger text")
+        time.sleep(0.3)
+    key("Escape")
+    time.sleep(0.6)
+    larger = pages()
+    assert larger > before, (before, larger)
+    swatch("Grey")
+    capture(title, evidence / "settings-grey.png")
+    assert pixel(evidence / "settings-grey.png", 20, 300) == "2b2b2e", pixel(
+        evidence / "settings-grey.png", 20, 300
+    )
+    click("Back to library")
+    time.sleep(0.5)
+    read()
+    time.sleep(0.8)
+    assert pages() == larger, (pages(), larger)
+    capture(title, evidence / "settings-kept.png")
+    assert pixel(evidence / "settings-kept.png", 20, 300) == "2b2b2e"
+    find("Text settings", "toggle button").do_action(0)
+    click("More")
+    click("Reset")
+    time.sleep(0.6)
+    key("Escape")
+    time.sleep(0.6)
+    assert pages() == before, (pages(), before)
+    capture(title, evidence / "settings-reset.png")
+    assert pixel(evidence / "settings-reset.png", 20, 300) == "f4ecd8"
+    click("Back to library")
+    time.sleep(0.3)
+    print(
+        f"PASS text settings: larger text makes {before} pages {larger}, Grey is kept after closing, Reset restores both",
+        flush=True,
+    )
+
+
 def keys(evidence):
     """Turn pages and toggle full screen from the keyboard, starting and ending in chapter one."""
     title = "The Lantern Atlas · Revised"
@@ -418,8 +502,20 @@ def keys(evidence):
     find("Leave full screen", "button")
     assert size(title) == SCREEN, size(title)
     capture(title, evidence / "full-screen.png")
-    press("Right")
-    find("Chapter 2 of 2", contains=True)
+
+    def chapter(number):
+        return any(
+            f"Chapter {number} of 2" in (n.get_name() or "")
+            for n in walk(Atspi.get_desktop(0))
+        )
+
+    # The line keeps its length on a wide screen, so the closing paragraph
+    # runs to more pages here than in the window.
+    for _ in range(8):
+        if chapter(2):
+            break
+        press("Right")
+    assert chapter(2), "Right never reached chapter two in full screen"
     press("Left")
     find("Chapter 1 of 2", contains=True)
     press("Escape")
@@ -864,6 +960,7 @@ def run(binary, evidence, root):
             "PASS folder export, idempotent repeat and unchanged source bytes",
             flush=True,
         )
+        settings(evidence)
         # The same request that did nothing under the reader closes the
         # library when no reader is open, so that step did ask.
         library = subprocess.check_output(
