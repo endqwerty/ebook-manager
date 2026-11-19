@@ -96,7 +96,9 @@ a component exists, keep its README beside the code. Explain its entry point,
 what callers can rely on, its side effects and how to check them. Link it from
 the nearest parent README. When behaviour changes, update that contract and the
 current-behaviour spec in the same PR. An existing README that already answers
-these questions is sufficient.
+these questions is sufficient. When an interface changes, find the designs and
+callers that depend on it, tell their owners which assumption changed, and check
+that assumption on the new revision.
 
 ### Start a fresh reader automatically
 
@@ -118,7 +120,10 @@ defensive security review, use Daybreak when the change touches a trust boundary
 such as book parsing, device pairing or access to personal data. Give it the
 specific boundary and the protection the implementation should provide. When a
 design trade-off needs another decision-maker, consult Fable with the options,
-constraints and evidence. The item owner records the choice and its consequences.
+constraints and evidence. A Fable lead can ask Astra for an independent view.
+The item owner records the choice in the design. For a choice that binds two
+milestones, the coordinator decides within the agreed scope, records it on the
+shared issue, links it from the affected designs and tells both leads.
 
 ### Count reviews per work item
 
@@ -129,10 +134,14 @@ revisions, renames, worker changes and handoffs.
 
 Use the linked issue for handoff. Keep a short entry per item with its name,
 revision, round, reviewer, finding and next action. Before dispatch, mark the
-round in flight. On return, record its result and the deciding check. If a new
-owner finds a round in flight, inspect its T3 task or session before sending
-another. Record failed attempts and missing evidence. Carry forward a completed
-review when the item and the evidence it relies on are unchanged.
+round in flight and give the T3 task a unique public-safe title containing the
+issue number, item and round. Put that exact title on the issue. On takeover,
+find it with `t3_thread_list` (include subagents, filter by title) and read
+the matching thread. If it needs intervention, contact the dispatching session.
+If the API never accepted a dispatch, record that and recover the same round.
+Record the result, deciding check or failed attempt. A pass against a superseded
+interface still counts. Use its findings only where their evidence still holds,
+and target any recheck at the changed dependency.
 
 Before rounds 4, 7, 10 and so on, pause that item. Record what another pass
 could change for a reader or implementer and how to check it. Continue if that
@@ -143,14 +152,18 @@ Other items continue on their own counts.
 
 When a milestone has its own outcome, boundaries and acceptance check, the
 coordinator can assign an Astra or Fable lead to own it through verification.
-Use a T3 subagent for work that belongs to the current session. For independent
-milestones that can progress in parallel, launch separate T3 sessions with
-their own worktrees. Check model availability and allowance first.
+Use `delegate_task` for a child of the current session. When the user authorizes
+separate T3 sessions, launch independent milestones with `t3_thread_launch`
+and a worktree workspace strategy so each has its own checkout. Supply the
+chosen base and return address in the brief. Check model availability and
+allowance first.
 
 Give each lead its issue, base revision, owned files, dependencies, completion
 check, decision authority and where to report back. Include Rule 1 in every
 brief. The lead can organise its own workers and fresh readers. Keep publication
-and integration with the coordinator under the project's existing rules.
+and integration with the coordinator. Before relying on a handoff, check the
+lead's revision and reproduce the deciding result. The coordinator owns the
+PR, its independent verification and CI. Merge when the user authorizes it.
 
 Agree on check-ins in the brief. Report the first working result, decisions
 that affect another milestone, blockers and the verified handoff. For longer
