@@ -46,7 +46,7 @@ jobs:
         run: make install PREFIX="$RUNNER_TEMP/ebook-manager"
 
       - name: Run the workspace tests
-        run: dbus-run-session -- xvfb-run -a cargo nextest run --workspace --locked --profile ci --no-fail-fast
+        run: dbus-run-session -- xvfb-run -a cargo nextest run --release --workspace --locked --profile ci --no-fail-fast
 
       - name: Import, read, restart and export from the desktop
         id: desktop
@@ -62,7 +62,7 @@ jobs:
           mkdir "$card"
           sudo mount -t vfat -o "loop,uid=$(id -u),gid=$(id -g)" "$image" "$card"
           trap 'sudo umount "$card"' EXIT
-          TMPDIR="$card" cargo nextest run --locked -p ebook-device --test export \
+          TMPDIR="$card" cargo nextest run --release --locked -p ebook-device --test export \
             -E 'test(=retries_keep_one_copy_and_collisions_preserve_the_original)'
 
       - name: Report results and read the gate
