@@ -258,13 +258,26 @@ gives the ranks of books by ID, for keeping selection and scroll position.
 `shelf` returns each book's spine thickness in view order,
 `min(48, 16 + round(words / 12000))` or 24 when the length is unknown, and
 the group starts for a first sort key of Author (the first letter of the sort
-name as the locale files it, so `A`, `a` and in English `Å` are one group,
-Danish `Aa` is with `Å`, Czech `Ch` is its own letter, and names beginning
-with a digit or no letter are one group named `#`), Series (series name) or a date (year). Any other first key has no
+name; see below), Series (series name) or a date (year). Any other first key has no
 groups.
 
 A group for books with no author is named `Unknown author`, with no series
 `No series`, and with no date `No date`.
+
+An author's letter is the first character of the sort name, compared as the
+locale compares letters, so `A`, `a` and in English `Å` are one group and in
+Swedish `Å` is its own. Where the locale files the first two characters
+differently from the first alone, the pair is the letter: Danish `Aa`, Czech
+`Ch`, Welsh `Ng`. A name that begins with anything but a letter is in the
+group `#`. The name is read in composed form and marks before its first
+letter are skipped. This is a rule of thumb and not a locale's alphabet. It
+does not know a letter of three characters (Hungarian `Dzs` is with `Dz`), a
+doubled pair (`Ccs`), or which of two letters filed together names the group
+(Swedish `Ü` with `Y`, a ligature such as `Æ` in English, a Thai vowel
+written before its consonant), and it capitalises without the locale's rules
+(Turkish dotted `i`). In those cases a caption can differ from what a reader
+of that language expects or appear twice. A locale's own index is
+[its own issue](https://github.com/endqwerty/ebook-manager/issues/100).
 
 A call with a token from an earlier `open` fails with `StaleView`. `open`
 checks `cancel` between steps and during the scan, and returns `Cancelled`.

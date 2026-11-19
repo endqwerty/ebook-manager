@@ -326,6 +326,7 @@ fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfSt
     }
     let mut groups: Vec<(u32, String)> = vec![];
     let mut previous = None;
+    let mut letters = std::collections::HashMap::new();
     let mut thickness = Vec::with_capacity(v.visible.len());
     for (rank, &n) in v.visible.iter().enumerate() {
         thickness.push(sizes[n as usize]);
@@ -334,17 +335,21 @@ fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfSt
         };
         if by_letter {
             // Names sharing a letter are adjacent in the view, so comparing
-            // with the group's first name is enough.
-            if previous.is_none_or(|p: &String| {
-                p.is_empty() != name.is_empty() || !keys.same_letter(p, name)
-            }) {
-                let caption = if name.is_empty() {
-                    "Unknown author".into()
-                } else {
-                    keys.caption(name)
-                };
+            // with the group before is enough.
+            let (key, caption) = if name.is_empty() {
+                (None, "Unknown author".into())
+            } else {
+                // A library has far fewer authors than books, and working
+                // out a letter costs several collations.
+                let (key, caption) = letters
+                    .entry(sortkey::letter_head(name))
+                    .or_insert_with(|| keys.letter_group(name))
+                    .clone();
+                (Some(key), caption)
+            };
+            if previous.as_ref() != Some(&key) {
                 groups.push((rank as u32, caption));
-                previous = Some(name);
+                previous = Some(key);
             }
         } else if groups.last().is_none_or(|(_, last)| last != name) {
             groups.push((rank as u32, name.clone()));

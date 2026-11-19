@@ -41,63 +41,74 @@ impl Keys {
             letters: Collator::try_new(prefs, base)?,
         })
     }
-    /// The letter a name is filed under, as the start of the name: one
-    /// character, or two where the locale files the pair as a letter of its
-    /// own, as Danish does `Aa` and Czech `Ch`. Such a pair sorts after every
-    /// other name that begins with its first character.
-    fn letter<'a>(&self, name: &'a str) -> &'a str {
-        let name = name.trim_start();
-        let mut ends = name.char_indices().map(|(i, c)| i + c.len_utf8());
-        let Some(one) = ends.next() else {
-            return "";
+    fn letter_key(&self, s: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.letters.write_sort_key_to(s, &mut out).unwrap();
+        out
+    }
+    /// The group a name is filed in on a shelf sorted by author: a key that
+    /// is equal for names under the same letter, and what to call it.
+    ///
+    /// The letter is the name's first character, compared as the locale
+    /// compares letters, so `A`, `a` and in English `Å` are one group and in
+    /// Swedish `Å` is its own. Where the locale files the first two
+    /// characters differently from the first alone, as Danish does `Aa`,
+    /// Czech `Ch` and Welsh `Ng`, the pair is the letter. A name that begins
+    /// with anything but a letter is in the group `#`. Marks before the first
+    /// character are skipped, and the name is read in composed form, so a
+    /// letter written as a base and a mark is the same letter. Only the
+    /// name's first [`LETTER_HEAD`] characters are read.
+    pub fn letter_group(&self, name: &str) -> (Vec<u8>, String) {
+        let mut chars = letter_head(name)
+            .nfc()
+            .skip_while(|c| is_combining_mark(*c) || *c == '\u{FEFF}');
+        let Some(first) = chars.next().filter(|c| c.is_alphabetic()) else {
+            return (Vec::new(), "#".into());
         };
-        match ends.next() {
-            Some(two)
-                if name[one..two].chars().all(char::is_alphabetic)
-                    && self
-                        .letters
-                        .compare(&name[..two], &format!("{}\u{FFFF}", &name[..one]))
-                        .is_gt() =>
-            {
-                &name[..two]
+        let one = first.to_string();
+        let key = self.letter_key(&one);
+        let letter = match chars.next().filter(|c| c.is_alphabetic()) {
+            Some(second) => {
+                let two: String = [first, second].iter().collect();
+                // Two letters in a row give the first one's key and then the
+                // second's. Anything else means the locale reads the pair as
+                // a unit.
+                if self.letter_key(&two).starts_with(&key) {
+                    one
+                } else {
+                    two
+                }
             }
-            _ => &name[..one],
-        }
-    }
-    /// Whether two names are filed under the same letter in this locale: `A`,
-    /// `a` and, in English, `Å`. Swedish files `Å` as a letter of its own.
-    /// Names that begin with a digit are one group.
-    pub fn same_letter(&self, a: &str, b: &str) -> bool {
-        let digit = |s: &str| s.trim_start().starts_with(char::is_numeric);
-        match (digit(a), digit(b)) {
-            (true, true) => true,
-            (false, false) => self.letters.compare(self.letter(a), self.letter(b)).is_eq(),
-            _ => false,
-        }
-    }
-    /// What to call the group a name is filed in: its letter in capitals,
-    /// without marks where the locale files the marked letter with the plain
-    /// one, and `#` for a name that begins with a digit or with no letter.
-    pub fn caption(&self, name: &str) -> String {
-        let letter = self.letter(name);
-        if !letter.starts_with(char::is_alphabetic) {
-            return "#".into();
-        }
-        let plain = fold(letter);
-        let shown = if self.letters.compare(letter, &plain).is_eq() {
+            None => one,
+        };
+        let plain = fold(&letter);
+        let shown = if self.letters.compare(&letter, &plain).is_eq() {
             &plain
         } else {
-            letter
+            &letter
         };
-        let mut chars = shown.chars();
-        let first = chars.next().into_iter().flat_map(char::to_uppercase);
-        first.chain(chars.flat_map(char::to_lowercase)).collect()
+        let mut shown = shown.chars();
+        let head = shown.next().into_iter().flat_map(char::to_uppercase);
+        let caption = head.chain(shown.flat_map(char::to_lowercase)).collect();
+        (self.letter_key(&letter), caption)
     }
     pub fn key(&self, s: &str) -> Vec<u8> {
         let mut out = Vec::new();
         self.collator.write_sort_key_to(s, &mut out).unwrap();
         out
     }
+}
+/// How much of a name decides its letter: enough for marks before the first
+/// letter and for two letters each written as a base and marks.
+const LETTER_HEAD: usize = 8;
+/// The start of a name that [`Keys::letter_group`] reads. Names with the same
+/// head are in the same group.
+pub(crate) fn letter_head(name: &str) -> &str {
+    let end = name
+        .char_indices()
+        .nth(LETTER_HEAD)
+        .map_or(name.len(), |(i, _)| i);
+    &name[..end]
 }
 pub(crate) fn fold(s: &str) -> String {
     s.nfkd()
@@ -178,16 +189,14 @@ mod tests {
     /// The captions of a list of names in the order given, one per group.
     fn groups(locale: &str, names: &[&str]) -> Vec<String> {
         let keys = Keys::for_locale(locale).unwrap();
-        let mut out: Vec<(String, &str)> = Vec::new();
+        let mut out: Vec<(Vec<u8>, String)> = Vec::new();
         for name in names {
-            if out
-                .last()
-                .is_none_or(|(_, first)| !keys.same_letter(first, name))
-            {
-                out.push((keys.caption(name), name));
+            let group = keys.letter_group(name);
+            if out.last().is_none_or(|last| last.0 != group.0) {
+                out.push(group);
             }
         }
-        out.into_iter().map(|(caption, _)| caption).collect()
+        out.into_iter().map(|(_, caption)| caption).collect()
     }
 
     #[test]
@@ -216,8 +225,42 @@ mod tests {
 
     #[test]
     fn names_without_a_leading_letter_share_one_group() {
-        let odd = ["2 Pac", "3 Doors", "10cc", "100 Monkeys", " Plato"];
-        assert_eq!(groups("en_US.UTF-8", &odd), ["#", "P"]);
-        assert_eq!(Keys::for_locale("C").unwrap().caption("\u{301}i"), "#");
+        let odd = [
+            " Plato",
+            "!!!",
+            "(Anonymous)",
+            "[Anonymous]",
+            "2 Pac",
+            "10cc",
+            "Adams",
+        ];
+        assert_eq!(groups("en_US.UTF-8", &odd), ["#", "A"]);
+        // A mark before the first letter is skipped, as the order skips it.
+        assert_eq!(groups("C", &["Ibsen", "\u{301}ice", "Ives"]), ["I"]);
+    }
+
+    #[test]
+    fn a_letter_written_as_base_and_mark_is_the_same_letter() {
+        let names = ["Adams", "Zorn", "A\u{30A}berg", "Åberg"];
+        assert_eq!(groups("sv_SE.UTF-8", &names), ["A", "Z", "Å"]);
+        assert_eq!(
+            groups("cs_CZ.UTF-8", &["Cibulka", "C\u{30C}apek", "Čech"]),
+            ["C", "Č"]
+        );
+    }
+
+    #[test]
+    fn a_pair_filed_before_its_first_letter_is_still_one_letter() {
+        // Welsh files Ng between G and H.
+        let welsh = ["Gwyn", "Nguyen", "Huw", "Nia"];
+        assert_eq!(groups("cy_GB.UTF-8", &welsh), ["G", "Ng", "H", "N"]);
+        // Thai writes some vowels before the consonant they follow in order.
+        let thai = ["กมล", "เกษม", "ขวัญ", "เขียว"];
+        let captions = groups("th_TH.UTF-8", &thai);
+        let mut unique = captions.clone();
+        unique.dedup();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), captions.len(), "{captions:?}");
     }
 }
