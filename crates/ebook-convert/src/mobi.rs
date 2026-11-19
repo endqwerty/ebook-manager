@@ -302,8 +302,7 @@ impl Header {
         }
         // Every record in the declared range is text, whatever its bytes look
         // like. Records after it are never read; see `uncertain_records_after`.
-        let first_image_field = field(108);
-        let unread_records = uncertain_records_after(db, text_end, field(80), first_image_field);
+        let unread_records = uncertain_records_after(db, text_end, field(80));
 
         let extra_flags = field(240).unwrap_or(0);
         if extra_flags & !DOCUMENTED_EXTRA_FLAGS != 0 {
@@ -311,7 +310,7 @@ impl Header {
                 "extra data flags {extra_flags:#x} name trailing entries above 0x8000"
             )));
         }
-        let first_image = first_image_field
+        let first_image = field(108)
             .filter(|&v| v != ABSENT && v != 0)
             .map(|v| v as usize);
 
@@ -417,38 +416,23 @@ impl Header {
 }
 
 /// Says whether records after the declared text might hold more of the book.
-/// None of them is read. When the first non-book record (offset 80) lies at or
-/// after the text and inside the database, only records before it are in doubt,
-/// and those holding only zero bytes (the page describes a 2-zero-byte record
-/// there) have no text. When that field is missing, unset or out of range,
-/// every later record is in doubt unless it is zero bytes only, one of the
-/// records the MOBI page documents after the text (FLIS, FCIS, end of file,
-/// SRCS, CMET), or at or after a first image record that lies past the text.
+/// None of them is read. The only documented boundary is the first non-book
+/// record (offset 80, "First record number ... that's not the book's text").
+/// When it lies at or after the text and inside the database, records before it
+/// are in doubt; otherwise every later record is. A record of only zero bytes
+/// holds no text; any other record in doubt makes this return true. Record
+/// contents and the first image index are not used to explain a record away.
 fn uncertain_records_after(
     db: &PalmDatabase<'_>,
     text_end: usize,
     first_non_book: Option<u32>,
-    first_image: Option<u32>,
 ) -> bool {
-    let within = |v: Option<u32>, end: usize| {
-        v.filter(|&v| v != ABSENT)
-            .map(|v| v as usize)
-            .filter(|&v| v >= text_end && v <= end)
-    };
-    let zero_only = |r: &[u8]| r.iter().all(|&b| b == 0);
-    if let Some(first_non_book) = within(first_non_book, db.len()) {
-        return (text_end..first_non_book).any(|i| db.record(i).is_some_and(|r| !zero_only(r)));
-    }
-    let end = within(first_image, db.len().saturating_sub(1)).unwrap_or(db.len());
-    (text_end..end).any(|i| {
-        db.record(i).is_some_and(|r| {
-            !(zero_only(r)
-                || r == [0xE9, 0x8E, 0x0D, 0x0A]
-                || [b"FLIS", b"FCIS", b"SRCS", b"CMET"]
-                    .iter()
-                    .any(|id| r.starts_with(*id)))
-        })
-    })
+    let end = first_non_book
+        .filter(|&v| v != ABSENT)
+        .map(|v| v as usize)
+        .filter(|&v| v >= text_end && v <= db.len())
+        .unwrap_or(db.len());
+    (text_end..end).any(|i| db.record(i).is_some_and(|r| r.iter().any(|&b| b != 0)))
 }
 
 /// Descriptive EXTH records from the MOBI wiki's EXTH table that the EPUB does

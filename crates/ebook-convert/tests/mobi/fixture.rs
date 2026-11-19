@@ -51,6 +51,8 @@ pub struct MobiFixture {
     pub records_after_text: Vec<Vec<u8>>,
     /// Overrides the first non-book record number (record 0 offset 80).
     pub first_non_book: Option<u32>,
+    /// Overrides the first image record number (record 0 offset 108).
+    pub first_image: Option<u32>,
 }
 
 impl Default for MobiFixture {
@@ -81,6 +83,7 @@ impl Default for MobiFixture {
             extra_exth: Vec::new(),
             records_after_text: Vec::new(),
             first_non_book: None,
+            first_image: None,
         }
     }
 }
@@ -151,10 +154,10 @@ impl MobiFixture {
         records.extend(self.records_after_text.iter().cloned());
         let first_non_book = self.first_non_book.map_or(records.len(), |n| n as usize);
         records.push(vec![0, 0]);
-        let first_image = if self.images.is_empty() {
-            ABSENT
-        } else {
-            records.len() as u32
+        let first_image = match self.first_image {
+            Some(n) => n,
+            None if self.images.is_empty() => ABSENT,
+            None => records.len() as u32,
         };
         records.extend(self.images.iter().cloned());
         if self.boundary_record {

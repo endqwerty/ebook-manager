@@ -1051,12 +1051,14 @@ fn uncertain_records_are_reported_when_the_first_non_book_field_cannot_bound_the
         );
     }
 
-    // With the field unusable, the first image record bounds the scan.
+    // Offset 108 says nothing about records before or after an image, so it
+    // does not settle where the book ends: here it names the record holding
+    // <p>More</p>.
     let book = ok(&MobiFixture {
-        images: vec![JPEG.to_vec()],
-        cover: Some(0),
+        first_image: Some(2),
         ..kept_then_more(Some(0xFFFF_FFFF))
     });
+    assert_eq!(paragraphs(&book), ["Kept"]);
     assert_eq!(other_losses(&book), [LOSS_UNREAD_RECORDS]);
 
     // A MOBI header too short to hold offset 80 is just as uncertain.
@@ -1073,31 +1075,68 @@ fn uncertain_records_are_reported_when_the_first_non_book_field_cannot_bound_the
     assert_eq!(other_losses(&book), [LOSS_UNREAD_RECORDS]);
 }
 
-/// Without a usable first non-book field, the records the MOBI page documents
-/// after the text (zero-byte filler, FLIS, FCIS, end of file) and image records
-/// from the first image index on are expected, so ordinary files say nothing.
+/// Without a usable first non-book field nothing documented says which later
+/// records belong to the book, so any record holding a non-zero byte is
+/// reported, whatever its first bytes are and wherever offset 108 points.
 #[test]
-fn documented_records_after_the_text_need_no_warning() {
-    for f in [
-        MobiFixture {
-            first_non_book: Some(0xFFFF_FFFF),
-            ..Default::default()
-        },
-        MobiFixture {
-            first_non_book: Some(0xFFFF_FFFF),
-            images: vec![JPEG.to_vec(), PNG.to_vec()],
-            cover: Some(1),
-            ..Default::default()
-        },
-        MobiFixture {
-            first_non_book: Some(1),
-            ..Default::default()
-        },
+fn records_after_the_text_are_uncertain_without_the_first_non_book_field() {
+    let more_after_a_jpeg = MobiFixture {
+        first_non_book: Some(0xFFFF_FFFF),
+        images: vec![JPEG.to_vec(), b"<p>More</p>".to_vec()],
+        cover: Some(0),
+        ..Default::default()
+    };
+    let flis_prefixed_text = MobiFixture {
+        first_non_book: Some(0xFFFF_FFFF),
+        records_after_text: vec![b"FLIS<p>More</p>".to_vec()],
+        ..Default::default()
+    };
+    let ordinary_trailer = MobiFixture {
+        first_non_book: Some(0xFFFF_FFFF),
+        ..Default::default()
+    };
+    let before_the_text = MobiFixture {
+        first_non_book: Some(1),
+        images: vec![JPEG.to_vec(), PNG.to_vec()],
+        cover: Some(1),
+        ..Default::default()
+    };
+    for (name, f) in [
+        ("JPEG then More", more_after_a_jpeg),
+        ("FLIS-prefixed More", flis_prefixed_text),
+        ("FLIS, FCIS and end of file only", ordinary_trailer),
+        ("offset 80 before the text", before_the_text),
     ] {
         let book = ok(&f);
-        assert_eq!(paragraphs(&book), ["Hello."]);
-        assert_eq!(other_losses(&book), Vec::<String>::new());
+        assert_eq!(paragraphs(&book), ["Hello."], "{name}");
+        assert_eq!(other_losses(&book), [LOSS_UNREAD_RECORDS], "{name}");
     }
+
+    let only_zero_bytes = MobiFixture {
+        compression: 1,
+        extra_flags: 0,
+        raw_text_records: Some(vec![b"<p>Kept</p>".to_vec()]),
+        declared_text_length: Some(11),
+        first_non_book: Some(0xFFFF_FFFF),
+        ..Default::default()
+    };
+    // Keep record 0, the text and the 2-zero-byte record; empty the rest.
+    let mut bytes = only_zero_bytes.build();
+    let count = u16::from_be_bytes(bytes[76..78].try_into().unwrap()) as usize;
+    let zero_record = u32::from_be_bytes(bytes[94..98].try_into().unwrap()) as usize;
+    let end = zero_record + 2;
+    for entry in 3..count {
+        let at = 78 + 8 * entry;
+        bytes[at..at + 4].copy_from_slice(&(end as u32).to_be_bytes());
+    }
+    bytes.truncate(end);
+    let book = mobi::decode(&bytes).expect("zero-byte trailer decodes");
+    assert_eq!(paragraphs(&book), ["Kept"]);
+    assert_eq!(
+        other_losses(&book),
+        Vec::<String>::new(),
+        "zero bytes hold no text"
+    );
 }
 
 #[test]

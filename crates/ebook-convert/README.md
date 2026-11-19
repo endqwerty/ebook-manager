@@ -43,20 +43,20 @@ files, no network, no global state. Its tests and the generated sample live in
   declared range is text, whatever its bytes look like. Trailing entries named
   by the extra data flags are removed.
 - Records after the declared text are never read, because no allowed source
-  says whether they belong to the book. The report says when one of them might
-  hold more of the book:
+  says whether they belong to the book. The report says, in one line, that
+  records of uncertain purpose were left out when any record in doubt holds a
+  non-zero byte:
   - When the first non-book record (offset 80) lies at or after the end of the
-    text and inside the database, any record before it that holds a non-zero
-    byte counts.
+    text and inside the database, the records before it are in doubt.
   - When that field is missing (a short MOBI header), unset (`0xFFFFFFFF`),
-    before the end of the text or past the end of the database, any later record
-    counts unless it holds only zero bytes, is one the MOBI page documents after
-    the text (FLIS, FCIS, the end-of-file record, SRCS, CMET), or lies at or
-    after a first image record that comes after the text.
+    before the end of the text or past the end of the database, every later
+    record is in doubt. The first image index (offset 108) and a record's first
+    bytes, such as `FLIS`, are not used to explain a record away: a file can
+    still put text there. Most such files therefore get this line.
 
   Records of only zero bytes, like the 2-zero-byte record the MOBI page
-  describes, have no text to lose. The four real books each have one such
-  record holding a single zero byte, and none of them gets this report line.
+  describes, hold no text. The four real books set offset 80 just past one such
+  record holding a single zero byte, so none of them gets this line.
 - An EXTH 121 ("KF8 BOUNDARY Offset") record of any size or value: the older
   text is converted and the report says the file may also hold a newer-format
   copy that was not read. Nothing else is taken as a sign of a second copy.
@@ -125,11 +125,13 @@ Facts the allowed pages leave open, and what the decoder does about each:
   start of the database" identify the file type. So the decoder reads no
   meaning into the 121 value or into any record's bytes: EXTH 121 adds a report
   line and the older edition is converted.
-- Records after the declared text: the page marks the first non-book field with
-  a question mark and describes only the 2-zero-byte record directly after the
-  text, then images, FLIS, FCIS, compilation and end-of-file records. Nothing
-  says where the book's records end when that field is missing or out of range.
-  Such records are left out and reported as above.
+- Records after the declared text: offset 80 is the only documented boundary
+  between the book's text and other records, and the page marks it with a
+  question mark. The page lists the 2-zero-byte record, images, FLIS, FCIS,
+  compilation and end-of-file records as following the text, but does not say
+  that a record holding an image index or one of those identifiers cannot
+  hold text. Treating every record past an unusable offset 80 as uncertain is a
+  product choice (see product limits).
 - Trailing entries above bit 16 and backward-encoded integers longer than four
   bytes are not described. See product limits.
 - Locale codes other than English: no mapping was taken from a source.
@@ -144,6 +146,9 @@ Choices of this decoder, not format facts:
 - A trailing entry size may be at most four bytes (28 bits, more than any
   record). A longer one is refused as `Unsupported`; one that runs out of
   record bytes is `Invalid`.
+- Records after the declared text are never converted. The report warns about
+  them as described under what the decoder reads, rather than claiming to
+  identify them.
 - Input and declared text are capped at 64 MiB, and each text record expands
   to at most 4096 bytes.
 

@@ -11,8 +11,8 @@ rustc --edition 2021 --test tests/mobi/harness.rs -o "$dir/mobi-harness" && "$di
   for metadata, encoding, compression, encryption, DRM, KF8 markers, trailing
   entry flags, markup, images and the cover, `raw_text_records` for
   hand-made broken records, records placed after the text, and overrides for
-  the text record count, the first content record, the first non-book record,
-  the full-name bytes and extra EXTH records. `boundary_record` adds a record
+  the text record count, the first content record, the first non-book and
+  first image records, the full-name bytes and extra EXTH records. `boundary_record` adds a record
   holding `BOUNDARY`; no allowed source describes such a record, and the decoder
   must ignore it. It has no dependencies, so another test can include it with
   `#[path = ".../tests/mobi/fixture.rs"] mod fixture;`.
