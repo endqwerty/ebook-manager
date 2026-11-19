@@ -21,4 +21,6 @@ CrossPoint documents native EPUB support and browsing folders on that card.
 
 CrossPoint can display the title embedded in the EPUB instead of the filename.
 A catalogue correction changes the exported filename. This MVP preserves the
-embedded metadata. Updating it in an exported copy remains part of DEV-15.
+embedded metadata. Exporting a revised book can leave both versions on the card. Reading progress on
+the old device path stays with that path. Updating embedded metadata and managing
+existing device copies remain part of DEV-15 through DEV-18.

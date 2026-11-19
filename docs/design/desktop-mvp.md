@@ -16,7 +16,8 @@ a library stored on this computer. The first release path has five steps.
    Choose the device folder and send an EPUB. Export the same book twice.
    Identical bytes at the destination should remain intact. A name collision
    with another book should give the incoming book its own filename, keeping
-   both readable under their original catalogue titles.
+   both EPUBs intact. CrossPoint can show their embedded titles even if the
+   desktop catalogue uses corrected titles.
 5. Recover the local catalogue from the library's portable records. Show a
    clear failure when a managed file or portable record is missing or damaged.
 
