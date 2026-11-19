@@ -80,15 +80,17 @@ and not the interface. See [Covers](#covers).
   edge, with the count on the same baseline. The title appears once, never in
   both places. See [the platform table](#how-each-rule-maps-to-a-platform).
 - Search and Add go where the platform puts search and the primary action.
-- A screen has one prominent action. On the library it is Add. On book details it
+- A screen has at most one prominent action. On the library it is Add. On book details it
   is Read for a book not started, Continue reading for one partly read and Read
   again for a finished one. Every other action is plain, in a menu or in the
   context menu.
 - Book details put the cover at the leading edge, 160 wide, and the rest beside
   it in this order: the title, the author, the series with the book's number in
   it, the prominent action with Send to device after it, then the facts. The
-  facts are Published, Language, Length, Format with file size, and Added. Leave
-  out a fact the book lacks.
+  facts are Published, Language, Length, Format with file size, Added, and
+  Accessibility, which gives the book's own accessibility metadata in plain
+  words, such as "Has image descriptions. No flashing content." Leave out a fact
+  the book lacks.
 - When the details area is under 480 wide, the cover moves above the title and
   stays at the leading edge, 40% of the width and no wider than 160. The order
   below it is unchanged. The screen has no heading of its own, because the
@@ -136,7 +138,7 @@ and not the interface. See [Covers](#covers).
   count.
 - Under a cover the title uses the platform's emphasised body style and the
   author its caption style in the secondary label colour.
-- The serif is never smaller than the platform's title style, about 17 units.
+- The serif is never smaller than 17 units.
   Small serif text renders poorly on low-density Windows and Linux displays.
 - The serif is semibold in titles. No italics, no small capitals and no all-capital
   labels anywhere in the interface.

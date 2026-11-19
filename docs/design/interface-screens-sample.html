@@ -138,7 +138,11 @@
   .spine span { position:absolute; left:50%; writing-mode:vertical-rl; transform:translateX(-50%); white-space:nowrap; }
   .spine .st { top:10px; font:600 12px/1 var(--serif); max-height:120px; overflow:hidden; text-overflow:ellipsis; }
   .spine .sa { bottom:10px; font:10px/1 var(--font-sans); }
-  .cover.pulled { width:128px; flex:none; border-radius:2px 2px 0 0; margin:0 6px; }
+  .spine.sel { outline:2px solid var(--primary); outline-offset:1px; overflow:visible; z-index:1; }
+  .srow { position:relative; }
+  .pv { position:absolute; left:150px; bottom:150px; width:120px; padding:12px; background:var(--card); border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 28px rgba(0,0,0,.22); z-index:3; font:13px/18px var(--font-sans); }
+  .pv .cover { width:96px; margin-bottom:8px; }
+  .pv b, .pv small { display:block; } .pv small { color:var(--dim); font-size:12px; }
   .two { display:grid; grid-template-columns:1fr 1.25fr; gap:16px; align-items:start; margin-top:28px; }
   .idx { padding-top:4px; }
   .letter { font:600 20px/1.2 var(--serif); margin:16px 0 6px; }
@@ -175,7 +179,7 @@
   .tokens span { padding:4px 10px; border-radius:999px; border:1px solid var(--hair); color:var(--dim); }
   .tokens span.on { background:var(--faint); color:var(--foreground); font-weight:600; }
   .quote { border-inline-start:3px solid var(--hc); padding-inline-start:12px; margin:16px 0 0 60px; }
-  .quote p { font:15px/1.5 var(--serif); margin:0 0 4px; }
+  .quote p { font:17px/1.5 var(--serif); margin:0 0 4px; }
   .mynote { margin:0 0 4px; }
 </style>
 </head>
@@ -221,7 +225,7 @@
 <div class="panel">
   <div class="bar" style="margin-bottom:10px"><h1>X4 Pro</h1><span class="count">214 books</span><span class="sp"></span><span class="btn">Eject</span></div>
   <div class="store"><i style="width:84%"></i></div>
-  <div class="dim" style="margin:6px 0 16px">5.2 GB free of 32 GB</div>
+  <div class="dim" style="margin:6px 0 16px">5.2 GB free of 32 GB. Eject before unplugging.</div>
   <div class="tokens"><span class="on">On device 214</span><span>Not in the library 3</span><span>Out of date 9</span></div>
 </div>
 <p class="note">A device is a place like any other, with its name as the title. The storage bar is one quiet colour and the sentence under it carries the number.</p>

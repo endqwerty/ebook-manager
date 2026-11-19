@@ -5,7 +5,7 @@
 <title>Interface reader sample</title>
 <!-- Illustrates docs/design/interface-reader.md. Add #dark to the address for dark appearance.
      Regenerate the pictures with:
-     chromium --headless --hide-scrollbars --window-size=820,1640 --screenshot=NAME-light.png NAME.html
+     chromium --headless --hide-scrollbars --window-size=820,1720 --screenshot=NAME-light.png NAME.html
      and the same with NAME.html#dark for NAME-dark.png, where NAME is this file's name without .html.
      Covers and spines are drawn here and are not real artwork. -->
 <style>
@@ -138,7 +138,11 @@
   .spine span { position:absolute; left:50%; writing-mode:vertical-rl; transform:translateX(-50%); white-space:nowrap; }
   .spine .st { top:10px; font:600 12px/1 var(--serif); max-height:120px; overflow:hidden; text-overflow:ellipsis; }
   .spine .sa { bottom:10px; font:10px/1 var(--font-sans); }
-  .cover.pulled { width:128px; flex:none; border-radius:2px 2px 0 0; margin:0 6px; }
+  .spine.sel { outline:2px solid var(--primary); outline-offset:1px; overflow:visible; z-index:1; }
+  .srow { position:relative; }
+  .pv { position:absolute; left:150px; bottom:150px; width:120px; padding:12px; background:var(--card); border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 28px rgba(0,0,0,.22); z-index:3; font:13px/18px var(--font-sans); }
+  .pv .cover { width:96px; margin-bottom:8px; }
+  .pv b, .pv small { display:block; } .pv small { color:var(--dim); font-size:12px; }
   .two { display:grid; grid-template-columns:1fr 1.25fr; gap:16px; align-items:start; margin-top:28px; }
   .idx { padding-top:4px; }
   .letter { font:600 20px/1.2 var(--serif); margin:16px 0 6px; }
@@ -172,45 +176,37 @@
   .spine span { position:absolute; left:50%; writing-mode:vertical-rl; transform:translateX(-50%); white-space:nowrap; }
   .spine .st { top:10px; font:600 12px/1 var(--serif); max-height:120px; overflow:hidden; text-overflow:ellipsis; }
   .spine .sa { bottom:10px; font:10px/1 var(--font-sans); }
-  .cover.pulled { width:128px; flex:none; border-radius:2px 2px 0 0; margin:0 6px; }
-  .two { display:grid; grid-template-columns:1fr 1.25fr; gap:16px; align-items:start; margin-top:28px; }
-  .idx { padding-top:4px; }
-  .letter { font:600 20px/1.2 var(--serif); margin:16px 0 6px; }
-  .irow { display:flex; justify-content:space-between; padding:3px 0; }
-  .irow i { font-style:normal; color:var(--dim); font-variant-numeric:tabular-nums; }
-  .stack { position:relative; margin-top:8px; }
-  .cover.back { position:absolute; width:auto; aspect-ratio:auto; box-shadow:none; }
-  .cover.back::before { display:none; }
-  .stack > .cover:not(.back) { z-index:1; }
-
-  .dim, small { color:var(--dim); }
-  
-  :root { --page:#f4ecd8; --ptext:#3b2f21; --mark:#eed684; --mat: rgba(250,246,236,.86); }
-  :root[data-theme="dark"] { --page:#2b2b2e; --ptext:#d6d6d8; --mark:#6b5a12; --mat: rgba(52,52,56,.86); }
+  .spine.sel { outline:2px solid var(--primary); outline-offset:1px; overflow:visible; z-index:1; }
+  .srow { position:relative; }
+  .pv { position:absolute; left:150px; bottom:150px; width:120px; padding:12px; background:var(--card); border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 28px rgba(0,0,0,.22); z-index:3; font:13px/18px var(--font-sans); }
+  .pv .cover { width:96px; margin-bottom:8px; }
+  .pv b, .pv 
+  :root { --page:#f4ecd8; --ptext:#3b2f21; --psec:#736858; --mark:#eed684; --mat: rgba(250,246,236,.86); }
+  :root[data-theme="dark"] { --page:#2b2b2e; --ptext:#d6d6d8; --psec:#929294; --mark:#6b5a12; --mat: rgba(52,52,56,.86); }
   small { display:block; font-size:12px; color:var(--dim); }
   .tabs { display:flex; gap:4px; margin-bottom:8px; }
   .tabs span { padding:4px 10px; border-radius:6px; color:var(--dim); }
   .tabs span.on { background:var(--faint); color:var(--foreground); font-weight:600; }
   .rwin { position:relative; background:var(--page); color:var(--ptext); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
-  .rpage { max-width:520px; margin:0 auto; padding:72px 0 56px; font:16px/1.5 Literata, var(--serif); }
+  .rpage { max-width:520px; margin:0 auto; padding:72px 0 64px; font:16px/1.5 Literata, var(--serif); }
   .rpage h3 { font:600 20px/1.3 Literata, var(--serif); margin:0 0 20px; }
   .rpage p { margin:0; text-indent:1.4em; } .rpage h3 + p { text-indent:0; }
   .rpage mark { background:var(--mark); color:inherit; border-radius:2px; }
   .rpage p { position:relative; }
-  .dot { position:absolute; right:-22px; top:4.6em; width:6px; height:6px; border-radius:50%; background:color-mix(in srgb,var(--ptext) 55%,transparent); }
-  .rfoot { position:absolute; left:0; right:0; bottom:16px; max-width:520px; margin:0 auto; display:flex; justify-content:space-between; font-size:12px; color:color-mix(in srgb,var(--ptext) 55%,transparent); }
+  .dot { position:absolute; right:-22px; top:4.6em; width:6px; height:6px; border-radius:50%; background:var(--psec); }
+  .rfoot { position:absolute; left:0; right:0; bottom:16px; max-width:520px; margin:0 auto; display:flex; justify-content:space-between; font-size:12px; color:var(--psec); }
   .rtop, .rbot { position:absolute; left:10px; right:10px; background:var(--mat); backdrop-filter:blur(12px); border:1px solid color-mix(in srgb,var(--ptext) 12%,transparent); border-radius:14px; font-family:var(--font-sans); font-size:13px; }
   .rtop { top:10px; display:flex; align-items:center; justify-content:space-between; padding:9px 14px; }
   .ricons { display:flex; gap:14px; } .ricons i { font-style:normal; } .ricons i.on { font-weight:700; }
   .rbot { bottom:10px; padding:12px 0 9px; text-align:center; }
-  .rbot small { color:color-mix(in srgb,var(--ptext) 62%,transparent); margin-top:8px; }
+  .rbot small { color:var(--psec); margin-top:8px; }
   .scrub { position:relative; height:2px; max-width:520px; margin:0 auto; background:color-mix(in srgb,var(--ptext) 15%,transparent); }
-  .scrub i { display:block; height:100%; background:color-mix(in srgb,var(--ptext) 55%,transparent); }
+  .scrub i { display:block; height:100%; background:var(--psec); }
   .scrub u { position:absolute; top:0; width:2px; height:2px; background:var(--mat); }
   .pop { position:absolute; top:58px; right:20px; width:236px; background:var(--card); color:var(--foreground); border:1px solid var(--border); border-radius:12px; padding:12px 14px 6px; font:13px/18px var(--font-sans); box-shadow:0 8px 28px rgba(0,0,0,.22); }
   .sw4 { display:flex; justify-content:space-between; margin:10px 0 8px; }
   .sw4 span { width:36px; height:36px; border-radius:50%; display:grid; place-items:center; font:600 13px/1 Literata,var(--serif); box-shadow:inset 0 0 0 1px var(--edge); }
-  .sw4 span.on { outline:2px solid var(--primary); outline-offset:2px; }
+  :root:not([data-theme="dark"]) .sw4 .lt, :root[data-theme="dark"] .sw4 .dk { outline:2px solid var(--primary); outline-offset:2px; }
   .prow { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--faint); }
   .dim { color:var(--dim); }
   .step { display:flex; gap:0; border:1px solid var(--border); border-radius:7px; overflow:hidden; }
@@ -235,17 +231,17 @@
 <h2>Controls shown, with text settings open</h2>
 <div class="rwin">
   <div class="rtop"><span>‹ Library</span><b>Moby-Dick; or, The Whale</b><span class="ricons"><i>Contents</i><i>Search</i><i class="on">Aa</i><i>Bookmark</i><i>More</i></span></div>
-  <div class="rpage" style="padding-bottom:104px"><p>Call me Ishmael. Some years ago—never mind how long precisely—having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation.</p>
+  <div class="rpage" style="padding-bottom:104px"><h3>Chapter 1. Loomings.</h3><p>Call me Ishmael. Some years ago—never mind how long precisely—having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation.</p>
 <p>Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul; whenever I find myself involuntarily pausing before coffin warehouses, and bringing up the rear of every funeral I meet; <mark>then, I account it high time to get to sea as soon as I can.</mark><i class="dot"></i> This is my substitute for pistol and ball.</p>
 <p>With a philosophical flourish Cato throws himself upon his sword; I quietly take to the ship. There is nothing surprising in this. If they but knew it, almost all men in their degree, some time or other, cherish very nearly the same feelings towards the ocean with me.</p></div>
   <div class="pop">
     <small>For this book ▾</small>
-    <div class="sw4"><span style="background:#fff;color:#1a1a1a">Aa</span><span class="on" style="background:#f4ecd8;color:#3b2f21">Aa</span><span style="background:#2b2b2e;color:#d6d6d8">Aa</span><span style="background:#000;color:#c9c9c9">Aa</span></div>
+    <div class="sw4"><span style="background:#fff;color:#1a1a1a">Aa</span><span class="lt" style="background:#f4ecd8;color:#3b2f21">Aa</span><span class="dk" style="background:#2b2b2e;color:#d6d6d8">Aa</span><span style="background:#000;color:#c9c9c9">Aa</span><span style="background:transparent;color:var(--dim)">+</span></div>
     <div class="prow"><span>Font</span><span class="dim">Literata ›</span></div>
     <div class="prow"><span>Size</span><span class="step"><i style="font-size:11px">A</i><i style="font-size:17px">A</i></span></div>
     <div class="prow"><span>More</span><span class="dim">›</span></div>
   </div>
-  <div class="rbot"><div class="scrub"><i style="width:22%"></i><u style="left:8%"></u><u style="left:31%"></u><u style="left:55%"></u><u style="left:78%"></u></div><small>Chapter 1, 6 pages left in the chapter, 19 hours left in the book</small></div>
+  <div class="rbot"><div class="scrub"><i style="width:22%"></i><u style="left:8%"></u><u style="left:31%"></u><u style="left:55%"></u><u style="left:78%"></u></div><small>1%, Chapter 1, 6 pages left in the chapter</small></div>
 </div>
 <p class="note">The bars float over the page in the platform's material and the page does not move when they appear. Text settings start with four rows: page colour, font, size and More.</p>
 

@@ -15,14 +15,14 @@ pictures. Its covers and spines are drawn stand-ins and not real artwork.
 
 ## Which view where
 
-A place in the sidebar shows its books in one of four views. The reader picks,
-and each place remembers its own view and sort.
+A place in the sidebar shows its books in one of four views. The reader picks.
+Each place remembers its view, and remembers a sort for each view.
 
 | View | Best for | Offered on | Default for |
 |---|---|---|---|
 | Grid | Recognising a book by its cover | Everything | All books, collections, an author's or a series' books |
 | List | Reading titles, on a narrow screen or at large text sizes | Everything | Needs attention, search results inside books |
-| Table | Sorting and comparing many books by their facts | Windows at least 640 wide. Not on phones. | Nothing. The reader turns it on. |
+| Table | Sorting and comparing many books by their facts | Any window at least 640 wide, on every platform. Not on a narrower one. | Nothing. The reader turns it on. |
 | Shelf | Browsing a long run of books at a glance | Everything | Nothing. The reader turns it on. |
 
 - When the system's text scale is 1.5 or more, a place set to Grid shows List
@@ -38,15 +38,20 @@ These sit in the platform's bar, not in the content.
   the platform's segmented control where the bar has room and a menu where it
   has not. A choice the device does not offer is absent, not greyed.
 - **Sort.** A menu beside View. It lists Title, Author, Series, Date added, Date
-  published and Last read, then Ascending and Descending. The current choice has
-  the platform's check mark. A second and third sort key are set in the table's
-  headers.
+  published and Last read, then Ascending and Descending, then More. The current
+  choice has the platform's check mark. More opens the sort editor: three rows,
+  each a field chosen from every field the library has and a direction. It is
+  the platform's popover or sheet, works by keyboard and touch, and is the way
+  to set a second and third key on a phone.
 - **Cover size.** Small, Medium and Large are in the View menu, not on a slider
   in the bar. They set the grid's cover width, the list's thumbnail and the
   shelf's spine height together.
-- **Filter.** A button that opens the platform's popover on a wide window and its
-  sheet on a narrow one, listing the facets with counts: author, series, tag,
-  language, format, rating, reading status, source and device.
+- **Filter.** A button that opens the platform's popover on a desktop or tablet
+  and its sheet on a phone, listing the facets with counts: author, series, tag,
+  language, format, rating, reading status, source, device and accessibility.
+  Accessibility lists the plain statements a book's own metadata makes, such as
+  "Has image descriptions", which
+  [READ-73](../requirements/04-reading.md#access) requires.
 - A filter that is on shows as a row of the platform's removable tokens between
   the screen title and the books, starting at the leading edge, with Clear at
   the end of the row. The row is absent when no filter is on.
@@ -88,7 +93,7 @@ control with its own row background, separators, selection and swipe actions.
 | Part | Value |
 |---|---|
 | Thumbnail | A 2:3 frame at the leading edge. 40 wide at the small size, 48 at medium and 60 at large. Corners of 2, the edge line and the contact shadow. No ambient shadow and no spine shade. |
-| Row height | The thumbnail's height plus 12 above and below. |
+| Row height | The taller of the thumbnail and the three lines of text, plus 12 above and below. The row grows with the system's text size and the text is never clipped. |
 | Text | 12 after the thumbnail. Line one is the title in the emphasised body style, on one line. Line two is the author in the body style, secondary colour. Line three is the series and the book's number in it, in the caption style, secondary colour, and is blank when the book has no series. |
 | Trailing | One short fact in the caption style, secondary colour, in tabular figures: the percentage read for a book being read, a check mark for a finished one, and nothing otherwise. Then the platform's disclosure mark where its lists use one. |
 | Separator | The platform's, starting at the text's leading edge and not under the thumbnail. |
@@ -104,9 +109,10 @@ control with its own row background, separators, selection and swipe actions.
 
 - The table is the platform's table control with its own headers, sort
   indicator, row height and selection.
-- The reader chooses the columns from a menu on the header row and drags a
-  header to reorder. The first set is Title, Author, Series, Added and Progress.
-  Title cannot be removed.
+- The reader chooses the columns from a menu on the header row. A header can be
+  dragged to reorder, and its menu has Move toward the start and Move toward the
+  end so the keyboard can do the same. The first set is Title, Author, Series,
+  Added and Progress. Title cannot be removed.
 - Title is in the emphasised body style and the rest are in the body style in
   the secondary label colour, so the title is what the eye finds in a row.
 - Title carries a small cover at its leading edge, 2:3, as tall as the row less
@@ -115,8 +121,10 @@ control with its own row background, separators, selection and swipe actions.
   edge. Dates count as text. Numbers and dates use tabular figures.
 - Progress is a percentage, empty for an unread book and a check mark for a
   finished one.
-- A click on a header sorts by it. A click with the platform's add-to-selection
-  key makes it the second key, and the header shows a small 2.
+- A click on a header, or Return with the header focused, sorts by it. A click
+  with the platform's add-to-selection key adds it as the next key, up to
+  three, and each such header shows a small 2 or 3. The sort editor sets the
+  same keys.
 - A column's width is remembered. A cell that does not fit is truncated at the
   end and shows whole in a tooltip.
 
@@ -129,11 +137,11 @@ colour, type and a hairline, with no wood and no texture.
 | Part | Value |
 |---|---|
 | Height | Every spine in the view is the same height: 144 at the small size, 192 at medium and 240 at large. |
-| Thickness | From the book's length, so a long book looks long: 16 plus one unit for each 12,000 words, between 16 and 48. A book of unknown length is 24. |
+| Thickness | From the book's length, so a long book looks long: 16 plus one unit for each 12,000 words, rounded to the nearest whole unit and never over 48. A book of 96,000 words is 24 and one of 384,000 or more is 48. A book of unknown length is 24, a middle value. The shelf does not mark it as unknown. |
 | Colour | The catalogue stores a spine colour for each book at import: the most common colour on the cover's leading tenth, or failing that on the whole cover. A book with no cover image uses its binding colour. |
-| Type colour | `#f1e6cc` or `#23190a`, whichever has the higher contrast with the spine colour. If neither reaches 4.5:1, darken or lighten the spine colour in steps of 5% until one does. |
-| Title | Runs down the spine from the top, turned a quarter turn clockwise, in the serif, semibold, 12 units, starting 10 from the top. One line, truncated at the end. Chinese, Japanese and Korean titles are set upright, one character under the next. |
-| Author | The family name only, at the foot, 10 from the bottom, in the UI font at 10 units, turned the same way. Left out when the spine is under 24 thick or the title needs the room. |
+| Type colour | `#f1e6cc` or `#23190a`, whichever has the higher contrast with the spine colour. If that is under 4.5:1, change the spine colour and keep the type: mix the spine colour toward white when the type is `#23190a` and toward black when it is `#f1e6cc`, in sRGB, 5% at a time, and stop at the first step that reaches 4.5:1. A spine of `#808080` takes `#23190a` at 4.38:1, so it becomes `#868686` at 4.77:1. |
+| Title | One line in the serif, semibold, 12 units, laid out by the platform's text system in the title's own direction and then turned a quarter turn clockwise, so a left-to-right title reads from the top of the spine down. It starts 10 from the top. It is truncated with an ellipsis at the end of the title in reading order. A right-to-left title is laid out right to left before the turn, so it too begins at the top. Where the platform has vertical text layout, a Chinese, Japanese or Korean title uses it, with its characters upright and any Latin run turned. Where it has not, the title is turned like any other. |
+| Author | The family name only, at the foot, 10 from the bottom, in the UI font at 10 units, turned the same way. Left out when the spine is under 24 thick, or when the title, the name and 24 between them do not fit the height. The title is truncated only after the author is gone. |
 | Edge | The cover's edge line, inside the spine's outline. |
 | Round | A shade across the spine to suggest its curve: black at 10% on both long edges fading to nothing by a quarter of the thickness. Left out under 20 thick. |
 | Corners | 1 unit at the top. Square at the foot, where the spine stands. |
@@ -145,18 +153,21 @@ colour, type and a hairline, with no wood and no texture.
   as one of the interface's serif roles.
 - A row never justifies. Space left at the trailing end stays empty, as on a
   shelf that is not full.
-- When the sort has groups, such as an author's initial or a series, a new group
-  starts a new row. Its name sits above the row at the leading edge in the
-  caption style and secondary colour.
+- Three sorts have groups: Author groups by the first letter of the sort name,
+  Series by series, and the date sorts by year. A new group starts a new row.
+  Its name sits above the row at the leading edge in the caption style and
+  secondary colour. Any other sort has no groups and the spines run on.
 - Pointer over a spine: it rises 2 units, as a cover does, and a tooltip gives
   the title and author.
-- Selecting a spine pulls the book out: the spine is replaced in place by the
-  book's cover at the spine's height, facing out, and the spines after it move
-  along. The cover has its usual shadow. Selecting another book puts the first
-  back. With several books selected, each shows its cover.
-- The pull animates the width from spine to cover with the platform's layout
-  animation. When the system asks for less motion it cross-fades.
-- Keyboard focus uses the collection control's focus ring around the spine.
+- Spines never move. Selection and keyboard focus use the collection control's
+  own visuals around the spine, so a row keeps its shape while the reader moves
+  through it or selects a run of books.
+- The book's cover answers which book a spine is. With the details pane open it
+  is there. Without the pane, the focused spine shows a preview above it: the
+  cover 96 wide with the title and author under it, in the platform's popover or
+  tooltip surface, pointing at the spine. It appears with focus or after the
+  pointer rests, covers other spines without moving them, and goes when focus
+  or the pointer leaves.
 - Opening works as in the grid: a double click or Return opens the reader, and a
   tap opens book details.
 - Reading state is not drawn on a spine. It is in the tooltip, in book details
@@ -221,16 +232,22 @@ platform's gear or filter symbol after its name.
 | View control | Segmented control in the toolbar | A menu in the navigation bar | `SelectorBar` or segmented control in the header row | Linked toggle buttons in the header bar, a menu on a narrow window | A menu in the top app bar |
 | Home rows | Horizontal collection view sections | `ScrollView(.horizontal)` rows | Horizontal `ItemsView` | `GtkListView` set horizontal in a `GtkScrolledWindow` | `LazyRow` |
 | List | `List` | `List` | `ListView` | `GtkListView` with `.navigation-sidebar` left off | `LazyColumn` with list items |
-| Table | `Table` | `Table` on iPad | `ListView` with column headers | `GtkColumnView` | Not offered |
+| Table | `Table` | `Table` on iPad | `ListView` with column headers | `GtkColumnView` | A lazy column with a fixed header row, from 640 wide |
 | Shelf | AppKit collection view with a flow layout | UIKit collection view with a flow layout | `ItemsView` with a flow layout | `GtkFlowBox` for small places, a custom layout over a list model for large ones | `FlowRow` in a lazy column, one row per shelf |
-| Filter | Popover from the toolbar | Sheet | Flyout | Popover, a bottom sheet on a narrow window | Modal bottom sheet |
+| Filter | Popover from the toolbar | Sheet on iPhone, popover on iPad | Flyout | Popover, a bottom sheet on a phone | Modal bottom sheet |
 | Filter tokens | Token field style buttons | The same | Removable buttons | Removable pill buttons | Input chips |
 | Index strip for authors | None | `List` section index | None | None | None |
 
 Sideways text on a spine is drawn by rotating a label on every platform. The
 shelf with a hundred thousand books must meet
-[LIB-71](../requirements/01-library.md#speed), so each shell uses a layout that
-creates spines only for the rows on screen.
+[LIB-71](../requirements/01-library.md#speed). Creating spines only for the rows
+on screen is not enough, because a row's contents depend on every spine before
+it. So the shared core supplies, for the current sort, the thickness of every
+book in order as one compact list and the positions where groups begin. A shell
+computes row breaks for its width from that list without loading the books. On
+a resize it recomputes the breaks and keeps the first fully visible book at the
+top. Each shell must show a grouped shelf of 100,000 books scrolling, resizing
+and extending a selection without a dropped frame before the shelf ships there.
 
 ## Decisions made without asking
 
@@ -238,9 +255,10 @@ creates spines only for the rows on screen.
    look more like a real shelf. They were turned down for the same reason covers
    became one size: unevenness that a reader of digital books has no reason for.
    Thickness stays because it carries a fact, the book's length.
-2. **A selected spine turns to show its cover.** The alternative is a selection
-   ring around the spine. Showing the cover answers the question a spine raises,
-   which book is this, at the moment the reader asks it.
+2. **A focused spine shows its cover in a preview and does not move.** The
+   first version replaced a selected spine with its cover in the row. A reviewer
+   showed that it reflows the row the reader is moving through and breaks down
+   with a run of books selected.
 3. **The shelf stands on a hairline, with no shelf drawn.** A drawn board, even
    a flat one, is the first step toward decoration.
 4. **Index letters are in the serif.** This adds a fourth place for the serif

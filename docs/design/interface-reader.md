@@ -31,13 +31,13 @@ text and nothing else until the reader asks.
 
 | Part | Value |
 |---|---|
-| Line length | 60 to 70 characters at the reader's text size. The text column is that wide and is centred in the window. It never grows to fill a wide window. |
+| Line length | The text column aims for 60 to 70 characters at the reader's text size and is centred in the window. It never grows past 70 to fill a wide window. On a narrow screen or at a large text size it is as wide as the margins allow and the line is shorter. The text always reflows and is never clipped or scrolled sideways. |
 | Columns | One. Two when the window fits two columns of 60 characters with 48 between them and the reader has turned two columns on. Never three. |
 | Margins | At least 24 at each side on a phone and 48 elsewhere. The top and bottom margins are 1.5 times the side margin. The reader chooses narrow, medium or wide, which scale these by 0.75, 1 and 1.5. |
 | Text | The book's own styles by default, in the reader's chosen font and size. Body text starts at 1.15 times the platform's body size with a line height of 1.5. |
 | Alignment | Leading-aligned with a ragged trailing edge by default. Justified is a choice, and turns hyphenation on with it. |
 | Paging | Pages by default. Continuous scrolling is a choice. |
-| Foot line | One line at the foot, 16 above the bottom edge, in the caption size at 55% of the text colour: the chapter's name at the leading side and the place in the book at the trailing side. The reader can turn it off. It never shows the time or the battery. |
+| Foot line | One line at the foot, 16 above the bottom edge, in the caption size in the page's secondary colour: the chapter's name at the leading side and the place in the book at the trailing side. The reader can turn it off. It never shows the time or the battery. |
 
 The page has no drawn edge, no shadow, no gutter shading and no page stack at
 its side. On a wide window the page colour fills the window.
@@ -46,17 +46,26 @@ its side. On a wide window the page colour fills the window.
 
 Four are built in. The reader can add their own.
 
-| Name | Page | Text | Contrast | Default when the window is |
-|---|---|---|---|---|
-| White | `#ffffff` | `#1a1a1a` | 17.4:1 | |
-| Paper | `#f4ecd8` | `#3b2f21` | 11.0:1 | Light |
-| Grey | `#2b2b2e` | `#d6d6d8` | 9.7:1 | Dark |
-| Black | `#000000` | `#c9c9c9` | 12.7:1 | |
+| Name | Page | Text | Contrast | Secondary | Contrast | Default when the window is |
+|---|---|---|---|---|---|---|
+| White | `#ffffff` | `#1a1a1a` | 17.4:1 | `#767676` | 4.6:1 | |
+| Paper | `#f4ecd8` | `#3b2f21` | 11.0:1 | `#736858` | 4.7:1 | Light |
+| Grey | `#2b2b2e` | `#d6d6d8` | 9.7:1 | `#929294` | 4.5:1 | Dark |
+| Black | `#000000` | `#c9c9c9` | 12.7:1 | `#797979` | 4.8:1 | |
+
+- Secondary is the colour of everything on the page that is not the book's
+  text: the foot line, the progress line and the note marker. For a page colour
+  the reader made, it is the text colour mixed toward the page colour in sRGB,
+  5% at a time, as far as it can go and still have 4.5:1 against the page.
+- A page colour the reader makes is two colours, page and text, chosen with the
+  platform's colour picker. The panel shows their contrast as a number and says
+  in words when it is under 4.5:1. It does not stop the reader.
 
 - Text on a dark page is off-white and not white. Full white on black glares in
   a dark room.
-- A page colour can follow the window: the reader picks one for light and one
-  for dark, and the page changes with the system.
+- A page colour can change by itself. The reader picks one for light and one
+  for dark, and chooses whether the change follows the system's appearance or
+  the time of day, with sunset to sunrise or two times they set.
 - Links in the text are the text colour with an underline. They are never the
   accent colour, which would pull the eye across the page.
 - An image in the book is shown as it is on every page colour. It is never
@@ -79,20 +88,35 @@ Four are built in. The reader can add their own.
 
 - The controls are hidden while reading. They appear on a tap or click in the
   middle third of the page, on any pointer movement to the top or bottom 64
-  units of the window, and on Escape. They hide on the next page turn, on a tap
-  on the page, or after the pointer has been still over the page for three
-  seconds. They never hide while the pointer is over them or a menu is open.
+  units of the window, on Escape, and on Tab. They hide on the next page turn,
+  on a tap on the page, or after the pointer has been still over the page for
+  three seconds.
+- They never hide while the pointer is over them, while a menu or panel is
+  open, or while one of them has keyboard focus. While a screen reader is
+  running they do not hide at all. When they hide, focus returns to the page.
+- Every control has a key, and the platform's own shortcut list shows them all:
+  the Help menu on a Mac, the shortcuts window on GNOME, and a Keyboard
+  shortcuts item in the menu elsewhere.
+- A screen reader reads the book as one continuous text across pages and
+  chapters. Turning the page for it is silent, and page numbers are not read
+  out unless the reader asks where they are.
 - They appear and leave with the platform's short fade. The page does not move
   or resize when they do, so the reader never loses their line.
 - The top bar holds, from the leading side: back to the library, then the
   book's title in the UI font, then at the trailing side Contents, Search, Text
   settings, Bookmark, and a menu for the rest.
 - The bottom bar holds the progress control: a line 2 units thick across the
-  width of the text column, with the part read in the text colour at 55% and the
-  rest at 15%, and chapter marks as gaps of 2 units. Dragging along it shows the
-  chapter and page under the pointer and moves there on release. Under it one
-  line in the caption style says where the reader is, such as "Chapter 12, 14
-  pages left in the chapter, 3 hours left in the book".
+  width of the text column, with the part read in the page's secondary colour and the
+  rest in the text colour at 15%, and chapter marks as gaps of 2 units. Dragging along it shows the
+  chapter and page under the pointer and moves there on release. With focus on
+  it, the arrow keys move a page, Page Up and Page Down move a chapter, and Home
+  and End go to the start and end. Its accessible value is the chapter and the
+  page. Under it one line in the caption style says where the reader is, such as
+  "62%, Chapter 12, 14 pages left in the chapter".
+- Choosing that line opens the platform's popover with everything about the
+  place: the percentage, the chapter, pages left in the chapter, time left in
+  the chapter and in the book at the reader's own pace, and, when the book
+  carries print page numbers, the page and the print edition they belong to.
 - After a jump, Back to page 212 appears at the leading side of the bottom bar
   as a plain button and stays until the reader turns ten pages on.
 - The bookmark control is the platform's bookmark symbol, filled when the page
@@ -112,8 +136,8 @@ Four are built in. The reader can add their own.
 
 ## Text settings
 
-Text settings open from the control marked with two letters A: a popover on a
-wide window and the platform's bottom sheet on a narrow one. The page stays
+Text settings open from the control marked with two letters A: the platform's
+popover on a desktop or tablet and its bottom sheet on a phone. The page stays
 visible behind, and every change shows on it at once.
 
 The first level has four rows and nothing else.
@@ -125,9 +149,11 @@ The first level has four rows and nothing else.
 3. Size: the stepper.
 4. More: opens the second level.
 
-The second level has line spacing, letter and word spacing, margins,
-justification, hyphenation, columns, paged or scrolling, the page turn, the
-foot line, and Use the book's own styles.
+The second level has font weight, line spacing, letter and word spacing,
+margins, justification, hyphenation, columns, paged or scrolling, the page turn,
+the foot line, when the page colour changes by itself, and Use the book's own
+styles. After the four swatches on the first level a fifth, marked with a plus,
+makes a page colour of the reader's own.
 
 - At the top of both levels a line in the secondary colour says what the
   settings apply to, such as "For this book" or "For every book", with a menu to
@@ -145,6 +171,10 @@ foot line, and Use the book's own styles.
   indented by 16. The chapter being read is in the emphasised weight with the
   platform's selection. Page numbers, when the book has them, are at the
   trailing edge in tabular figures.
+- When the book names landmarks, such as its cover, its start and its index,
+  they are a short group above the table of contents under the header Go to.
+- When the book carries a page list, a Go to page field is at the foot of
+  Contents. It takes a page number as printed, including roman numerals.
 - Highlights and Bookmarks use the highlight row from
   [the Highlights place](interface-screens.md#highlights), without the book's
   header.
@@ -155,7 +185,7 @@ foot line, and Use the book's own styles.
 ## Highlights and notes on the page
 
 - Selecting text shows the platform's own selection and its own menu, with
-  Highlight, Note, Copy and Look up added to it. The app draws no menu.
+  Highlight, Note, Copy, Share and Look up in it. The app draws no menu.
 - A highlight is a background behind the text with corners of 2 units. There
   are five colours and an underline. Each colour has a value for each page
   colour so the text stays readable.
@@ -170,8 +200,9 @@ foot line, and Use the book's own styles.
 
 - The underline is 2 units in the text colour at 70%, 3 below the baseline.
 - A passage with a note has a small filled circle, 6 across, in the margin at
-  the trailing side of its first line, in the text colour at 55%. Choosing it
-  opens the note in the platform's popover.
+  the trailing side of its first line. Choosing it
+  opens the note in the platform's popover. The marker is in the page's secondary
+  colour.
 - A footnote opens in place in the platform's popover, or its sheet on a narrow
   window, set in the reader's font at the body size.
 
@@ -191,9 +222,9 @@ foot line, and Use the book's own styles.
 
 | Part | Mac | iPhone and iPad | Windows 11 | GNOME | Android |
 |---|---|---|---|---|---|
-| Top controls | Toolbar that hides with the title bar in full screen | Navigation bar on glass | Title bar with a command bar under it | `AdwHeaderBar` in an `AdwToolbarView` with `reveal-top-bars` | Top app bar |
-| Bottom controls | A glass bar at the foot | Toolbar at the foot on glass | A bar at the foot on the layer fill | A bottom bar in the same `AdwToolbarView` | Bottom app bar |
-| Text settings | Popover | Sheet with detents on iPhone, popover on iPad | Flyout | Popover, `AdwBottomSheet` on a narrow window | Modal bottom sheet |
+| Top controls | Toolbar that hides with the title bar in full screen | Navigation bar on glass | Title bar with a command bar under it | `AdwHeaderBar` in an `AdwToolbarView` with `reveal-top-bars`, and `extend-content-to-top-edge` so the page lies under the bar and does not move | Top app bar |
+| Bottom controls | A glass bar at the foot | Toolbar at the foot on glass | A bar at the foot on the layer fill | A bottom bar in the same `AdwToolbarView`, with `reveal-bottom-bars` and `extend-content-to-bottom-edge` | Bottom app bar |
+| Text settings | Popover | Sheet with detents on iPhone, popover on iPad | Flyout | Popover, `AdwBottomSheet` on a phone | Modal bottom sheet on a phone, a menu surface on a tablet |
 | Contents panel | Sidebar of a `NavigationSplitView` | Sheet on iPhone, sidebar on iPad | `SplitView` pane | `AdwOverlaySplitView` sidebar | Modal navigation drawer, a pane from the expanded width up |
 | Selection menu | The system's edit menu | The system's edit menu | The text control's context flyout | `GtkPopoverMenu` on the selection | The system's text toolbar |
 | Note and footnote | Popover | Popover on iPad, sheet on iPhone | Flyout | `GtkPopover` | Bottom sheet |
@@ -222,7 +253,7 @@ foot line, and Use the book's own styles.
 ## Check on a device before relying on it
 
 - How the highlight colours look on real screens. By calculation the text keeps
-  at least 4.7:1 on every highlight on every page colour. The lowest is yellow
+  at least 4.67:1 on every highlight on every page colour. The lowest is yellow
   on Grey.
 - Whether each platform's web view lets the app add items to the system's
   selection menu, or the shell must supply its own.

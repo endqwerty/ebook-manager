@@ -19,6 +19,9 @@ than the library.
 
 - Forms, settings and dialogs are the platform's own, laid out the platform's
   way. They have no serif, no covers used as decoration and no custom drawing.
+  Which container a screen uses follows the platform and the kind of device,
+  not the window's width: a sheet from the bottom is for a phone, and a narrow
+  desktop window still gets the desktop's popover or dialog.
   Someone who knows the system's settings already knows these.
 - A screen that is a place, with a name in the sidebar, has its title in the
   serif like any other place. A sheet, a dialog or a settings pane has the
@@ -40,8 +43,8 @@ than the library.
 ## Search
 
 - Typing in the search field filters the place the reader is in at once, in the
-  view they are in. It matches title, author, series and tags. Nothing new
-  opens.
+  view they are in. It matches title, author, series, tags and the plain
+  statements of a book's accessibility metadata. Nothing new opens.
 - The screen title stays, and a line under it in the secondary colour says what
   is shown, such as "12 books match melville".
 - A scope control appears under the field while it has text, with This place
@@ -61,7 +64,7 @@ than the library.
 ## Adding books
 
 - Add opens the platform's file picker at once. Beside it a menu offers Add
-  folder and Import a library from another app. Dropping files on the window
+  folder, Import a library from another app, and Recent imports. Dropping files on the window
   does the same as picking them.
 - The import runs in the background. The books appear in the library as they
   are added. Nothing covers the window.
@@ -69,18 +72,24 @@ than the library.
   progress indicator. Choosing it opens a popover that lists each job on a row,
   with its name, a progress bar, how many items are done, and Pause and Cancel.
   With no job running the control is absent.
+- Recent imports, in the Add menu, lists the imports of the last thirty days
+  with their date and counts. Choosing one opens its report. It is there on
+  every device whether or not a job is running, so the report and Undo import
+  are never out of reach.
 - When an import ends with nothing wrong, nothing is shown. When some files need
   the reader, the activity popover keeps a row saying so, such as "3 files need
   attention", and Needs attention appears in the sidebar's Library group with
-  its count. It is absent at zero.
+  its count. On a phone it is a row at the top of Library and a choice in
+  Library's filter. It is absent at zero.
 - The import report is a list of files with one word of result each in the
   secondary colour: Added, Added as another format, Skipped as a duplicate, or
   Failed. A failed row has its reason under the file's name. The report's one
   prominent action is Done. Undo import is a plain button at the leading end.
 - When a file looks like a new version of a book already in the library, the
   platform's sheet shows the two side by side, each with its cover, title,
-  format, size and date. The choices are Keep both, Replace and Skip, with
-  Apply to all as a checkbox. No choice is the default.
+  format, size and date. The choices are Add as another format of this book,
+  Keep as a separate book, Replace the file, and Skip, with Apply to all as a
+  checkbox. No choice is the default.
 - Needs attention is a place shown as a list. Each row's third line is the
   reason, such as "No title found in the file".
 
@@ -89,14 +98,17 @@ than the library.
 - Edit opens the platform's form: an inspector or sheet on a wide window and a
   full page on a narrow one. Its title is Edit book.
 - The cover is at the top at the leading edge, 128 wide, with Replace cover as a
-  plain button beside it. The fields follow in groups with the platform's group
+  plain menu button beside it. The menu offers From a file, From a page of the
+  book, and From a source. The fields follow in groups with the platform's group
   headers: Title and authors, Series, Publication, Tags, Identifiers, Description.
 - A field's label is above it or at its leading side, wherever the platform's
   forms put labels. Fields are the platform's width. Do not right-align values.
-- A field the reader has edited is locked against later fetches. A locked field
-  has the platform's lock symbol inside its trailing end in the secondary
-  colour. Choosing the symbol unlocks it. The symbol has a tooltip and an
-  accessible name, Locked.
+- A field the reader has edited is locked against later fetches. Every field
+  has a lock control inside its trailing end: the platform's closed lock in the
+  secondary colour when locked, and its open lock when not. The open lock shows
+  only while the field has focus or the pointer, so an untouched form stays
+  plain. The control is a toggle, reachable by Tab, with the accessible names
+  Locked and Not locked.
 - Where a value came from is shown under the focused field in the secondary
   colour, such as "From the file" or "Edited by you". It is shown for one field
   at a time so the form stays quiet.
@@ -104,7 +116,10 @@ than the library.
   platform's field error with a sentence saying what is wrong. The form can
   still be saved.
 - Editing several books shows only the fields that can be set for all of them.
-  A field whose values differ shows "Several values" as its placeholder. Before
+  A field whose values differ shows "Several values" as its placeholder. Each
+  field has a menu at its leading side choosing what to do: Set, Add, Remove,
+  Find and replace, or Copy from another field. Set is the choice at the start.
+  Add and Remove appear only on fields that hold several values, such as tags. Before
   the change is made, a preview lists each book with the old and the new value
   side by side, the new one in the emphasised weight. The prominent action is
   Change, with the number of books, and the change can be undone.
@@ -122,37 +137,55 @@ than the library.
   top offers On device, Not in the library, and Out of date, each with a count.
 - Sending starts from the books: select them anywhere and choose Send to
   device. The device's own screen has no prominent action. Eject is a plain
-  button in the bar, and after a transfer the app reminds the reader to eject
-  with the platform's inline notice.
+  button in the bar. Once anything has been written to the device in this
+  session, the line under the storage sentence reads "Eject before unplugging."
+  and stays until the device is ejected. It is a state of the device, not a
+  message, so it does not go against the rule that a finished job says nothing.
 - Before a transfer the platform's sheet lists what will be written: each book,
-  the format it will be sent in, and its size, with the total and the free space
-  at the foot. A book that will not fit or cannot be sent is listed apart with
-  its reason. The prominent action is Send, with the number of books.
+  the format it will be sent in, its size, and under it in the secondary colour
+  the folder and file name it will have on the device. The total and the free
+  space are at the foot. A book that will not fit, or whose name or path is too
+  long for the device, or that cannot be sent, is listed apart with its reason.
+  The prominent action is Send, with the number of books.
+- If the device is unplugged during a transfer, the job stays in the activity
+  popover as "Paused, X4 Pro was disconnected". When the device returns, the
+  row offers Resume and Cancel.
 - Sending shows as a job in the activity popover. Each book in the device's
   list has a small progress indicator in its trailing slot until it is written.
 - A device's settings, its profile, open from a plain button on its screen and
-  follow the settings rules below.
+  follow the settings rules below. The profile has the formats the device
+  prefers in order, conversion settings, the folder and file name pattern, how
+  covers are handled, and how collections appear on the device.
 
 ## Highlights
 
 - Highlights is a place in the sidebar. It lists every highlight, note and
   bookmark from every book, grouped by book and ordered by where they fall in
-  the book.
+  the book. The search field searches the passages and the notes.
 - A group starts with the book's small cover, title and author, as a list row.
-- A highlight is the quoted passage in the serif, in the body size, on up to six
-  lines and then an ellipsis. This is the one place the library window shows a
+- A highlight is the quoted passage in the serif, at 17 units or the platform's
+  body size if that is larger, on up to six lines and then an ellipsis. This is the one place the library window shows a
   book's own words, so it is set as the book would be.
 - A bar 3 units wide runs down the passage's leading edge in the highlight's
   colour. The colour's name, or the meaning the reader gave it, is in the line
   under the passage, so colour is never the only sign.
 - A note the reader wrote is under the passage in the UI font, body style.
+- A note with no passage, on a page, a chapter or the whole book, is the note
+  alone in the UI font, with no bar. Its last line says what it is on, such as
+  "Note on Chapter 3" or "Note on the book".
+- A bookmark is the first line of its page in the serif, in the secondary
+  colour, with the platform's bookmark symbol at the leading edge in place of
+  the bar.
+- A highlight whose passage can no longer be found in the book keeps its quote
+  and its note. Its last line says "This passage is not in the current version
+  of the book." and choosing it does not open the book.
 - The last line is in the caption style and secondary colour: the chapter, the
   date, and the colour's name.
 - 16 separates one highlight from the next, with no rule between them. 28
   separates one book's group from the next.
 - Choosing a highlight opens the book at that passage.
-- The filter offers book, colour, tag, date and source. Export is a plain
-  button in the bar.
+- The filter offers book, colour, tag, date and source. Export is a plain menu
+  button in the bar: This book or Everything shown, then Markdown or JSON.
 
 ## Settings
 
@@ -182,7 +215,8 @@ about them is designed here beyond their order and words.
 - The Privacy list is the plainest screen in the app: a table of date, service
   and kind of data, newest first, with the sentence "Nothing has left this
   device." when it is empty.
-- About shows the app's name in the serif. It is the one serif in Settings.
+- About uses the platform's own About layout and has no serif, like the rest
+  of Settings.
 
 ## Dialogs and messages
 
@@ -216,10 +250,10 @@ about them is designed here beyond their order and words.
 | Screen | Mac | iPhone and iPad | Windows 11 | GNOME | Android |
 |---|---|---|---|---|---|
 | Settings | A Settings window with a toolbar of sections, opened from the app menu | A sheet with a grouped `Form`, opened from the Library tab's menu | A page reached from the foot of `NavigationView`, with settings cards and expanders | `AdwPreferencesDialog` with pages, groups and rows | A full screen list with sub-screens |
-| Setting row | `Form` rows with `LabeledContent` | `Form` rows | A settings card: name, description, control at the trailing end | `AdwSwitchRow`, `AdwComboRow`, `AdwActionRow` | List item with a trailing switch |
+| Setting row | `Form` rows with `LabeledContent` | `Form` rows | `SettingsCard` and `SettingsExpander` from the Windows Community Toolkit: name, description, control at the trailing end | `AdwSwitchRow`, `AdwComboRow`, `AdwActionRow` | List item with a trailing switch |
 | Edit book | Sheet, or the inspector on a wide window | Sheet with a `Form` | A page in the content area, or `ContentDialog` for a short edit | `AdwDialog` with a preferences page | Full screen dialog |
 | Confirm and cancel | Done and Cancel at the foot of the sheet | Done and Cancel in the navigation bar | Save and Cancel at the foot | Apply and Cancel in the header bar | Save in the top app bar, back to cancel |
-| Activity | Toolbar item with a popover | Toolbar item with a popover on iPad, a sheet on iPhone | Title bar item with a flyout | Header bar button with a popover | Top app bar action with a bottom sheet |
+| Activity | Toolbar item with a popover | Toolbar item with a popover on iPad, a sheet on iPhone | Title bar item with a flyout | Header bar button with a popover | Top app bar action with a bottom sheet on a phone, a menu surface on a tablet |
 | Duplicate and send sheets | Sheet | Sheet | `ContentDialog` | `AdwDialog` | Modal bottom sheet |
 | Alert | `alert` | `alert` | `ContentDialog` | `AdwAlertDialog` | `AlertDialog` |
 | Undo after removing | Edit menu's Undo | A shake or the three-finger gesture, and Undo in the toolbar's menu | `InfoBar` with Undo | `AdwToast` with Undo | Snackbar with Undo |
@@ -244,9 +278,9 @@ a decision stays until answered.
 
 ## Check on a device before relying on it
 
-- Whether Windows has a first-party settings card control in the current
-  Windows App SDK or only in the Windows Community Toolkit, and that toolkit's
-  licence if so.
+- The Windows settings rows come from the Windows Community Toolkit, which is a
+  dependency to add to the release manifest under
+  [LIC-1](../requirements/10-constraints.md#licences-of-parts) before use.
 - Whether `AdwPreferencesDialog` suits nine sections or needs its search.
 - How undo is offered after a removal on iPhone, where there is no menu bar.
 - Whether the platform lock symbol inside a text field is reachable by keyboard
