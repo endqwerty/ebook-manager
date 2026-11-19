@@ -346,8 +346,14 @@ def keys(evidence):
     assert shown[-1] == 80, shown
     assert page("chapter-2.png")[0] == 0
     press("Left")
-    find("Chapter 1 of 2", contains=True)
-    assert page("chapter-1-end.png", blank=True)[-1:] == [80]
+    # The chapter's last page, by the line under the page. What is on that
+    # page depends on the fonts installed: with some, the closing paragraph
+    # fills it and no marker shows.
+    line = find("Chapter 1 of 2", contains=True).get_name()
+    at = re.search(r"Page (\d+) of (\d+)", line)
+    assert at and at.group(1) == at.group(2), line
+    last = page("chapter-1-end.png", blank=True)
+    assert not last or last[-1] == 80, last
     print(
         f"PASS arrow and page keys: {turns} turns through chapter one without a skipped paragraph, back from chapter two to its last page",
         flush=True,
