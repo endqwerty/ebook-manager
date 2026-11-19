@@ -86,20 +86,77 @@ identifiers it covers. When a requirement is built, describe the behaviour in a 
 and mark the requirement done. If research or a decision changes a requirement, edit
 its page in the same pull request.
 
-## Design and review rounds
+## Running design and component reviews in T3
 
-Count review rounds separately for each work item, including a spec drafted by
-a delegated worker. A round is one pass on that item, even if several reviewers
-take part. Carry the count through revisions and handoffs.
+The agent owning a feature maintains its documents as part of doing the work.
+Before implementing a change that affects an interface, ownership or recovery,
+write or update the relevant design in `docs/design/`. Link the requirement,
+the decision and a concrete case that could show the decision is wrong. When
+a component exists, keep its README beside the code. Explain its entry point,
+what callers can rely on, its side effects and how to check them. Link it from
+the nearest parent README. When behaviour changes, update that contract and the
+current-behaviour spec in the same PR. An existing README that already answers
+these questions is sufficient.
 
-Before rounds 4, 7, 10 and so on, pause review of that item. For example, if
-the import spec has had three rounds and the storage spec has had one, pause
-before sending the import spec out again. Storage can continue.
+### Start a fresh reader automatically
 
-The agent arranging the next review records in the issue or PR what another
-pass could change for a reader or implementer and how to check it. Continue
-if that check would guide a product decision. If only wording remains,
-finish the edit and move on.
+When a design is ready to implement, its plan materially changes, or a component
+README gains or changes a contract, the owning agent starts a goldfish review.
+Run the relevant example or behaviour check first. In T3 use a new
+`delegate_task` with a standalone, read-only brief. Give it the revision, item
+path, a realistic reader or implementer task, and the Rule 1 instructions above.
+Let it follow the document's links. Keep the author's conversation, preferred
+answer and earlier verdicts out of the brief. Ask what it would do, what evidence
+supports that answer and where it had to guess. Fix consequential gaps in the
+repo. A passing fresh verifier on the same revision can cover this read when
+its brief and evidence meet both jobs. Wording edits alone can finish locally.
+
+Choose a reviewer from the live catalogue and check its allowance. GPT-6.2 Sol
+and Opus 5.5 are the usual choices for design and behaviour. GPT-6.1 Terra and
+Sonnet 5.5 can take bounded reading or navigation tasks. For an occasional
+defensive security review, use Daybreak when the change touches a trust boundary
+such as book parsing, device pairing or access to personal data. Give it the
+specific boundary and the protection the implementation should provide. When a
+design trade-off needs another decision-maker, consult Fable with the options,
+constraints and evidence. The item owner records the choice and its consequences.
+
+### Count reviews per work item
+
+Count cold reads and targeted rechecks as rounds on the item they examine.
+Several reviewers in one pass count once. The parent coordinates dispatch
+when a delegated worker cannot launch reviewers. Carry the count through
+revisions, renames, worker changes and handoffs.
+
+Use the linked issue for handoff. Keep a short entry per item with its name,
+revision, round, reviewer, finding and next action. Before dispatch, mark the
+round in flight. On return, record its result and the deciding check. If a new
+owner finds a round in flight, inspect its T3 task or session before sending
+another. Record failed attempts and missing evidence. Carry forward a completed
+review when the item and the evidence it relies on are unchanged.
+
+Before rounds 4, 7, 10 and so on, pause that item. Record what another pass
+could change for a reader or implementer and how to check it. Continue if that
+check would guide a product decision. If only wording remains, finish the edit.
+Other items continue on their own counts.
+
+### Delegate a major milestone
+
+When a milestone has its own outcome, boundaries and acceptance check, the
+coordinator can assign an Astra or Fable lead to own it through verification.
+Use a T3 subagent for work that belongs to the current session. For independent
+milestones that can progress in parallel, launch separate T3 sessions with
+their own worktrees. Check model availability and allowance first.
+
+Give each lead its issue, base revision, owned files, dependencies, completion
+check, decision authority and where to report back. Include Rule 1 in every
+brief. The lead can organise its own workers and fresh readers. Keep publication
+and integration with the coordinator under the project's existing rules.
+
+Agree on check-ins in the brief. Report the first working result, decisions
+that affect another milestone, blockers and the verified handoff. For longer
+gaps, set a check-in interval suited to the work. Send the coordinator a short
+T3 update with the revision, evidence and next step, and leave the durable
+state on the issue so another lead can resume.
 
 ## Backlog: GitHub issues
 
