@@ -99,10 +99,10 @@ today, and takes the new file's helper facts. A journal entry larger than the
 from, and gains the time of reading in UTC and a fraction read from 0 to 1.
 Saving the same chapter, offset and fraction again writes no new entry,
 whatever the time. The fraction is part of that comparison because the end of
-a long last block changes the fraction and not the offset. The desktop reader computes the fraction as the linear chapters before
-this one plus the fraction of this chapter scrolled, over the number of linear
-chapters. A position in a chapter that is not linear counts as the start of
-the next linear one. A book is finished when the reader has shown the end of
+a long last block changes the fraction and not the offset. The fraction is whatever the reader reports, and the library
+stores it as given. [The reader's design](https://github.com/endqwerty/ebook-manager/issues/29)
+weighs chapters by their size. A position in a chapter that is not linear
+counts as the start of the next linear one. A book is finished when the reader has shown the end of
 the last linear chapter, which stores a fraction of exactly 1. A replaced
 version's position is not shown: the catalogue row's progress and last read
 are cleared when the version changes.
