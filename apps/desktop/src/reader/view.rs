@@ -808,8 +808,9 @@ impl Drop for Inner {
     fn drop(&mut self) {
         // End the web process now instead of letting it shut itself down.
         // WebKitGTK 2.54 sometimes aborts in that shutdown, in a timer's
-        // destructor, and an abort is a crash the reader would see. Ending
-        // it outright leaves no core dump, and nothing in it is needed.
+        // destructor, and an abort is a crash the reader would see. A
+        // running process is ended with a kill signal, which leaves no core
+        // dump, and one still starting is cancelled. Nothing in it is needed.
         self.view.terminate_web_process();
         disarm(&self.watchdog);
         BOOKS.with(|b| b.borrow_mut().remove(&self.token));

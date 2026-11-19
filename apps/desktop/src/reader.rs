@@ -392,10 +392,29 @@ impl Reading {
         let weak = Rc::downgrade(&reading);
         w.connect_unrealize(move |_| {
             if let Some(r) = weak.upgrade() {
-                r.flush();
-                r.view.shut();
+                r.leave();
             }
         });
+        // The window the reader was opened from can close first, and can do
+        // so without this window ever being unrealized: what it holds can
+        // keep it from being disposed, which is what would close this one.
+        // So the reader also leaves when that window is asked to close or
+        // goes off screen.
+        if let Some(parent) = w.transient_for() {
+            let weak = Rc::downgrade(&reading);
+            parent.connect_close_request(move |_| {
+                if let Some(r) = weak.upgrade() {
+                    r.leave();
+                }
+                glib::Propagation::Proceed
+            });
+            let weak = Rc::downgrade(&reading);
+            parent.connect_unrealize(move |_| {
+                if let Some(r) = weak.upgrade() {
+                    r.leave();
+                }
+            });
+        }
         let r = reading.clone();
         w.connect_close_request(move |w| {
             // One close at a time, and from here nothing but this handler
@@ -671,6 +690,11 @@ impl Reading {
             let Some(reading) = weak.upgrade() else {
                 return;
             };
+            // A page ended while a turn was unanswered says it did not
+            // move. That is not the chapter's edge.
+            if reading.closing.get() {
+                return;
+            }
             if moved
                 || reading
                     .place
@@ -734,6 +758,14 @@ impl Reading {
                 }
             });
         self.pending_save.set(Some(timer));
+    }
+
+    /// The reader is going without its own close: hand over a place that is
+    /// waiting to be saved, and end the page's process before anything can
+    /// leave it to shut itself down.
+    fn leave(&self) {
+        self.flush();
+        self.view.shut();
     }
 
     /// Send a place that is waiting for its timer to the library now. The

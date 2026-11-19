@@ -90,8 +90,11 @@ program failing on any core dump.
 
 - A web process shutting itself down when its view is destroyed. Now and
   then, under load, it aborts in a timer's destructor. `View::shut`, and the
-  view's own drop, end the process outright first, which leaves no core
-  dump. Call `shut` before destroying the window that holds the view.
+  view's own drop, end the process outright first. WebKit ends a running
+  process with a kill signal, which leaves no core dump, and cancels one
+  that is still starting. Call `shut` before destroying the window that
+  holds the view, and when any window that owns that one closes: the reader
+  does both.
 
 - A second `WebKitWebContext` with its own memory limit. Every view shares
   one context, so the memory limit is the first view's.

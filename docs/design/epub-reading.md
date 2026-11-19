@@ -163,7 +163,7 @@ A failure sends the design back to C, A or the reader host process under
 6. **A test leaves a core dump.** Users must never see a crash
    ([SEC-10](../requirements/10-constraints.md#opening-untrusted-files)).
    The test program counts the records in `coredumpctl list` before its first
-   test and ten seconds after its last, and fails on any new one, whatever
+   test and 30 seconds after its last, and fails on any new one, whatever
    the tests asserted. A record has appeared as late as 19 seconds after its
    crash, so the program waits 30. CI has
    no `coredumpctl`, so this runs on a developer's machine.
@@ -183,7 +183,10 @@ things the design now holds to.
   once per process. `two_views_share_one_process_without_a_crash` guards it.
 - A web process left to shut itself down when its view is destroyed now and
   then aborts, under load, in a timer's destructor. The reader ends the
-  process outright before the view goes, which leaves no core dump.
+  process outright before the view goes: on its own close, when its window
+  goes off screen, and when the window it was opened from closes. WebKit
+  ends a running process with a kill signal, which leaves no core dump, and
+  cancels one that is still starting before it runs.
 - WebKit's memory limit ends a web process only while that process answers.
   See [The bounds on a chapter](#the-bounds-on-a-chapter).
 
