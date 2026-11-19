@@ -259,8 +259,10 @@ makes a page colour of the reader's own.
   selection menu, or the shell must supply its own.
 - Whether the page stays still when bars appear over a web view on each
   platform, without the view resizing.
-- Literata's licence and whether it covers the scripts the reader needs. A book
-  in a script it lacks falls back to the platform's font for that script.
+- Whether Literata covers the scripts the reader needs. A book in a script it
+  lacks falls back to the platform's font for that script. Its licence is
+  checked: the [SIL Open Font License 1.1](../requirements/10-constraints.md#licences-of-parts),
+  with no reserved font name.
 
 ## Not designed yet
 

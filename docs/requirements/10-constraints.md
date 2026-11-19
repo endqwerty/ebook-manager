@@ -28,19 +28,43 @@ The project is Apache 2.0. Code under the GPL or AGPL cannot be built into it.
 See the [platform design](../design/platforms.md#licence-checks-and-protected-books)
 for proposed components and release audit requirements.
 
-| Need | Candidate | Restriction or open check |
-|---|---|---|
-| EPUB and reader toolkits | Readium Swift and Kotlin toolkits (BSD) | An e-reader engine under the GPL |
-| PDF drawing | PDFium, pdf.js | MuPDF (AGPL or paid), Poppler (GPL) |
-| Conversion | Own code, kepub conversion tools under MIT | Pandoc (GPL): only as a separate program the user installs |
-| OCR | Tesseract (Apache 2.0). Check each language data file | |
-| Archives | libarchive for reading RAR | The unrar source has its own restrictive licence. RAR cannot be created |
-| MTP | Evaluate a permissively licensed Rust implementation | Audit native dependencies and test transport on each target. Omit cable transfer on iOS |
-| Audio | The platform's own decoders on mobile | FFmpeg: LGPL only if built without GPL parts and linked dynamically |
-| Speech | The platform's voices | Piper (GPL): only as something the user installs |
-| Fonts | Fonts under the SIL Open Font License | Audit the exact files and keep their notices. [Google Fonts' Atkinson Hyperlegible licence](https://github.com/google/fonts/blob/main/ofl/atkinsonhyperlegible/OFL.txt) |
-| Dictionaries | Dictionaries the user installs | Wiktionary data is CC BY-SA: attribute it and keep it apart from the code |
-| Storage | SQLite (public domain) | |
+Each licence below was read on 19 November 2026 in the part's own licence file or
+on its official site, linked in the row. Usable means the part can be linked or
+bundled in this Apache 2.0 app under LIC-1, with the conditions given.
+
+| Need | Part | Licence, from its source | Use in the app |
+|---|---|---|---|
+| EPUB and reader toolkits | Readium Swift and Kotlin toolkits | BSD 3-Clause. [Swift](https://github.com/readium/swift-toolkit/blob/main/LICENSE) · [Kotlin](https://github.com/readium/kotlin-toolkit/blob/main/LICENSE) | Usable. Keep the notice. Their own dependencies need the release audit |
+| PDF drawing | PDFium | BSD 3-Clause style, with the Apache 2.0 text in the same file. [Licence](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/LICENSE) | Usable. The `third_party` code built into the pinned revision is not checked yet |
+| PDF drawing | pdf.js | Apache 2.0. [Licence](https://github.com/mozilla/pdf.js/blob/master/LICENSE) | Usable |
+| PDF drawing | MuPDF | AGPL 3.0 or later, or a paid licence from Artifex. [README](https://github.com/ArtifexSoftware/mupdf/blob/master/README) | Not usable under the AGPL |
+| PDF drawing | Poppler | GPL. [Licence](https://gitlab.freedesktop.org/poppler/poppler/-/blob/master/COPYING) | Not usable |
+| Conversion | kepubify | MIT. [Licence](https://github.com/pgaskin/kepubify/blob/master/LICENSE) | Usable |
+| Conversion | Pandoc | GPL 2.0 or later, with some modules under other GPL-compatible licences. [Copyright file](https://github.com/jgm/pandoc/blob/main/COPYRIGHT) | Only as a separate program the user installs |
+| OCR | Tesseract | Apache 2.0. [Licence](https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE) | Usable |
+| OCR | Tesseract language data: `tessdata`, `tessdata_fast`, `tessdata_best` | Apache 2.0, stated for all data in each repository with no exception for any language. [tessdata](https://github.com/tesseract-ocr/tessdata/blob/main/LICENSE) · [README](https://github.com/tesseract-ocr/tessdata/blob/main/README.md) · [fast](https://github.com/tesseract-ocr/tessdata_fast/blob/main/LICENSE) · [best](https://github.com/tesseract-ocr/tessdata_best/blob/main/LICENSE) | Usable. List each bundled file under LIC-2 |
+| Archives | libarchive | BSD 2-Clause for most files; a few files are under the 3-clause UC Regents licence, public domain, or a choice of CC0, OpenSSL or Apache 2.0. Its RAR reader is its own code. Build scripts vary file by file. [Copying file](https://github.com/libarchive/libarchive/blob/master/COPYING) | Usable. Keep the notices |
+| Archives | UnRAR source | Its own freeware licence: free to use for reading RAR, but not to build a RAR-compatible archiver or recreate RAR compression. Modified copies must carry its paragraph 2. Read in `license.txt` inside the source archive from [RARLAB](https://www.rarlab.com/rar_add.htm) | Avoid. Read RAR through libarchive. RAR cannot be created |
+| MTP | No part named yet | | Unconfirmed. Choose a permissively licensed implementation, audit its native dependencies, and test transport on each target. Omit cable transfer on iOS |
+| Audio | FFmpeg | LGPL 2.1 or later; optional parts are GPL 2.0, and using them puts all of FFmpeg under the GPL. [Legal page](https://ffmpeg.org/legal.html) | The platform's own decoders on mobile. FFmpeg only built without `--enable-gpl` and `--enable-nonfree` and linked dynamically |
+| Speech | Piper | The old repository is MIT and archived. Development moved to `piper1-gpl`, which is GPL 3.0. [Old licence](https://github.com/rhasspy/piper/blob/master/LICENSE.md) · [New licence](https://github.com/OHF-Voice/piper1-gpl/blob/main/COPYING) | Only as something the user installs. Each voice model has its own licence (DERIV-11) |
+| Hyphenation | `hyphenation` Rust crate and the `hyph-utf8` patterns | The crate is MIT or Apache 2.0. The patterns have one licence per language: MIT for British English, German, French, Spanish and Dutch; a free notice-keeping licence for American English; BSD 3-Clause for Portuguese; LPPL or MIT for Italian. The crate also ships extended Hungarian (MPL 1.1) and Catalan (LGPL 3.0) patterns. [Crate](https://github.com/tapeinosyne/hyphenation#license) · [Patterns](https://github.com/hyphenation/tex-hyphen/blob/master/hyph-utf8/source/generic/hyph-utf8/README.md) | Prefer the web view's own hyphenation. If the app bundles patterns, check and list each language file, and leave out the Hungarian and Catalan extended files |
+| Fonts | Literata | SIL Open Font License 1.1, with no reserved font name. [Google Fonts copy](https://github.com/google/fonts/blob/main/ofl/literata/OFL.txt) · [Project](https://github.com/googlefonts/literata/blob/main/OFL.txt) | Usable. Bundle its `OFL.txt` with the font files |
+| Fonts | Atkinson Hyperlegible | SIL Open Font License 1.1, with no reserved font name. [Licence](https://github.com/google/fonts/blob/main/ofl/atkinsonhyperlegible/OFL.txt) | Usable. Bundle its `OFL.txt` with the font files |
+| Dictionaries | Wiktionary data | CC BY-SA 4.0, also GFDL 1.1 or later. Reusers must attribute and share alike. [Wiktionary copyrights](https://en.wiktionary.org/wiki/Wiktionary:Copyrights) | Dictionaries the user installs. If shipped, attribute them and keep them apart from the code |
+| Storage | SQLite, bundled by `rusqlite` | SQLite is public domain; the bundled 3.50.2 source carries the authors' disclaimer. `rusqlite` and `libsqlite3-sys` are MIT. [SQLite copyright](https://sqlite.org/copyright.html) · [rusqlite licence](https://github.com/rusqlite/rusqlite/blob/master/LICENSE) | Usable |
+| Images | `image` crate with `zune-jpeg`, `png`, `gif` and `image-webp` | `image`, `png`, `gif` and `image-webp` are MIT or Apache 2.0; `zune-jpeg` adds Zlib as a third choice; `moxcms`, pulled in for colour profiles, is BSD 3-Clause or Apache 2.0. [image licence](https://github.com/image-rs/image/blob/main/LICENSE-MIT) | Usable |
+| Sorting | `icu_collator` with its bundled Unicode data | Unicode License v3 for the crate and its compiled data crates. [ICU4X licence](https://github.com/unicode-org/icu4x/blob/main/LICENSE) | Usable. Keep the Unicode notice |
+| Linux interface | `gtk4` and `libadwaita` Rust bindings | MIT. [gtk4-rs licence](https://github.com/gtk-rs/gtk4-rs/blob/main/LICENSE); `libadwaita` from the `LICENCE` file in its published crate | Usable |
+| Linux interface | GTK 4, libadwaita, GLib, Pango, GDK-Pixbuf and FriBidi | LGPL. [GTK](https://gitlab.gnome.org/GNOME/gtk/-/blob/main/COPYING) · [libadwaita](https://gitlab.gnome.org/GNOME/libadwaita/-/blob/main/COPYING). The others as declared by the Arch Linux packages | Usable only as shared libraries from the distribution or Flatpak runtime. Don't link them statically |
+| Linux interface | Cairo and FreeType, linked by GTK | Cairo: LGPL 2.1 or MPL 1.1. FreeType: the FreeType licence or GPL 2.0, by choice. Both as declared by the Arch Linux packages | Usable as shared system libraries. Choose FreeType's own licence |
+
+The Rust workspace's dependency tree on 19 November 2026
+(`cargo tree --workspace --edges normal --format '{p} {l}'`) declares only MIT,
+Apache 2.0, Zlib, Unlicense, 0BSD, Unicode 3.0 and Apache 2.0 with the LLVM
+exception, mostly as choices. None is GPL, AGPL, LGPL, MPL or missing. The LGPL
+appears only in the native GNOME libraries above, which the bindings load from the
+system.
 
 - `LIC-1` (core) The app neither links nor bundles GPL or AGPL code. A tool under
   such a licence may be run as a separate program that the user installed, in direct
@@ -155,7 +179,9 @@ for the planned packages and their capability checks.
 
 The text of the European directive and its exemption for very small businesses
 and the EU's law on circumvention need review against the primary text.
-Platform viability and the package-level licence audit remain open as described
+The licence table leaves open the PDFium `third_party` code, an MTP part, and the
+exact files of any bundled hyphenation patterns. Platform viability and the
+package-level licence audit remain open as described
 in the [platform design](../design/platforms.md).
 
 ## Sources
