@@ -13,6 +13,22 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 pub type Result<T> = anyhow::Result<T>;
+
+/// Downcast the error to this type to find an already-committed shelf entry.
+#[derive(Debug)]
+pub struct PublicationPending {
+    pub book_id: String,
+}
+impl std::fmt::Display for PublicationPending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "book {} saved locally; portable publication pending",
+            self.book_id
+        )
+    }
+}
+impl std::error::Error for PublicationPending {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedMetadata {
     pub title: String,
@@ -309,10 +325,10 @@ impl Library {
             .query_row("SELECT id FROM sources WHERE path=?", [key], |r| r.get(0))
             .optional()?;
         let mut candidates = Vec::new();
-        let mut exact = None;
+        let mut exact = Vec::new();
         for b in self.search("")? {
             if b.sha256 == sha {
-                exact = Some(b.clone());
+                exact.push(b.clone());
             }
             if prev.as_ref() == Some(&b.id)
                 || b.sha256 == sha
@@ -321,9 +337,21 @@ impl Library {
                 candidates.push(b);
             }
         }
-        if let Some(b) = exact.as_ref().filter(|_| candidates.len() == 1) {
+        let duplicate = match (&choice, exact.as_slice()) {
+            (ImportChoice::Replace(id), _) => exact.iter().find(|b| &b.id == id),
+            (_, [b])
+                if prev.as_ref().is_none_or(|id| id == &b.id)
+                    || matches!(choice, ImportChoice::KeepSeparate) =>
+            {
+                Some(b)
+            }
+            _ => None,
+        };
+        if let Some(b) = duplicate {
             self.store_blob(tmp, b)?;
-            self.publish()?;
+            self.publish().context(PublicationPending {
+                book_id: b.id.clone(),
+            })?;
             self.db.execute(
                 "INSERT OR REPLACE INTO sources VALUES(?,?)",
                 params![key, b.id],
@@ -371,12 +399,10 @@ impl Library {
     }
     fn store_blob(&self, tmp: NamedTempFile, b: &Book) -> Result<()> {
         let path = self.blob(b)?;
-        if path.try_exists()? {
-            ensure!(
-                digest(&mut regular(&path)?)? == b.sha256,
-                "managed bytes differ"
-            );
-        } else {
+        if path.try_exists()? && digest(&mut regular(&path)?)? != b.sha256 {
+            preserve(&path, "damaged")?;
+        }
+        if !path.try_exists()? {
             tmp.as_file().sync_all()?;
             tmp.persist_noclobber(&path)?;
         }
@@ -396,6 +422,11 @@ impl Library {
             self.book(id)?.version_id == pos.version_id,
             "reading position belongs to another version"
         );
+        if self.load_position(id)?.as_ref() == Some(pos) {
+            return self
+                .publish()
+                .context(PublicationPending { book_id: id.into() });
+        }
         self.commit(
             Change::Position {
                 id: id.into(),
@@ -416,6 +447,10 @@ impl Library {
             .filter(|p: &ReadingPosition| p.version_id == b.version_id))
     }
     fn commit(&mut self, change: Change, source: Option<(&[u8], &str)>) -> Result<()> {
+        let book_id = match &change {
+            Change::Book(b) => b.id.clone(),
+            Change::Position { id, .. } => id.clone(),
+        };
         let tx = self.db.transaction()?;
         let parent = tip(&tx)?;
         let e = Entry {
@@ -433,8 +468,7 @@ impl Library {
             )?;
         }
         tx.commit()?;
-        self.publish()
-            .context("saved locally; portable publication pending")
+        self.publish().context(PublicationPending { book_id })
     }
     fn publish(&mut self) -> Result<()> {
         let dir = self.directory("changes")?;
@@ -469,8 +503,12 @@ impl Library {
         let path = dir.join(format!("{}-{}.json", b.id, sidecar_digest(b)?));
         let data = serde_json::to_vec_pretty(b)?;
         if path.try_exists()? {
-            ensure!(read_entry(&path)? == data, "edited sidecar requires review");
-        } else {
+            let edited = regular(&path)?;
+            if edited.metadata()?.len() != data.len() as u64 || read_entry(&path)? != data {
+                preserve(&path, "proposal")?;
+            }
+        }
+        if !path.try_exists()? {
             install(&path, &data)?;
         }
         File::open(dir)?.sync_all()?;
@@ -482,10 +520,10 @@ impl Library {
         for item in dir.read_dir()? {
             let item = item?;
             let name = item.file_name();
-            let name = name.to_str().context("invalid journal filename")?;
-            if name.starts_with(".tmp") {
+            if item.path().extension().is_none_or(|ext| ext != "json") {
                 continue;
             }
+            let name = name.to_str().context("invalid journal filename")?;
             let seq: u64 = name
                 .strip_suffix(".json")
                 .context("unknown journal file")?
@@ -518,6 +556,13 @@ impl Library {
         tx.commit()?;
         self.publish()
     }
+}
+// Keep the prior name recoverable before installing verified replacement contents.
+fn preserve(path: &Path, label: &str) -> Result<()> {
+    let backup = path.with_extension(format!("{label}-{}", uid()));
+    fs::rename(path, &backup)?;
+    File::open(path.parent().context("missing parent directory")?)?.sync_all()?;
+    Ok(())
 }
 fn sidecar_digest(b: &Book) -> Result<String> {
     Ok(format!(
