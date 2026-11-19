@@ -406,7 +406,6 @@ impl View {
         settings.set_enable_html5_database(false);
         settings.set_enable_page_cache(false);
         settings.set_enable_dns_prefetching(false);
-        settings.set_enable_hyperlink_auditing(false);
         settings.set_allow_file_access_from_file_urls(false);
         settings.set_allow_universal_access_from_file_urls(false);
         settings.set_javascript_can_open_windows_automatically(false);

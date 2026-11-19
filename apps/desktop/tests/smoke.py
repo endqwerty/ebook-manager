@@ -215,6 +215,10 @@ def accessible_text(node):
     return Atspi.Text.get_text(node, 0, Atspi.Text.get_character_count(node))
 
 
+# What GDK prints when the destroyed-window step destroys the library window.
+DESTROYED_WINDOW_WARNING = r"Gdk-WARNING \*\*: .*GdkSurface 0x[0-9a-f]+ unexpectedly destroyed"
+
+
 def xd(*args):
     subprocess.run(["xdotool", *map(str, args)], check=True)
 
@@ -783,6 +787,9 @@ def run(binary, evidence, root):
         # book reopens.
         pages = web_processes(proc.pid)
         assert pages, "no web process to watch"
+        # GDK itself warns when another program destroys a window. From
+        # the next line to the app's exit, DESTROYED_WINDOW_WARNING is
+        # expected in the app's output, and nowhere else in the run.
         xd("windowclose", library)
         proc.wait(timeout=10)
         assert proc.returncode == 0, proc.returncode

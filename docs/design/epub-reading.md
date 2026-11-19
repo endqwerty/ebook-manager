@@ -463,9 +463,13 @@ If a step fails, no book opens and the window shows the error.
    ([documentation](https://webkitgtk.org/reference/webkitgtk/stable/property.Settings.enable-javascript-markup.html)).
    `enable-javascript` stays on for the app's script. Off as well: WebGL,
    WebRTC, media, media streams, media source, encrypted media, web audio,
-   local storage and databases, the page cache, DNS prefetching, hyperlink
-   auditing, file access from file URLs, opening windows from script, and
-   back-forward gestures. Developer extras are on only in a debug build.
+   local storage and databases, the page cache, DNS prefetching, file
+   access from file URLs, opening windows from script, and back-forward
+   gestures. Developer extras are on only in a debug build. Hyperlink
+   auditing is not set: WebKitGTK deprecated the setting and the call only
+   prints a warning. A `ping` attribute never reaches the page, because the
+   helper's list of allowed attributes does not have it, and the network
+   layers below block the request it would make.
 5. **The `ebook:` scheme.** `ebook://<token>/c/<n>` is chapter `n` and
    `ebook://<token>/r/<id>` is a resource. The token is 128 random bits made
    when the window opens its book. The helper's `/c/…` and `/r/…` references
