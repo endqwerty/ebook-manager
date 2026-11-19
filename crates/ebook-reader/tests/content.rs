@@ -443,7 +443,10 @@ fn malformed_content_and_resource_replies_are_refused() {
             warnings: vec![],
         })
     };
-    let opened = fake("good", &content("<p>a\u{1b}b\tc</p>", 4));
+    let opened = fake(
+        "good",
+        &content("<p class=\"a b\" data-epub-type=\"x&amp;&quot;&lt;&gt;\">ab\tc<br/><img src=\"/r/1\" alt=\"\"/></p>\n", 5),
+    );
     // A size past the chapter limit is brought down to it.
     assert_eq!(
         opened.chapters()[0].size as u64,
@@ -451,7 +454,8 @@ fn malformed_content_and_resource_replies_are_refused() {
     );
     let good = opened.read_content(0).unwrap();
     assert_eq!(good.index, 0);
-    assert_eq!(good.markup, "<p>ab\tc</p>");
+    assert!(good.markup.starts_with("<p class=\"a b\""));
+    assert_eq!(good.length, 5);
     assert_eq!(good.title.as_deref(), Some("Atitle"));
     assert_eq!(good.language.as_deref(), Some("en"));
     assert!(good.styles.is_empty());
@@ -473,6 +477,17 @@ fn malformed_content_and_resource_replies_are_refused() {
         ("doctype", "<!DOCTYPE p><p>z</p>", 1),
         ("nested", "<p <b>>z</p>", 1),
         ("upper", "<P>z</P>", 1),
+        ("mixed-name", "<pX>x</pX>", 1),
+        ("empty-value", "<p title=>x</p>", 1),
+        ("bare-attribute", "<p hidden>x</p>", 1),
+        ("single-quotes", "<p title='a'>x</p>", 1),
+        ("return", "<p>x\ry</p>", 2),
+        ("control", "<p>a\u{1b}b</p>", 2),
+        ("raw-ampersand", "<p>a & b</p>", 5),
+        ("value-entity", "<p title=\"&nbsp;\">x</p>", 1),
+        ("value-angle", "<p title=\"a>b\">x</p>", 1),
+        ("end-attribute", "<p>x</p title=\"a\">", 1),
+        ("unfinished", "<p>x</p><", 1),
     ] {
         match fake(name, &content(markup, length)).read_content(0) {
             Err(ReaderError::HelperFailed { .. }) => {}

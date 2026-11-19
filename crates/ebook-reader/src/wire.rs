@@ -37,37 +37,73 @@ pub struct WireResource {
 const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// The UTF-16 length of the text in markup the helper wrote, or `None` when
-/// the markup is not in the helper's form. That form makes this exact without
-/// parsing: `<` only starts a tag, which is `<name`, `</name` with a
-/// lower-case name, `>` only ends one, and the only entities in text are
-/// `&amp;`, `&lt;` and `&gt;`. Comments, CDATA sections, processing
-/// instructions and declarations are not in that form, so they are refused
-/// and cannot hide text from the count.
+/// the markup is not exactly in the writer's form. The form is small enough
+/// to check without an XML parser:
+///
+/// - text, with `&amp;`, `&lt;` and `&gt;` as its only entities and no `>`;
+/// - `<name attr="value" ...>`, the same ending in `/>`, and `</name>`, with
+///   names in lower-case letters and digits, attribute names also with `-`,
+///   one space before each attribute and values in double quotes;
+/// - in a value, no `<`, `>` or `"`, and the entities above plus `&quot;`;
+/// - no control character but tab and line feed in text, and none in a value.
+///
+/// Comments, CDATA sections, processing instructions, declarations, carriage
+/// returns and character references are outside it. Nesting is not checked:
+/// the view's XML parser refuses markup that is not balanced.
 pub fn markup_text_units(markup: &str) -> Option<u32> {
+    fn plain(c: char) -> bool {
+        !c.is_control() && !matches!(c, '\u{feff}' | '\u{fffe}' | '\u{ffff}')
+    }
+    fn entity<'a>(rest: &'a str, allowed: &[&str]) -> Option<&'a str> {
+        let found = allowed.iter().find(|e| rest.starts_with(**e))?;
+        Some(&rest[found.len()..])
+    }
+    fn name(rest: &str, dash: bool) -> Option<&str> {
+        let end = rest
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || (dash && c == '-')))
+            .unwrap_or(rest.len());
+        (end > 0 && rest.as_bytes()[0].is_ascii_lowercase()).then(|| &rest[end..])
+    }
+    /// The rest after one tag that starts at `<`.
+    fn tag(rest: &str) -> Option<&str> {
+        let rest = &rest[1..];
+        if let Some(end) = rest.strip_prefix('/') {
+            return name(end, false)?.strip_prefix('>');
+        }
+        let mut rest = name(rest, false)?;
+        loop {
+            if let Some(done) = rest.strip_prefix("/>").or_else(|| rest.strip_prefix('>')) {
+                return Some(done);
+            }
+            rest = name(rest.strip_prefix(' ')?, true)?.strip_prefix("=\"")?;
+            loop {
+                let c = rest.chars().next()?;
+                rest = match c {
+                    '"' => break,
+                    '<' | '>' => return None,
+                    '&' => entity(rest, &["&amp;", "&lt;", "&gt;", "&quot;"])?,
+                    c if plain(c) => &rest[c.len_utf8()..],
+                    _ => return None,
+                };
+            }
+            rest = &rest[1..];
+        }
+    }
     let mut units = 0u32;
     let mut rest = markup;
     while let Some(c) = rest.chars().next() {
         match c {
-            '<' => {
-                let tag = &rest[1..rest.find('>')?];
-                let name = tag.strip_prefix('/').unwrap_or(tag);
-                if !name.starts_with(|c: char| c.is_ascii_lowercase()) || tag.contains('<') {
-                    return None;
-                }
-                rest = &rest[tag.len() + 2..];
-            }
+            '<' => rest = tag(rest)?,
             '>' => return None,
             '&' => {
-                let entity = ["&amp;", "&lt;", "&gt;"]
-                    .into_iter()
-                    .find(|e| rest.starts_with(e))?;
+                rest = entity(rest, &["&amp;", "&lt;", "&gt;"])?;
                 units = units.checked_add(1)?;
-                rest = &rest[entity.len()..];
             }
-            c => {
+            c if plain(c) || c == '\t' || c == '\n' => {
                 units = units.checked_add(c.len_utf16() as u32)?;
                 rest = &rest[c.len_utf8()..];
             }
+            _ => return None,
         }
     }
     Some(units)

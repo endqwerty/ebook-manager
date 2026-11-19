@@ -107,9 +107,11 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   attributes (C1 and C2 in the spec). It holds no script, no handler
   attribute, no style, no frame, form control or embedded object, and no
   address other than `/c/<chapter>#<anchor>`, `/r/<id>` and the inert
-  `data-external`. The host does not parse it again, but it counts the text
-  and refuses a reply whose `length` is not that count or whose markup holds
-  a comment, CDATA section, processing instruction or declaration. It is still the book's
+  `data-external`. The host does not parse it again, but it checks
+  that every tag, attribute and entity is written the way the helper writes
+  them, counts the text, and refuses a reply that fails either. It does not
+  check that tags are balanced. An `id` or a link's anchor longer than 256
+  characters is left out. It is still the book's
   content, so show it only where no script runs and nothing else loads, and
   serve it as `application/xhtml+xml` so no parser repairs it into something
   else. `styles` is always empty for now.

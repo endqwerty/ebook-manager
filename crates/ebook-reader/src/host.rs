@@ -507,10 +507,10 @@ impl Book {
                 content.index = index;
                 // No style sheet is served yet, so none is named.
                 content.styles.clear();
-                scrub_text(&mut content.markup);
-                // The markup is not parsed here, but its text is counted,
-                // because every saved place and search result rests on the
-                // length being the text's own.
+                // The markup is checked to be in the writer's exact form and
+                // its text is counted, because every saved place and search
+                // result rests on the length being the text's own. Nothing
+                // is repaired: a reply that is not in that form is refused.
                 if markup_text_units(&content.markup) != Some(content.length) {
                     return Err(ReaderError::HelperFailed {
                         detail: "inconsistent reply".into(),

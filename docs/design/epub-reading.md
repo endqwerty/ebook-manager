@@ -355,14 +355,16 @@ For example, a chapter linked as the second reading-order item holds
 and the helper returns `<p>See <a href="/c/1#n1">note</a> and pixel</p>`, a
 length of 18 and the remote-references warning.
 
-**Reply checks.** `host.rs` refuses a `ChapterContent` whose `length` is not
-the UTF-16 length of the text in its `markup`, which it counts by skipping
-tags and the three text entities. Markup with anything else in it, such as a
-comment or a CDATA section, is refused, so nothing can hide text from the
-count. It renumbers `index`, brings a chapter
-`size` down to the chapter limit, and strips control characters from `title`
-and `language`. It does not parse `markup` further. The view is the check on
-markup. It refuses a
+**Reply checks.** `host.rs` refuses a `ChapterContent` whose `markup` is not
+in the sanitiser's exact form, or whose `length` is not the UTF-16 length of
+the text in it. The form is text with the three entities, and tags written as
+`<name attr="value">`, the same ending in `/>`, and `</name>`.
+`markup_text_units` in `wire.rs` checks the form and counts in one pass. A
+comment, a CDATA section, a character reference or a carriage return is
+outside the form, so nothing can hide text from the count. The host does not
+check that tags are balanced. The view's XML parser does. The host also
+renumbers `index`, brings a chapter `size` down to the chapter limit, and
+strips control characters from `title` and `language`. It refuses a
 `Resource` over 32 MiB or whose first bytes are not its `kind`'s signature.
 
 **Resources.** `read_resource` unpacks one manifest item through
