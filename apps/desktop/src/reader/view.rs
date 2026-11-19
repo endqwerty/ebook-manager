@@ -524,56 +524,70 @@ impl View {
     }
 
     /// Turn `by` pages. `done` hears whether the page moved; at either edge
-    /// of the chapter it did not.
+    /// of the chapter it did not. A turn that moved has sent `Event::Place`
+    /// with the new place before `done` is called: the page's answer to the
+    /// turn carries it, so the two cannot arrive apart.
     pub fn turn(&self, by: i32, animate: bool, done: impl FnOnce(bool) + 'static) {
-        let arguments = glib::VariantDict::new(None);
-        arguments.insert("by", by);
-        // A boolean is not accepted as an argument, so it goes as a number.
-        arguments.insert("smooth", i32::from(animate));
-        self.call(
-            "return __reader.turn(by, smooth === 1)",
-            arguments,
-            move |value| done(value.is_some_and(|v| v.to_boolean())),
-        );
-    }
-
-    /// The place showing now, as (chapter, offset, page, pages), asked of
-    /// the page itself, or `None` when no chapter has landed or the page does
-    /// not answer. It is answered after any turn already asked for, so it is the
-    /// place to save when the reader leaves.
-    pub fn current(&self, done: impl FnOnce(Option<(u32, u32, u32, u32)>) + 'static) {
-        let Some((number, chapter, length)) = self
+        let Some(number) = self
             .0
             .load
             .borrow()
             .as_ref()
             .filter(|l| l.ready)
-            .map(|l| (l.number, l.chapter, l.length))
+            .map(|l| l.number)
         else {
-            return done(None);
+            return done(false);
         };
+        let arguments = glib::VariantDict::new(None);
+        arguments.insert("by", by);
+        // A boolean is not accepted as an argument, so it goes as a number.
+        arguments.insert("smooth", i32::from(animate));
         let weak = Rc::downgrade(&self.0);
         self.call(
-            "return __reader.where()",
-            glib::VariantDict::new(None),
+            "return __reader.turn(by, smooth === 1)",
+            arguments,
             move |value| {
-                // Checked like any message from the page.
-                let still = weak
-                    .upgrade()
-                    .is_some_and(|i| i.load.borrow().as_ref().is_some_and(|l| l.number == number));
-                let parsed = value.filter(|v| v.is_string() && still).and_then(|v| {
+                // The answer is "" at a chapter's edge, or the new place as
+                // "offset,page,pages". It is checked like any message.
+                let place = value.filter(|v| v.is_string()).and_then(|v| {
                     let text = v.to_str();
                     let mut parts = text.split(',').map(|p| p.parse::<u32>().ok());
                     let place = (parts.next()??, parts.next()??, parts.next()??);
-                    (parts.next().is_none()
-                        && place.0 <= length
-                        && place.2 > 0
-                        && place.1 < place.2)
-                        .then_some((chapter, place.0, place.1, place.2))
+                    parts.next().is_none().then_some(place)
                 });
-                done(parsed)
+                let moved = match (place, weak.upgrade()) {
+                    (Some((offset, page, pages)), Some(inner)) => {
+                        View(inner).place(number, offset, page, pages)
+                    }
+                    _ => false,
+                };
+                done(moved)
             },
         );
+    }
+
+    /// Tell the shell a place the page reported for load `number`, if it is
+    /// the chapter showing and the place is inside it.
+    fn place(&self, number: u32, offset: u32, page: u32, pages: u32) -> bool {
+        let chapter = match &*self.0.load.borrow() {
+            Some(load)
+                if load.ready
+                    && load.number == number
+                    && pages > 0
+                    && page < pages
+                    && offset <= load.length =>
+            {
+                load.chapter
+            }
+            _ => return false,
+        };
+        (self.0.on_event)(Event::Place {
+            chapter,
+            offset,
+            page,
+            pages,
+        });
+        true
     }
 
     /// Set CSS custom properties on the page, keeping the reading place.
@@ -730,15 +744,8 @@ impl View {
                 else {
                     return;
                 };
-                if pages == 0 || page >= pages || offset > length {
-                    return;
-                }
-                (self.0.on_event)(Event::Place {
-                    chapter,
-                    offset,
-                    page,
-                    pages,
-                });
+                let _ = (chapter, length);
+                self.place(current, offset, page, pages);
             }
             "jump" if ready => {
                 if let Some((chapter, anchor)) = text("href").as_deref().and_then(parse_jump) {

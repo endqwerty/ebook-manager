@@ -182,14 +182,12 @@ things the design now holds to.
   it. Every view therefore shares one web context, and the filter is compiled
   once per process. `two_views_share_one_process_without_a_crash` guards it.
 - A web process left to shut itself down when its view is destroyed now and
-  then aborts, under load, in a timer's destructor. The reader ends the
-  process outright before the view goes: on its own close, when its window
-  goes off screen, when the window it was opened from closes, and when the
-  application quits. On the last two it first writes the last place and
-  waits up to two seconds for the library to have it, because the process
-  may end at once. WebKit
-  ends a running process with a kill signal, which leaves no core dump, and
-  cancels one that is still starting.
+  then aborts, under load, in a timer's destructor: about once in twelve
+  whole-suite test runs before the fix, and not in the runs since. The
+  reader ends the process outright as part of leaving. WebKit ends a running
+  process with a kill signal, which leaves no core dump, and cancels one
+  that is still starting. This makes the abort unreachable from the reader.
+  It does not prove it absent.
 - WebKit's memory limit ends a web process only while that process answers.
   See [The bounds on a chapter](#the-bounds-on-a-chapter).
 
@@ -210,6 +208,27 @@ proxy setting is then the only thing between a taken-over web process and the
 network and nothing proves every request WebKit can make honours it. That is
 [its own issue](https://github.com/endqwerty/ebook-manager/issues/102),
 since it changes where the reader's window lives.
+
+### The ways the application ends
+
+With a reader open, and what each does to the place and to the page's
+process.
+
+| Way | Place | Page's process |
+|---|---|---|
+| The reader's **Back to library** or its close button | Saved by leaving | Ended by leaving |
+| The library window is asked to close | Nothing happens: the reader is modal, so the request is not delivered while it is open | Keeps running |
+| The library window is destroyed without being asked | Saved by leaving, from the parent's hook | Ended by leaving |
+| The application quits, as when the session ends | Saved by leaving, from the application's shutdown | Ended by leaving |
+| SIGTERM, SIGINT or SIGKILL to the application | Not saved after the last place held | Gone with the application. No record of its own. |
+| The display goes away | Not saved after the last place held | Gone with the application. No record of its own. |
+| The application itself aborts | Not saved after the last place held | Gone with the application. No record of its own; the application's own crash is recorded. |
+
+The last three rows are one trial each, made by hand with
+`smoke.py --ending`, a reader open on a real chapter, and the core-dump
+count read before and 35 seconds after. In each the web process went with
+the application and left no record of its own. They show what happens, not
+how often.
 
 ## Plan
 
@@ -612,15 +631,27 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   its page count. The shell opens a
   chapter on its first page by asking for that, and not for offset 0, so a
   chapter that begins with a picture begins there.
-- **On leaving,** the shell asks the page where it is before it saves. The
-  page answers after any turn already asked for, so a turn made the instant
-  before closing is the place saved. The page first goes back to the held
-  place if a reflow is still waiting for its frame, so a resize just before
-  closing is not read at the old scroll position. The answer names the
-  chapter that has landed in the view. A page that does not answer within a
-  second, or a chapter still loading, is not waited for, and the last
-  reported place is saved. From the moment the reader is asked to close,
-  nothing else is saved: a place that arrives later is dropped.
+- **The place the shell holds is always current.** Every message from the
+  page that moves the reader carries the new place, and the shell takes it
+  in the step that handles the message. The moves are: a turn, whose answer
+  is the new place; a chapter landing where it was asked to, at its start,
+  an offset, an anchor or its end, which is how a jump from a link or the
+  chapter list arrives; and, in scrolling, a scroll that has settled. A
+  reflow from a new window size or a setting is not a move. It reports new
+  page numbers for the line under the page and the same place to save, so a
+  resize saves nothing new.
+- **Leaving** is one thing, whoever asks: save the place the shell holds,
+  wait up to two seconds for the library to have it, and end the page's
+  process. The reader's own close does it, and so do its window going off
+  screen, the window it was opened from closing, and the application
+  quitting. Nothing is asked of the page, so leaving cannot wait on it or
+  race it. Leaving twice does nothing the second time.
+- **What is not saved.** A move whose message has not reached the shell when
+  the process ends: at most the last move, a few milliseconds old. And
+  anything after the last place the shell held, when the application is
+  ended by a signal or a crash, which run no code of the reader's. The
+  place is also saved a third of a second after the last move, so in those
+  cases the loss is the moves of that last third of a second.
 - **To restore,** the script turns the offset into a `Range`, finds its
   column, and shows that page. The same text comes back after the font or the
   window changes. Its line on the page can differ.

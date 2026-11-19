@@ -1023,69 +1023,77 @@ fn a_style_set_during_a_load_applies() -> Outcome {
     Ok(())
 }
 
-/// What the reader asks the page as it closes: the place showing now,
-/// after any turn already asked for and any reflow still waiting.
-fn the_page_says_where_it_is_on_leaving() -> Outcome {
-    let source = Rc::new(Chapters {
-        markup: HashMap::from([(3, long_chapter())]),
-        ..Chapters::default()
+/// Every move tells the shell its place in the step that reports the move,
+/// and a reflow changes the page and not the place to save.
+fn a_move_carries_its_place_and_a_reflow_does_not_move_it() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    let (_, landed, page, _) = stage.open(0, Landing::Offset(9000))?;
+    // A turn: the place has reached the shell by the time the turn answers.
+    stage.events.borrow_mut().clear();
+    let answered = Rc::new(RefCell::new(None));
+    let slot = answered.clone();
+    let seen = stage.events.clone();
+    stage.view.turn(1, false, move |moved| {
+        slot.replace(Some((moved, seen.borrow().last().cloned())));
     });
-    let stage = Stage::new(source, |_| {})?;
-    let current = |stage: &Stage| -> Result<Option<(u32, u32, u32, u32)>, Failed> {
-        let out = Rc::new(RefCell::new(None));
-        let slot = out.clone();
-        stage.view.current(move |now| {
-            slot.replace(Some(now));
-        });
-        check!(
-            spin(|| out.borrow().is_some(), Duration::from_secs(20)),
-            "the page never said where it is"
-        );
-        Ok(out.take().unwrap())
-    };
-    // Nothing has landed: there is nothing to say.
     check!(
-        current(&stage)?.is_none(),
-        "a view with no chapter named a place"
+        spin(|| answered.borrow().is_some(), Duration::from_secs(20)),
+        "no answer to a turn"
     );
-    stage.open(3, Landing::Offset(9000))?;
-    let (held, page, pages) = stage.last_place().unwrap();
-    check!(
-        current(&stage)? == Some((3, held, page, pages)),
-        "the page named {:?}, not {held} on {page}",
-        current(&stage)?
-    );
-    // A turn asked for and not yet answered is in the answer.
-    stage.view.turn(1, false, |_| {});
-    let Some((chapter, after, turned, _)) = current(&stage)? else {
-        return Err("no place after a turn".into());
+    let (moved, place) = answered.take().unwrap();
+    let Some(Event::Place {
+        offset: turned,
+        page: now,
+        ..
+    }) = place
+    else {
+        return Err(format!("the turn answered {moved} with no place before it: {place:?}").into());
     };
     check!(
-        chapter == 3 && turned == page + 1 && after > held,
-        "after a turn: page {turned}, offset {after}"
+        moved && now == page + 1 && turned > landed,
+        "turned to page {now} at {turned}"
     );
-    // A resize whose reflow has not happened yet does not move the place.
-    stage.window.set_default_size(520, 640);
-    let waited = Instant::now();
-    let mut narrowed = None;
-    while waited.elapsed() < Duration::from_secs(5) {
-        narrowed = current(&stage)?;
-        if stage
-            .app("return innerWidth")?
-            .parse::<f64>()
-            .unwrap_or(900.0)
-            < 700.0
-        {
-            narrowed = current(&stage)?;
-            break;
-        }
-    }
-    let Some((_, offset, _, _)) = narrowed else {
-        return Err("no place after a resize".into());
-    };
+    // A turn at the edge moves nothing and tells nothing.
+    stage.open(0, Landing::End)?;
+    stage.events.borrow_mut().clear();
+    check!(!stage.turn(1)?, "a turn past the end moved");
     check!(
-        offset <= after && after - offset < 3000,
-        "a resize moved the place from {after} to {offset}"
+        stage.events.borrow().is_empty(),
+        "an edge sent {:?}",
+        stage.events.borrow()
+    );
+    // A reflow, from a new size of type or of window, reports new pages and
+    // the same place to save.
+    let (_, held, page, pages) = stage.open(0, Landing::Offset(turned))?;
+    stage.events.borrow_mut().clear();
+    stage.view.set_style(&[("--size", "1.6")]);
+    stage.wait("place after a font change", |e| {
+        matches!(e, Event::Place { .. })
+    })?;
+    stage.window.set_default_size(560, 640);
+    pause(Duration::from_millis(800));
+    let places: Vec<(u32, u32, u32)> = stage
+        .events
+        .borrow()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Place {
+                offset,
+                page,
+                pages,
+                ..
+            } => Some((*offset, *page, *pages)),
+            _ => None,
+        })
+        .collect();
+    check!(
+        places.iter().all(|p| p.0 == held),
+        "a reflow changed the place to save from {held}: {places:?}"
+    );
+    let last = places.last().copied().unwrap_or((held, page, pages));
+    check!(
+        last.2 > pages && last.1 > page,
+        "the reflow did not repaginate: {last:?}, was {page} of {pages}"
     );
     Ok(())
 }
@@ -1356,8 +1364,8 @@ const TESTS: &[Test] = &[
         pages_without_text_keep_their_place,
     ),
     (
-        "the_page_says_where_it_is_on_leaving",
-        the_page_says_where_it_is_on_leaving,
+        "a_move_carries_its_place_and_a_reflow_does_not_move_it",
+        a_move_carries_its_place_and_a_reflow_does_not_move_it,
     ),
     (
         "a_late_error_does_not_fail_a_newer_load",

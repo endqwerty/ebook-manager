@@ -20,7 +20,7 @@ view::View::open(
 view.load(chapter, Landing::Start);       // or Landing::Offset(n), Landing::Anchor(..), Landing::End
 view.turn(1, false, |moved| { /* false at the chapter's edge */ });
 view.set_style(&[("--page", "#2b2b2e")]);   // now, and for chapters opened later
-view.current(|place| { /* Some((chapter, offset, page, pages)) after any turn already asked for */ });
+view.shut();                               // before the window that holds it goes
 ```
 
 A `Source` gives the view a `Document` (the children of an XHTML `body`) and
@@ -65,6 +65,13 @@ so [the view tests](../../tests/view.rs) include it directly.
   text-less first or last page is held as that end and survives a reflow,
   and one in the middle keeps its number while the page count is unchanged.
   No `Event::Place` is sent before the landing `load` asked for.
+- **A move and its place arrive together.** A turn that moved has sent
+  `Event::Place` before its `done` is called, because the page's answer to
+  the turn is the place. A landing and a settled scroll send it as their own
+  message. A reflow sends `Event::Place` with new page numbers and the same
+  offset as before, so a caller that saves the offset saves nothing new on a
+  resize. A caller that keeps the last `Event::Place` therefore always has
+  the place of the last move that reached it, and never needs to ask.
   `Landing::Start` is the first page whatever is on it.
 - **A chapter cannot run for ever.** A load that takes longer than
   `Config::watchdog` (15 seconds) ends the web process. So does each call

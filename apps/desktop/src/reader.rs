@@ -107,19 +107,19 @@ fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
                 .join("content-filters"),
         );
         let (ready, built) = async_channel::bounded(1);
-        let (events, incoming) = async_channel::unbounded();
-        // The view holds the sending end, so the loop below would outlive
-        // the window and keep the view and its web process with it. The
-        // window going off screen for good ends the loop.
-        let closing = incoming.clone();
-        w.connect_unrealize(move |_| {
-            closing.close();
-        });
+        // The view tells the reader what the page did in the same step the
+        // page's message is handled, so the place the reader holds is never
+        // behind a message that has arrived.
+        let hears: Rc<RefCell<std::rc::Weak<Reading>>> = Rc::default();
+        let tells = hears.clone();
         view::View::open(
             config,
             source,
             move |event| {
-                let _ = events.send_blocking(event);
+                let reading = tells.borrow().upgrade();
+                if let Some(reading) = reading {
+                    reading.event(event);
+                }
             },
             move |view| {
                 let _ = ready.send_blocking(view);
@@ -139,14 +139,8 @@ fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
         layout.remove(&status);
         inset(&status, 0);
         let reading = Reading::build(&w, &layout, status, view, book, facts, b, store);
+        hears.replace(Rc::downgrade(&reading));
         reading.load(chapter, landing);
-        // Nothing below may keep the window alive: a window this future held
-        // would never be let go, and nor would the view inside it.
-        drop(layout);
-        drop(w);
-        while let Ok(event) = incoming.recv().await {
-            reading.event(event);
-        }
     });
 }
 
@@ -261,10 +255,9 @@ struct Reading {
     /// The last place a chapter reported, for saving. A chapter that is
     /// still loading, or fails, does not lose it.
     confirmed: Cell<Option<Place>>,
-    /// The window has been asked to close and is saving its last place.
-    closing: Cell<bool>,
-    /// The page's process has been ended because the app is going.
-    ended: Cell<bool>,
+    /// The reader has left: its place is saved and its page is ended.
+    gone: Cell<bool>,
+    /// The timer that saves the place once turning settles.
     pending_save: Cell<Option<glib::SourceId>>,
     /// The window's own colours, replaced when the appearance changes.
     colours: gtk::CssProvider,
@@ -355,8 +348,7 @@ impl Reading {
             loading: Cell::new(None),
             place: Cell::new(None),
             confirmed: Cell::new(None),
-            closing: Cell::new(false),
-            ended: Cell::new(false),
+            gone: Cell::new(false),
             pending_save: Cell::new(None),
             colours,
         });
@@ -395,7 +387,7 @@ impl Reading {
         let weak = Rc::downgrade(&reading);
         w.connect_unrealize(move |_| {
             if let Some(r) = weak.upgrade() {
-                r.leave();
+                let _ = r.leave();
             }
         });
         // The window the reader was opened from can close first, and can do
@@ -407,14 +399,14 @@ impl Reading {
             let weak = Rc::downgrade(&reading);
             parent.connect_close_request(move |_| {
                 if let Some(r) = weak.upgrade() {
-                    r.leave();
+                    let _ = r.leave();
                 }
                 glib::Propagation::Proceed
             });
             let weak = Rc::downgrade(&reading);
             parent.connect_unrealize(move |_| {
                 if let Some(r) = weak.upgrade() {
-                    r.leave();
+                    let _ = r.leave();
                 }
             });
         }
@@ -424,71 +416,20 @@ impl Reading {
             let weak = Rc::downgrade(&reading);
             app.connect_shutdown(move |_| {
                 if let Some(r) = weak.upgrade() {
-                    r.leave();
+                    let _ = r.leave();
                 }
             });
         }
         let r = reading.clone();
         w.connect_close_request(move |w| {
-            // One close at a time, and from here nothing but this handler
-            // saves: a place that arrives while the last save is being
-            // written must not be saved after it.
-            if r.closing.replace(true) {
-                return glib::Propagation::Stop;
+            // Leaving is the same whoever asks: save the place the reader
+            // holds, wait for the library to have it, end the page.
+            if let Err(e) = r.leave()
+                && let Some(parent) = w.transient_for()
+            {
+                position_error(&parent, &e);
             }
-            if let Some(timer) = r.pending_save.take() {
-                timer.remove();
-            }
-            let w = w.clone();
-            let r = r.clone();
-            w.set_sensitive(false);
-            glib::spawn_future_local(async move {
-                // A turn made a moment ago may not have reported its place
-                // yet. Ask the page, which answers after that turn. A page
-                // that does not answer within a second is not waited for.
-                let (asked, answer) = async_channel::bounded(1);
-                r.view.current(move |now| {
-                    let _ = asked.send_blocking(now);
-                });
-                let now =
-                    glib::future_with_timeout(std::time::Duration::from_secs(1), answer.recv())
-                        .await
-                        .ok()
-                        .and_then(Result::ok)
-                        .flatten();
-                // The answer names its own chapter: the one that has landed
-                // in the view, whether or not its first place has reached
-                // the shell yet. No answer means a chapter still loading, or
-                // a page that is stuck, and the last confirmed place stands.
-                if let Some((chapter, offset, page, pages)) = now {
-                    r.confirmed.set(Some(Place {
-                        chapter,
-                        offset,
-                        page,
-                        pages,
-                    }));
-                }
-                // The page has given its last answer. Its process ends here,
-                // before the window that holds its view is destroyed.
-                r.view.shut();
-                let Some(position) = r.position() else {
-                    w.destroy();
-                    return;
-                };
-                let result = r.store.save_position(r.model.id.clone(), position).await;
-                w.set_sensitive(true);
-                match result {
-                    Ok(()) => w.destroy(),
-                    Err(e) => {
-                        let parent = w.transient_for();
-                        w.destroy();
-                        if let Some(parent) = parent {
-                            position_error(&parent, &e);
-                        }
-                    }
-                }
-            });
-            glib::Propagation::Stop
+            glib::Propagation::Proceed
         });
         reading
     }
@@ -528,9 +469,9 @@ impl Reading {
     }
 
     fn event(self: &Rc<Self>, event: Event) {
-        // A closing reader has taken its last place. Nothing that arrives
-        // after that changes what is saved or starts something new.
-        if self.closing.get() {
+        // A reader that has left has saved its place and ended its page.
+        // Nothing that arrives after that changes anything.
+        if self.gone.get() {
             return;
         }
         match event {
@@ -705,7 +646,7 @@ impl Reading {
             };
             // A page ended while a turn was unanswered says it did not
             // move. That is not the chapter's edge.
-            if reading.closing.get() || reading.ended.get() {
+            if reading.gone.get() {
                 return;
             }
             if moved
@@ -773,43 +714,49 @@ impl Reading {
         self.pending_save.set(Some(timer));
     }
 
-    /// The reader is going without its own close: the window it was opened
-    /// from is closing, or the application is quitting. Write the last place
-    /// and wait for it, because the process may end as soon as this
-    /// returns, then end the page's process before anything can leave it to
-    /// shut itself down.
-    fn leave(&self) {
-        self.flush();
-        // A turn left unanswered from here on is not a chapter's edge.
-        self.ended.set(true);
+    /// Leave the reader. Every way of leaving does this one thing, whether
+    /// it is the reader's own close, its window going off screen, the window
+    /// it was opened from closing, or the application quitting: save the
+    /// place the reader holds, wait for the library to have it, because the
+    /// process may end as soon as this returns, and end the page's process
+    /// before anything can leave it to shut itself down. Leaving twice does
+    /// nothing the second time.
+    fn leave(&self) -> Result<()> {
+        if self.gone.replace(true) {
+            return Ok(());
+        }
+        let saved = self.flush();
         self.view.shut();
+        saved
     }
 
     /// Write the last confirmed place now, and wait until the library has
     /// it or two seconds have passed. The library's thread takes its jobs in
     /// order, so every save made before this one is written too. Saving a
     /// place that is already the saved one writes nothing.
-    fn flush(&self) {
-        // The reader's own close saves for itself.
-        if self.closing.get() {
-            return;
-        }
+    fn flush(&self) -> Result<()> {
         if let Some(timer) = self.pending_save.take() {
             timer.remove();
         }
         let Some(position) = self.position() else {
-            return;
+            return Ok(());
         };
         let save = self.store.save_position(self.model.id.clone(), position);
         let mut save = std::pin::pin!(save);
-        // This runs inside a signal handler, where the main loop cannot be
-        // waited on. The save is answered by the library's own thread, so
+        // This can run inside a signal handler, where the main loop cannot
+        // be waited on. The save is answered by the library's own thread, so
         // asking again until it has answered is enough.
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         let limit = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::future::Future::poll(save.as_mut(), &mut context).is_pending()
-            && std::time::Instant::now() < limit
-        {
+        loop {
+            if let std::task::Poll::Ready(result) =
+                std::future::Future::poll(save.as_mut(), &mut context)
+            {
+                return result;
+            }
+            if std::time::Instant::now() >= limit {
+                anyhow::bail!("The library did not answer in time");
+            }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }

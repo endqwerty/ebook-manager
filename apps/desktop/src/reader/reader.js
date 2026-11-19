@@ -140,15 +140,22 @@
 	// text after it, which is all an offset can say.
 	// `chosen` is "end" when the reader asked for the chapter's end, which
 	// decides it on a one-page chapter where both ends are the same page.
-	const report = (chosen) => {
-		if (!ready || !landed) return;
-		const offset = place();
+	//
+	// The offset reported is always the held place's: the one a turn or a
+	// jump chose. A reflow changes the page count and the page number, and
+	// not the place to save, so a resize saves nothing new.
+	const settle_place = (chosen) => {
 		if (chosen) {
+			const offset = place();
 			const last = page() === pages() - 1;
 			const edge = !textless ? null : last && chosen === "end" ? "end" : page() === 0 ? "start" : last ? "end" : null;
 			held = { offset, edge, textless, page: page(), pages: pages() };
 		}
-		post({ kind: "place", load, offset, page: page(), pages: pages() });
+		return { offset: held.offset, page: page(), pages: pages() };
+	};
+	const report = (chosen) => {
+		if (!ready || !landed) return;
+		post({ kind: "place", load, ...settle_place(chosen) });
 	};
 
 	// Show the held place again after the layout changed.
@@ -196,11 +203,13 @@
 		},
 		// Turn by `by` pages. False at either edge of the chapter.
 		turn(by, smooth) {
+			// The answer is the new place, so the shell learns of the turn
+			// and where it led in one step. "" means the chapter's edge.
 			const next = page() + by;
-			if (next < 0 || next >= pages()) return false;
+			if (!ready || !landed || next < 0 || next >= pages()) return "";
 			show(next, smooth);
-			report(true);
-			return true;
+			const now = settle_place(true);
+			return [now.offset, now.page, now.pages].join(",");
 		},
 		// Set custom properties with no reflow handling, before a landing.
 		assign(properties) {
@@ -222,16 +231,6 @@
 			return at ? at[0].data.charAt(at[1]) : "";
 		},
 		length: () => length,
-		// The place showing now, as "offset,page,pages", or "" before the
-		// landing. A turn asked for earlier has happened by the time this
-		// answers, because calls are answered in the order they were made.
-		where: () => {
-			if (!ready || !landed) return "";
-			// A reflow still waiting for its frame would be sampled at the
-			// old scroll position. Go back to the held place first.
-			if (reflowing) restore();
-			return [place(), page(), pages()].join(",");
-		},
 	};
 	Object.defineProperty(window, "__reader", { value: Object.freeze(api) });
 

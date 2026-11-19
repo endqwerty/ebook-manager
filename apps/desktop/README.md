@@ -24,6 +24,8 @@ apps/desktop/tests/private-session.sh cargo nextest run -p ebook-manager --test 
 
 Where `coredumpctl` exists, that test program fails if any core dump was recorded while it ran.
 
+The smoke driver can also end the app one way with a reader open and report what was left: `--ending term`, `int`, `kill`, `abrt` or `display` after the two usual arguments. It is a check made by hand, once per way, when the way the reader ends has changed. It is never run in CI or in a loop, because an ending that crashes something leaves a record the desktop shows its user, and `abrt` always leaves the app's own.
+
 See [desktop behaviour](../../specs/desktop-mvp.md) for the acceptance cases.
 
 ```sh

@@ -688,23 +688,34 @@ def run(binary, evidence, root):
         click("Back to library")
         time.sleep(0.3)
         print("PASS a page turned just before leaving is where the book reopens", flush=True)
-        # Closing the library window under an open reader, an instant after a
-        # turn, still records that turn, and the app ends cleanly.
+        # The reader is modal, so asking the library window to close while it
+        # is open does nothing: both windows stay and the reader still turns.
         click("Read")
         find("Page 5 of", contains=True)
         library = subprocess.check_output(
             ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"], text=True
         ).splitlines()[-1]
+        xd("windowquit", library)
+        time.sleep(1.5)
+        assert proc.poll() is None, "asking the library to close ended the app under the reader"
+        assert web_processes(proc.pid), "the page was ended though nothing closed"
         xd("key", "Right")
+        find("Page 6 of", contains=True)
+        # A window can also be destroyed without being asked. Then the app
+        # ends, and the turn that had reached the reader is where it reopens.
         xd("windowclose", library)
-        assert proc.wait(timeout=10) == 0, proc.returncode
+        proc.wait(timeout=10)
+        assert not web_processes(proc.pid)
         proc = subprocess.Popen([binary], env=env)
         find("Mira Vale")
         click("Read")
         find("Page 6 of", contains=True)
         click("Back to library")
         time.sleep(0.3)
-        print("PASS a page turned just before the library closes is where the book reopens", flush=True)
+        print(
+            "PASS the library cannot be closed under the reader, and when its window is destroyed the last turn is where the book reopens",
+            flush=True,
+        )
         # Closing the reader lets its view go, and the view's web process
         # with it.
         deadline = time.monotonic() + 10
