@@ -285,3 +285,25 @@ fn survey_facts_survive_import() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn reopen_reads_one_journal_file_unless_the_tip_moved() -> Result<()> {
+    let d = tempdir()?;
+    let app = d.path().join("app");
+    let stage = d.path().join("stage");
+    fs::write(&stage, b"book")?;
+    let mut library = Library::open(&app)?;
+    let b = add(&mut library, &stage)?;
+    library.edit(&b.id, "edited", &[])?;
+    drop(library);
+    fs::write(
+        app.join("portable/changes/00000000000000000001.json"),
+        b"broken",
+    )?;
+    let mut library = Library::open(&app)?;
+    assert!(library.refresh().is_err());
+    drop(library);
+    fs::remove_file(app.join("portable/changes/00000000000000000002.json"))?;
+    assert!(Library::open(&app).is_err());
+    Ok(())
+}

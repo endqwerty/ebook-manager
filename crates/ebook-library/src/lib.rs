@@ -1,4 +1,6 @@
 //! Single-device library for stable EPUB inputs already examined by the reader helper.
+mod catalogue;
+mod sortkey;
 use anyhow::{Context, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -230,6 +232,7 @@ fn digest(r: &mut impl Read) -> Result<String> {
 }
 
 pub struct Library {
+    keys: sortkey::Keys,
     db: Connection,
     portable: PathBuf,
     _lock: File,
@@ -270,24 +273,59 @@ impl Library {
         ] {
             check_optional_file(&root.join(name))?;
         }
-        let db = Connection::open(root.join("library.sqlite"))?;
-        db.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA synchronous=FULL;
-            CREATE TABLE IF NOT EXISTS books(id TEXT PRIMARY KEY,data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS positions(id TEXT PRIMARY KEY,data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS sources(path BLOB PRIMARY KEY,id TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,id TEXT UNIQUE NOT NULL,data TEXT NOT NULL,published INTEGER NOT NULL);")?;
+        let db = catalogue::open(&root.join("library.sqlite"))?;
+        let keys = sortkey::Keys::new()?;
         let mut lib = Self {
             db,
+            keys,
             portable,
             _lock: lock,
         };
-        lib.refresh()?;
+        let tx = lib.db.transaction()?;
+        if tx
+            .query_row("SELECT value FROM meta WHERE key='profile'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+            .as_ref()
+            != Some(&lib.keys.profile)
+        {
+            let mut rows = tx.prepare("SELECT data FROM book ORDER BY n")?;
+            for data in rows.query_map([], |r| r.get::<_, String>(0))? {
+                catalogue::project(&tx, &serde_json::from_str(&data?)?, &lib.keys)?;
+            }
+            drop(rows);
+            tx.execute(
+                "INSERT OR REPLACE INTO meta VALUES('profile',?)",
+                [&lib.keys.profile],
+            )?;
+            tx.execute("UPDATE meta SET value=value+1 WHERE key='counter'", [])?;
+        }
+        tx.commit()?;
+        let seq: u64 = lib
+            .db
+            .query_row("SELECT value FROM meta WHERE key='tip'", [], |r| r.get(0))?;
+        let changes = lib.directory("changes")?;
+        let matches = if seq == 0 {
+            true
+        } else {
+            let bytes: String =
+                lib.db
+                    .query_row("SELECT data FROM journal WHERE seq=?", [seq], |r| r.get(0))?;
+            read_entry(&changes.join(format!("{seq:020}.json")))
+                .is_ok_and(|v| v == bytes.as_bytes())
+        };
+        if matches && !changes.join(format!("{:020}.json", seq + 1)).try_exists()? {
+            lib.publish()?;
+        } else {
+            lib.refresh()?;
+        }
         Ok(lib)
     }
     pub fn book(&self, id: &str) -> Result<Book> {
         let data: String = self
             .db
-            .query_row("SELECT data FROM books WHERE id=?", [id], |r| r.get(0))?;
+            .query_row("SELECT data FROM book WHERE id=?", [id], |r| r.get(0))?;
         let b: Book = serde_json::from_str(&data)?;
         b.validate()?;
         Ok(b)
@@ -297,7 +335,7 @@ impl Library {
         let mut out = Vec::new();
         for row in self
             .db
-            .prepare("SELECT data FROM books")?
+            .prepare("SELECT data FROM book")?
             .query_map([], |r| r.get::<_, String>(0))?
         {
             let b: Book = serde_json::from_str(&row?)?;
@@ -362,18 +400,23 @@ impl Library {
             .query_row("SELECT id FROM sources WHERE path=?", [key], |r| r.get(0))
             .optional()?;
         let mut candidates = Vec::new();
-        let mut exact = Vec::new();
-        for b in self.search("")? {
-            if b.sha256 == sha {
-                exact.push(b.clone());
-            }
-            if prev.as_ref() == Some(&b.id)
-                || b.sha256 == sha
-                || (meta.identifier.is_some() && meta.identifier == b.imported.identifier)
-            {
-                candidates.push(b);
-            }
+        for data in self
+            .db
+            .prepare_cached("SELECT data FROM book WHERE sha256=? OR id=? OR identifier=?")?
+            .query_map(params![sha, prev, meta.identifier], |r| {
+                r.get::<_, String>(0)
+            })?
+        {
+            let b: Book = serde_json::from_str(&data?)?;
+            b.validate()?;
+            candidates.push(b);
         }
+        candidates.sort_by_cached_key(|b| (b.title.to_lowercase(), b.id.clone()));
+        let exact: Vec<_> = candidates
+            .iter()
+            .filter(|b| b.sha256 == sha)
+            .cloned()
+            .collect();
         let duplicate = match (&choice, exact.as_slice()) {
             (ImportChoice::Replace(id), _) => exact.iter().find(|b| &b.id == id),
             (_, [b])
@@ -463,6 +506,13 @@ impl Library {
         self.commit(Change::Book(b.clone()), None)?;
         Ok(b)
     }
+    pub fn unsurveyed(&self, limit: u32) -> Result<Vec<Book>> {
+        self.db
+            .prepare("SELECT data FROM book WHERE coalesce(survey_version,0)<1 ORDER BY n LIMIT ?")?
+            .query_map([limit], |r| r.get::<_, String>(0))?
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect()
+    }
     pub fn set_survey(&mut self, id: &str, version_id: &str, facts: SurveyFacts) -> Result<()> {
         let mut book = self.book(id)?;
         if book.version_id == version_id && book.imported.survey.as_ref() != Some(&facts) {
@@ -516,7 +566,7 @@ impl Library {
             change,
         };
         let data = serde_json::to_string(&e)?;
-        append(&tx, &e, &data)?;
+        append(&tx, &e, &data, &self.keys)?;
         if let Some((path, id)) = source {
             tx.execute(
                 "INSERT OR REPLACE INTO sources VALUES(?,?)",
@@ -530,7 +580,7 @@ impl Library {
         let dir = self.directory("changes")?;
         let pending = self
             .db
-            .prepare("SELECT seq,data FROM journal WHERE published=0 ORDER BY seq")?
+            .prepare("SELECT seq,data FROM journal WHERE seq>(SELECT value FROM meta WHERE key='tip') ORDER BY seq")?
             .query_map([], |r| Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (seq, data) in pending {
@@ -548,8 +598,10 @@ impl Library {
                 self.sidecar(&b)?;
             }
             File::open(&dir)?.sync_all()?;
-            self.db
-                .execute("UPDATE journal SET published=1 WHERE seq=?", [seq])?;
+            let tx = self.db.transaction()?;
+            tx.execute("UPDATE journal SET published=1 WHERE seq=?", [seq])?;
+            tx.execute("UPDATE meta SET value=? WHERE key='tip'", [seq])?;
+            tx.commit()?;
         }
         Ok(())
     }
@@ -603,8 +655,12 @@ impl Library {
                 continue;
             }
             let e: Entry = serde_json::from_str(&data)?;
-            append(&tx, &e, &data)?;
+            append(&tx, &e, &data, &self.keys)?;
         }
+        tx.execute(
+            "UPDATE meta SET value=min(value,?) WHERE key='tip'",
+            [published_count],
+        )?;
         tx.execute(
             "UPDATE journal SET published=0 WHERE seq > ?",
             [published_count],
@@ -635,7 +691,7 @@ fn tip(db: &Connection) -> Result<Option<String>> {
         )
         .optional()?)
 }
-fn append(db: &Connection, e: &Entry, data: &str) -> Result<()> {
+fn append(db: &Connection, e: &Entry, data: &str, keys: &sortkey::Keys) -> Result<()> {
     ensure!(
         e.format == 1 && uuid_ok(&e.id) && e.parent == tip(db)?,
         "incompatible journal history"
@@ -644,10 +700,7 @@ fn append(db: &Connection, e: &Entry, data: &str) -> Result<()> {
     match &e.change {
         Change::Book(b) => {
             b.validate()?;
-            db.execute(
-                "INSERT OR REPLACE INTO books VALUES(?,?)",
-                params![b.id, serde_json::to_string(b)?],
-            )?;
+            catalogue::project(db, b, keys)?;
         }
         Change::Position { id, position } => {
             ensure!(
@@ -655,17 +708,22 @@ fn append(db: &Connection, e: &Entry, data: &str) -> Result<()> {
                 "invalid reading fraction"
             );
             let raw: String =
-                db.query_row("SELECT data FROM books WHERE id=?", [id], |r| r.get(0))?;
+                db.query_row("SELECT data FROM book WHERE id=?", [id], |r| r.get(0))?;
             ensure!(
                 serde_json::from_str::<Book>(&raw)?.version_id == position.version_id,
                 "position version mismatch"
             );
+            db.execute(
+                "UPDATE book SET progress=?,last_read=? WHERE id=?",
+                params![position.fraction, position.last_read, id],
+            )?;
             db.execute(
                 "INSERT OR REPLACE INTO positions VALUES(?,?)",
                 params![id, serde_json::to_string(position)?],
             )?;
         }
     }
+    db.execute("UPDATE meta SET value=value+1 WHERE key='counter'", [])?;
     db.execute(
         "INSERT INTO journal(id,data,published) VALUES(?,?,0)",
         params![e.id, data],
