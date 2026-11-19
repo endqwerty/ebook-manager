@@ -53,9 +53,6 @@ fn decode(bytes: &[u8], max_pixels: u64) -> Option<RgbaImage> {
     ) {
         return None;
     }
-    if format == ImageFormat::Jpeg && !jpeg_is_whole(bytes) {
-        return None;
-    }
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
     let mut bounds = image::Limits::default();
     // Room for every allowed pixel at four bytes; a deeper format of the
@@ -67,17 +64,28 @@ fn decode(bytes: &[u8], max_pixels: u64) -> Option<RgbaImage> {
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > max_pixels {
         return None;
     }
+    if format == ImageFormat::Jpeg && !jpeg_is_whole(bytes, w, h) {
+        return None;
+    }
     Some(DynamicImage::from_decoder(decoder).ok()?.into_rgba8())
 }
 
-/// The JPEG decoder repairs a file that stops early and returns a picture
-/// with the missing part filled in, which is not the book's cover. A whole
-/// file has its end-of-image marker after its last start-of-scan marker.
-/// Neither pair of bytes can occur inside the picture data, where a 0xFF is
-/// always followed by a zero.
-fn jpeg_is_whole(bytes: &[u8]) -> bool {
-    let last = |marker: u8| bytes.windows(2).rposition(|w| w == [0xFF, marker]);
-    matches!((last(0xDA), last(0xD9)), (Some(scan), Some(end)) if end > scan)
+/// The lenient JPEG decoder repairs a file that stops early and returns a
+/// picture with the missing part filled in, which is not the book's cover.
+/// So a JPEG is first decoded once by the same decoder in its strict mode,
+/// which refuses data that ends before the picture does, and the result is
+/// thrown away. Bytes after the picture's end are not read and do not matter.
+/// This catches what a decoder can know. A file cut short and then closed
+/// with an end marker is, to any decoder, a finished picture with little
+/// data, and is used with its missing part blank.
+fn jpeg_is_whole(bytes: &[u8], width: u32, height: u32) -> bool {
+    let options = zune_core::options::DecoderOptions::default()
+        .set_strict_mode(true)
+        .set_max_width(width as usize)
+        .set_max_height(height as usize);
+    zune_jpeg::JpegDecoder::new_with_options(zune_core::bytestream::ZCursor::new(bytes), options)
+        .decode()
+        .is_ok()
 }
 
 /// The thumbnail's size: the picture scaled to fit within the maximum with

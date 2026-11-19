@@ -312,7 +312,7 @@ the helper's sandbox.
   word count, and an unknown word count leaves the cover. The count is
   unknown when any linear spine item could not be resolved, was skipped or
   was truncated. A spine item that is a picture adds no words. A picture
-  standing on its own adds none either, and one inside a line of text counts
+  standing on its own adds none either, and one in a block that also holds text counts
   as its text alternative, as it reads. The cover is read first and the text
   takes what remains of the call's 64 MiB unpacking allowance, so a book whose
   cover and text exceed it has an unknown count. A protected book surveys as

@@ -895,6 +895,15 @@ fn unusable_covers_leave_the_word_count() {
         assert_eq!(s.cover, None, "{what}");
         assert_eq!(s.words, Some(3), "{what}");
     }
+    // A whole JPEG is used whatever follows its end, even bytes that look
+    // like the start of another scan.
+    let mut trailed = striped(240, 360, ImageFormat::Jpeg);
+    trailed.extend_from_slice(b"ordinary trailing bytes\xFF\xDA");
+    assert!(
+        survey_with(config(), &with_cover(&trailed, "c.jpg", "image/jpeg", ""))
+            .cover
+            .is_some()
+    );
     // The same picture, intact, is used.
     assert!(
         survey_with(config(), &with_cover(&png, "c.png", "image/png", ""))

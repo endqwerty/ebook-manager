@@ -242,6 +242,8 @@ dependencies = [
  "serde",
  "serde_json",
  "zip",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
