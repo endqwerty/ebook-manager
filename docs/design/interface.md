@@ -51,9 +51,11 @@ Four things, each of which you can measure on a screen.
 | Warmth | A serif for the names of things. Covers drawn as objects with weight. Paper tones in the reader. |
 | Books first | The frame takes its colour from the system. The only strong colour in the window is on the covers and the one prominent action. |
 
-Things the app never draws: wood, leather, cloth or paper textures, a board under
-the books, page curls, gilt, drop caps or ornaments in the interface, and
-book-shaped custom controls. They date the app and fight the platform's materials.
+Things the app never draws: wood, leather, cloth or paper textures, page curls,
+gilt, drop caps or ornaments in the interface, and book-shaped custom controls.
+They date the app and fight the platform's materials. One view, the
+[shelf](interface-views.md#shelf), draws books and their shelf with depth, from
+shade and the platform's own colours and still without textures.
 
 ## Rules for the content layer
 

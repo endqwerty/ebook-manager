@@ -130,9 +130,12 @@ control with its own row background, separators, selection and swipe actions.
 
 ## Shelf
 
-The shelf shows books by their spines, standing in rows. It is the one place the
-app draws a book from the side. It follows the same restraint as a cover: flat
-colour, type and a hairline, with no wood and no texture.
+The shelf shows books by their spines, standing in rows on shelves. It is the one
+view meant to look like the real thing: the books have rounded spines, bands and
+labels, they stand on a board with depth, and a selected book tips out from the
+top as if a finger had hooked it. The realism comes from shape, light and
+shadow. There is still no wood grain, leather or any other texture, so the shelf
+takes the platform's colours and works in light and dark.
 
 | Part | Value |
 |---|---|
@@ -143,11 +146,15 @@ colour, type and a hairline, with no wood and no texture.
 | Title | One line in the serif, semibold, 12 units, laid out by the platform's text system in the title's own direction and then turned a quarter turn clockwise, so a left-to-right title reads from the top of the spine down. It starts 10 from the top. It is truncated with an ellipsis at the end of the title in reading order. A right-to-left title is laid out right to left before the turn, so it too begins at the top. Where the platform has vertical text layout, a Chinese, Japanese or Korean title uses it, with its characters upright and any Latin run turned. Where it has not, the title is turned like any other. |
 | Author | The family name only, at the foot, 10 from the bottom, in the UI font at 10 units, turned the same way. Left out when the spine is under 24 thick, or when the title, the name and 24 between them do not fit the height. The title is truncated only after the author is gone. |
 | Edge | The cover's edge line, inside the spine's outline. |
-| Round | A shade across the spine to suggest its curve: black at 10% on both long edges fading to nothing by a quarter of the thickness. Left out under 20 thick. |
+| Round | A spine is lit from the front and curves away at its sides. Across its thickness: black at 22% at each long edge fading to nothing by 30% of the thickness, and a highlight of white at 10% down the middle fifth. Under 20 thick the highlight is left out. |
+| Head and tail | A shade of black at 12% over the top 6 units and the bottom 6, fading toward the middle, where a spine turns over at its ends. |
+| Bands | Each book has one of three spine styles, chosen by the same hash that picks a binding colour, taken modulo 3. Plain: nothing more. Banded: two rules 1 unit thick across the spine in the type colour at 45%, 8 and 12 from the top, and two more the same distances from the foot. Labelled: the title sits on a label, a block in the type colour with the spine colour as its type, 6 in from each long edge and 6 beyond the title at each end, with corners of 1. |
 | Corners | 1 unit at the top. Square at the foot, where the spine stands. |
-| Gap | 2 between spines. |
-| Line | Each row stands on a hairline in the platform's separator colour, as wide as the content. The row casts the cover's contact shadow onto it and no ambient shadow. |
-| Rows | Spines fill a row from the leading edge and wrap. 28 separates a row's line from the next row's tops. |
+| Gap | 1 between spines, filled with black at 35%, the dark between two books that touch. |
+| Board | Each row stands on a board as wide as the content and 10 thick, in the platform's secondary fill colour. Its top edge has a line 1 unit thick, white at 35% in light appearance and at 10% in dark, where the light catches it. Under the board a shadow 8 units deep fades from black at 14% to nothing in light appearance and from 40% in dark. |
+| Back | Behind the spines, as wide as the content and as tall as they are, the back of the shelf: the platform's secondary fill colour with a shade of black from 10% at the top to nothing halfway down, the shadow of the board above. In dark appearance the shade starts at 30%. |
+| Standing | Where the spines meet the board, a shade 3 units tall across the whole row, black at 25% fading upward. Books do not float. |
+| Rows | Spines fill a row from the leading edge and wrap. 28 separates the foot of one board's shadow from the tops of the next row. |
 
 - The type on a spine is artwork, like the type on a binding, and does not count
   as one of the interface's serif roles.
@@ -157,11 +164,23 @@ colour, type and a hairline, with no wood and no texture.
   Series by series, and the date sorts by year. A new group starts a new row.
   Its name sits above the row at the leading edge in the caption style and
   secondary colour. Any other sort has no groups and the spines run on.
-- Pointer over a spine: it rises 2 units, as a cover does, and a tooltip gives
-  the title and author.
-- Spines never move. Selection and keyboard focus use the collection control's
-  own visuals around the spine, so a row keeps its shape while the reader moves
-  through it or selects a run of books.
+- Pointer over a spine: it tips 4 degrees, the start of the move below, and a
+  tooltip gives the title and author.
+- A selected book tips out from the top. The spine turns 10 degrees about its
+  bottom edge, its top coming toward the reader, drawn in perspective from a
+  distance of 800 units, so the top looks a little wider and nearer while the
+  foot stays on the board. Above the top edge a strip 5 units tall shows the
+  tops of the pages, in `#ece5d6` in light appearance and `#bfb8a9` in dark,
+  with the edge line.
+- A tipped book casts the cover's ambient shadow onto its neighbours and keeps
+  its place. Nothing in the row moves along, so the row holds its shape while
+  the reader moves through it or selects a run of books, each of which tips.
+- The tip is a spring from the platform's standard set, without overshoot. When
+  the system asks for less motion the book is shown tipped with no animation.
+  The tip is a state and not only a movement.
+- Tipping is the shelf's selection visual and replaces the collection control's
+  own. Keyboard focus keeps the control's focus ring, drawn around the spine's
+  untipped outline.
 - The book's cover answers which book a spine is. With the details pane open it
   is there. Without the pane, the focused spine shows a preview above it: the
   cover 96 wide with the title and author under it, in the platform's popover or
@@ -172,8 +191,10 @@ colour, type and a hairline, with no wood and no texture.
   tap opens book details.
 - Reading state is not drawn on a spine. It is in the tooltip, in book details
   and in the accessible name, which reads the title, the author and the state.
-- Under More contrast the round shade, the edge line and the shadow are removed
-  and each spine gets a 1 unit outline in the primary text colour.
+- Under More contrast the round, head and standing shades, the back's shade and
+  the shadows are removed. Each spine gets a 1 unit outline in the primary text
+  colour and the board gets one too. A selected spine still tips and its
+  outline is 2 units in the accent colour.
 - The shelf uses the system's text scale for nothing. Spine type is a fixed
   size, so the shelf is not the view for large text. At a text scale of 1.5 or
   more a place set to Shelf shows List, as Grid does.
@@ -234,6 +255,7 @@ platform's gear or filter symbol after its name.
 | List | `List` | `List` | `ListView` | `GtkListView` with `.navigation-sidebar` left off | `LazyColumn` with list items |
 | Table | `Table` | `Table` on iPad | `ListView` with column headers | `GtkColumnView` | A lazy column with a fixed header row, from 640 wide |
 | Shelf | AppKit collection view with a flow layout | UIKit collection view with a flow layout | `ItemsView` with a flow layout | `GtkFlowBox` for small places, a custom layout over a list model for large ones | `FlowRow` in a lazy column, one row per shelf |
+| Tipping a spine | `rotation3DEffect` about the bottom edge with perspective | The same | A `PlaneProjection` or a composition 3D transform with perspective | A `GskTransform` with perspective and a rotation about the x axis | `graphicsLayer` with `rotationX`, `cameraDistance` and the transform origin at the bottom |
 | Filter | Popover from the toolbar | Sheet on iPhone, popover on iPad | Flyout | Popover, a bottom sheet on a phone | Modal bottom sheet |
 | Filter tokens | Token field style buttons | The same | Removable buttons | Removable pill buttons | Input chips |
 | Index strip for authors | None | `List` section index | None | None | None |
@@ -255,12 +277,16 @@ and extending a selection without a dropped frame before the shelf ships there.
    look more like a real shelf. They were turned down for the same reason covers
    became one size: unevenness that a reader of digital books has no reason for.
    Thickness stays because it carries a fact, the book's length.
-2. **A focused spine shows its cover in a preview and does not move.** The
-   first version replaced a selected spine with its cover in the row. A reviewer
-   showed that it reflows the row the reader is moving through and breaks down
-   with a run of books selected.
-3. **The shelf stands on a hairline, with no shelf drawn.** A drawn board, even
-   a flat one, is the first step toward decoration.
+2. **A selected book tips out from the top and keeps its place.** This was
+   asked for. It also meets a reviewer's objection to an earlier version, which
+   replaced a selected spine with its cover and reflowed the row. A tip is a
+   transform, so the row does not change. A focused spine can still show its
+   cover in a preview.
+3. **The shelf is drawn with depth and without materials.** The first version
+   stood spines on a hairline. Asked to make it feel more real, the page now
+   draws a board, a back, rounded spines, bands and labels, all from shade and
+   the platform's own fill colours. Wood grain was turned down because it cannot
+   follow the system's colours or its dark appearance.
 4. **Index letters are in the serif.** This adds a fourth place for the serif
    in the library window. A letter standing alone is the plainest library cue
    there is.
