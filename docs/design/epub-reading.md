@@ -441,8 +441,8 @@ If a step fails, no book opens and the window shows the error.
    when the window opens its book. The helper's `/c/…` and `/r/…` references
    resolve against the chapter's address, so they carry the token without the
    helper knowing it. The handler answers a token only to the view it was
-   made for, and to no one once that view is gone. The scheme is registered
-   as no-access, so a chapter can load no other scheme. The handler parses the rest
+   made for, and to no one once that view is gone. The scheme is also
+   registered as no-access, an extra that is not what blocks requests. The handler parses the rest
    as one of the two forms with a decimal integer, and calls `read_content` or
    `read_resource` on a worker thread. Anything else is a 404. No part of a
    request becomes a file path.
@@ -573,9 +573,12 @@ of text before it, counting the text nodes under `body` in document order. The
 helper counts while it writes `markup`. The script counts the same nodes in
 the page. UTF-16 is the unit because the DOM measures text that way.
 
-- **Ready.** After a load or a settings change the script waits for
-  `document.fonts.ready`, for every picture to load or fail, and for two
-  animation frames. Only then does it restore a place or report one.
+- **Ready.** After a load the script waits for `document.fonts.ready`, for
+  every picture to load or fail, and for two animation frames, and only then
+  reports that it is ready. The shell then sets any properties changed while
+  the chapter was loading and names the landing place, in one call. After a
+  settings change the script waits for `document.fonts.ready` and two
+  animation frames before it goes back to the held place.
 - **To save,** the script asks `caretRangeFromPoint` for the character at the
   top of the first column, then at points down and across that column until
   one lands in a text node. If none does, as on a page that is one picture, it
@@ -588,8 +591,11 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   is built on it and fills both, with [the fraction read](#progress).
 - **A page with no text**, such as a full-page picture, has no offset of its
   own. It saves as the first text after it, and as the chapter's length when
-  none follows, which restores as the last page. A picture-only page in the
-  middle of a chapter therefore reopens one page on. The shell opens a
+  none follows, which restores as the last page. An offset cannot tell
+  text-less pages apart, so after a restart one in the middle of a chapter,
+  or any but the last of several at its end, reopens on the next page with
+  text or on the last page. While the chapter stays open the script holds a
+  text-less first or last page as that end, so a reflow keeps it showing. The shell opens a
   chapter on its first page by asking for that, and not for offset 0, so a
   chapter that begins with a picture begins there.
 - **To restore,** the script turns the offset into a `Range`, finds its

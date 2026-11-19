@@ -46,6 +46,8 @@ fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
     let w = gtk::Window::builder()
         .title(&b.title)
         .transient_for(parent)
+        // Closing the library closes the reader, and so lets its view go.
+        .destroy_with_parent(true)
         .modal(true)
         .default_width(760)
         .default_height(640)
@@ -598,8 +600,12 @@ impl Reading {
         let Some(place) = self.place.get() else {
             return;
         };
-        let reading = self.clone();
+        // The answer must not keep the reader alive after its window closes.
+        let weak = Rc::downgrade(self);
         self.view.turn(by, false, move |moved| {
+            let Some(reading) = weak.upgrade() else {
+                return;
+            };
             if moved
                 || reading
                     .place

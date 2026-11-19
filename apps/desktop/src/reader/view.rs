@@ -655,17 +655,24 @@ impl View {
                 };
                 (self.0.on_event)(Event::Ready { chapter, length });
                 let arguments = glib::VariantDict::new(None);
+                // The document was written with the properties of the moment
+                // it was asked for. Any set since then apply before landing.
+                let properties = glib::VariantDict::new(None);
+                for (name, value) in self.0.style.borrow().iter() {
+                    properties.insert(name, value.as_str());
+                }
+                arguments.insert_value("properties", &properties.end());
                 let body = match landing {
-                    Landing::Start => "return __reader.go({page: 0})",
+                    Landing::Start => "__reader.assign(properties); return __reader.go({page: 0})",
                     Landing::Offset(offset) => {
                         arguments.insert("offset", offset.min(length));
-                        "return __reader.go({offset})"
+                        "__reader.assign(properties); return __reader.go({offset})"
                     }
                     Landing::Anchor(anchor) => {
                         arguments.insert("anchor", anchor.as_str());
-                        "return __reader.go({anchor})"
+                        "__reader.assign(properties); return __reader.go({anchor})"
                     }
-                    Landing::End => "return __reader.go({end: true})",
+                    Landing::End => "__reader.assign(properties); return __reader.go({end: true})",
                 };
                 self.call(body, arguments, |_| {});
             }
@@ -778,6 +785,10 @@ fn serve(request: &webkit6::URISchemeRequest) {
     let policy = inner.config.protect.content_policy;
     let source = inner.source.clone();
     let path = parsed.path();
+    // The load number the shell put in the chapter's address.
+    let asked: Option<u32> = parsed
+        .query()
+        .and_then(|q| q.strip_prefix("l=").and_then(|n| n.parse().ok()));
     let request = request.clone();
     if let Some(chapter) = numbered(&path, "/c/") {
         source.chapter(
@@ -792,12 +803,13 @@ fn serve(request: &webkit6::URISchemeRequest) {
                 ),
                 Err(why) => {
                     respond(&request, 404, "text/plain", Vec::new(), policy);
-                    // Only the chapter being loaded can fail the load.
+                    // Only the load that asked can fail. An answer for an
+                    // earlier load of the same chapter is too late to matter.
                     let loading = inner
                         .load
                         .borrow()
                         .as_ref()
-                        .is_some_and(|l| !l.ready && l.chapter == chapter);
+                        .is_some_and(|l| !l.ready && Some(l.number) == asked);
                     if loading {
                         View(inner).fail(why);
                     }

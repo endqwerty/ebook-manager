@@ -911,6 +911,95 @@ fn pages_without_text_keep_their_place() -> Outcome {
         page == pages - 1,
         "the end reopened on page {page} of {pages}"
     );
+    // A reflow keeps a text-less first or last page showing.
+    let reflowed = |stage: &Stage| -> Result<(u32, u32), Failed> {
+        stage.events.borrow_mut().clear();
+        stage.view.set_style(&[("--size", "1.4")]);
+        stage.wait("place after a reflow", |e| matches!(e, Event::Place { .. }))?;
+        let (_, page, pages) = stage.last_place().unwrap();
+        stage.view.set_style(&[("--size", "1")]);
+        pause(Duration::from_millis(300));
+        Ok((page, pages))
+    };
+    let (page, pages) = reflowed(&stage)?;
+    check!(
+        page == pages - 1,
+        "a reflow left the last page for page {page} of {pages}"
+    );
+    stage.open(0, Landing::Start)?;
+    let (page, _) = reflowed(&stage)?;
+    check!(page == 0, "a reflow left the first page for page {page}");
+    Ok(())
+}
+
+/// A chapter read that answers late, for a load since replaced, does not
+/// fail the load that replaced it.
+fn a_late_error_does_not_fail_a_newer_load() -> Outcome {
+    struct Slow {
+        first: std::cell::Cell<bool>,
+        asked: Rc<std::cell::Cell<u32>>,
+    }
+    impl Source for Slow {
+        fn chapter(&self, _: u32, done: Box<dyn FnOnce(Result<Document, String>)>) {
+            self.asked.set(self.asked.get() + 1);
+            if self.first.replace(false) {
+                // The first read fails, but only after the second was asked for.
+                glib::timeout_add_local_once(Duration::from_millis(400), move || {
+                    done(Err("too late to matter".into()))
+                });
+            } else {
+                glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                    done(Ok(Document {
+                        markup: "<p>Second try.</p>".into(),
+                        language: None,
+                        right_to_left: false,
+                    }))
+                });
+            }
+        }
+        fn picture(&self, _: u32, done: Box<dyn FnOnce(Option<Picture>)>) {
+            done(None)
+        }
+    }
+    let asked = Rc::new(std::cell::Cell::new(0));
+    let source = Rc::new(Slow {
+        first: std::cell::Cell::new(true),
+        asked: asked.clone(),
+    });
+    let stage = Stage::new_with(source, |_| {})?;
+    stage.view.load(0, Landing::Start);
+    // The second load starts once the first has reached the source.
+    check!(
+        spin(|| asked.get() == 1, Duration::from_secs(20)),
+        "the first load never asked for its chapter"
+    );
+    stage.events.borrow_mut().clear();
+    stage.view.load(0, Landing::Start);
+    let first = stage.wait("an answer", |e| {
+        matches!(e, Event::Ready { .. } | Event::Failed(_))
+    })?;
+    check!(
+        matches!(first, Event::Ready { .. }),
+        "the late error failed the newer load: {first:?}"
+    );
+    Ok(())
+}
+
+/// A colour set while a chapter is still loading is the colour it opens in.
+fn a_style_set_during_a_load_applies() -> Outcome {
+    let stage = Stage::new(one("<p>Text.</p>".into()), |_| {})?;
+    stage.open(0, Landing::Start)?;
+    stage.events.borrow_mut().clear();
+    stage.view.load(0, Landing::Start);
+    // The document has been asked for, and may already be written.
+    pause(Duration::from_millis(30));
+    stage.view.set_style(&[("--page", "#2b2b2e")]);
+    stage.wait("place", |e| matches!(e, Event::Place { .. }))?;
+    let colour = stage.app("return getComputedStyle(document.documentElement).backgroundColor")?;
+    check!(
+        colour == "rgb(43, 43, 46)",
+        "the chapter opened in {colour}"
+    );
     Ok(())
 }
 
@@ -1176,5 +1265,13 @@ const TESTS: &[Test] = &[
     (
         "pages_without_text_keep_their_place",
         pages_without_text_keep_their_place,
+    ),
+    (
+        "a_late_error_does_not_fail_a_newer_load",
+        a_late_error_does_not_fail_a_newer_load,
+    ),
+    (
+        "a_style_set_during_a_load_applies",
+        a_style_set_during_a_load_applies,
     ),
 ];

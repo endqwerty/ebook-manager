@@ -9,7 +9,7 @@
 	let starts = [];
 	let length = 0;
 	let ready = false;
-	let held = 0;
+	let held = { offset: 0, edge: "start" };
 
 	const index = () => {
 		nodes = [];
@@ -89,8 +89,12 @@
 		return pageOfX(rect.left + 1);
 	};
 
+	// Whether the page showing has any text on it. Set by `place`.
+	let textless = false;
+
 	// The offset of the first character on the page showing.
 	const place = () => {
+		textless = true;
 		if (!nodes.length) return 0;
 		const style = getComputedStyle(document.body);
 		const side = parseFloat(style.paddingLeft) || 0;
@@ -102,7 +106,10 @@
 				const range = document.caretRangeFromPoint(x, y);
 				if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
 					const offset = offsetOf(range.startContainer, range.startOffset);
-					if (offset !== null) return offset;
+					if (offset !== null) {
+						textless = false;
+						return offset;
+					}
 				}
 			}
 		}
@@ -121,11 +128,33 @@
 	// `held` is the place the reader chose, by a turn or a jump. A reflow
 	// goes back to it and does not move it, so resizing a window through many
 	// widths does not creep toward the chapter's start.
+	//
+	// A page with no text has no offset of its own. At either end of the
+	// chapter it is held as that end, so a reflow keeps a chapter on its
+	// picture-only first or last page. In the middle it is held as the first
+	// text after it, which is all an offset can say.
 	const report = (chosen) => {
 		if (!ready) return;
 		const offset = place();
-		if (chosen) held = offset;
+		if (chosen) {
+			const edge = !textless ? null : page() === 0 ? "start" : page() === pages() - 1 ? "end" : null;
+			held = { offset, edge };
+		}
 		post({ kind: "place", load, offset, page: page(), pages: pages() });
+	};
+
+	// Show the held place again after the layout changed.
+	const restore = () => {
+		if (held.edge === "start") show(0);
+		else if (held.edge === "end") show(pages() - 1);
+		else show(pageOfOffset(held.offset));
+		report();
+	};
+
+	const assign = (properties) => {
+		for (const [name, value] of Object.entries(properties)) {
+			if (/^--[a-z-]+$/.test(name)) root.style.setProperty(name, String(value));
+		}
 	};
 
 	const settle = (then) => requestAnimationFrame(() => requestAnimationFrame(then));
@@ -159,16 +188,17 @@
 			report(true);
 			return true;
 		},
-		// Set custom properties and classes, keeping the place.
+		// Set custom properties with no reflow handling, before a landing.
+		assign(properties) {
+			assign(properties);
+			return true;
+		},
+		// Set custom properties, keeping the place. A new face can change
+		// the layout when it arrives, so the place is restored after that.
 		style(properties) {
-			const keep = held;
-			for (const [name, value] of Object.entries(properties)) {
-				if (/^--[a-z-]+$/.test(name)) root.style.setProperty(name, String(value));
-			}
-			settle(() => {
-				show(pageOfOffset(keep));
-				report();
-			});
+			assign(properties);
+			const after = () => settle(restore);
+			document.fonts.ready.then(after, after);
 			return true;
 		},
 		// The character at an offset, for checking the count against the helper's.
@@ -207,12 +237,8 @@
 	let resizing = 0;
 	addEventListener("resize", () => {
 		if (!ready) return;
-		const keep = held;
 		cancelAnimationFrame(resizing);
-		resizing = requestAnimationFrame(() => {
-			show(pageOfOffset(keep));
-			report();
-		});
+		resizing = requestAnimationFrame(restore);
 	});
 
 	const start = async () => {

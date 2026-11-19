@@ -19,7 +19,7 @@ view::View::open(
 );
 view.load(chapter, Landing::Start);       // or Landing::Offset(n), Landing::Anchor(..), Landing::End
 view.turn(1, false, |moved| { /* false at the chapter's edge */ });
-view.set_style(&[("--page", "#2b2b2e")]);
+view.set_style(&[("--page", "#2b2b2e")]);   // now, and for chapters opened later
 ```
 
 A `Source` gives the view a `Document` (the children of an XHTML `body`) and
@@ -45,8 +45,9 @@ so [the view tests](../../tests/view.rs) include it directly.
   view: another view asking with the same token gets a 404, and so does
   anyone once the view is gone. The rest is `/c/<number>` or `/r/<number>`,
   and anything else is a 404. No part of an address becomes a file path. The
-  scheme is registered as no-access, so a chapter cannot load any other
-  scheme, `file:` included, even with the other layers off.
+  scheme is also registered as no-access, which WebKit documents as keeping
+  its pages from reaching pages of other schemes. That is an extra, and not
+  what blocks requests: the three layers above do that.
 - **Events are checked, not trusted.** A message from the page does something
   only if it has a known kind, the current load's number and values in range:
   a page inside the page count and an offset inside the chapter's length.
@@ -57,8 +58,11 @@ so [the view tests](../../tests/view.rs) include it directly.
   at any window size or type size. A page with no text on it, such as one
   full-page picture, reports the offset of the first text after it, or the
   chapter's length when no text follows, which `Landing::Offset` shows as the
-  last page. So a picture-only page in the middle of a chapter comes back as
-  the page after it. `Landing::Start` is the first page whatever is on it.
+  last page. An offset cannot tell text-less pages apart, so one in the
+  middle of a chapter, or any but the last of several at its end, comes back
+  as the next page with text, or the last page. While the view stays open, a
+  text-less first or last page is held as that end and survives a reflow.
+  `Landing::Start` is the first page whatever is on it.
 - **A chapter cannot run for ever.** A load that takes longer than
   `Config::watchdog` (15 seconds) ends the web process. So does each call
   into the script, on a limit of its own, and so does holding more than
