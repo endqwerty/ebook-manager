@@ -35,7 +35,7 @@ jobs:
       - name: Install desktop and reader dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev bubblewrap xvfb dbus-x11
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev bubblewrap xvfb dbus-x11 dosfstools
 
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f
         with:
@@ -46,6 +46,18 @@ jobs:
 
       - name: Run the workspace tests
         run: dbus-run-session -- xvfb-run -a cargo nextest run --workspace --locked --profile ci --no-fail-fast
+
+      - name: Exercise mounted FAT32 card export
+        run: |
+          image="$RUNNER_TEMP/card.img"
+          card="$RUNNER_TEMP/card"
+          truncate -s 128M "$image"
+          mkfs.fat -F 32 "$image"
+          mkdir "$card"
+          sudo mount -t vfat -o "loop,uid=$(id -u),gid=$(id -g)" "$image" "$card"
+          trap 'sudo umount "$card"' EXIT
+          TMPDIR="$card" cargo nextest run --locked -p ebook-device --test export \
+            -E 'test(=retries_keep_one_copy_and_collisions_preserve_the_original)'
 
       - name: Report results and read the gate
         if: always()
