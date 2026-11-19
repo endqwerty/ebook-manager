@@ -20,6 +20,7 @@ and media-overlay books, and every platform other than native Linux packages.
   found and the helper has confirmed, from inside the sandbox, that it is
   isolated. A missing helper, a missing `bwrap`, a sandbox that fails to start
   and a sandbox that does not isolate each give an error and no reader.
+  A helper that cannot set its own resource limits (F7) counts as not isolated.
 - **S2** The helper checks its confinement at the start of every run and
   refuses to open a book when it can see `/proc`, `/home`, `/etc`, `/tmp`,
   `/run`, `/var`, `/root`, `/sys` or `/dev`, can write to its filesystem, or
@@ -27,7 +28,8 @@ and media-overlay books, and every platform other than native Linux packages.
 - **S3** Inside the sandbox the helper can read the one book file, itself and
   the host's library directories. It has no network, no other host files, no
   writable storage, no capabilities and an empty environment.
-- **S4** The helper is found, in order, at the configured path, at the absolute
+- **S4** A configured helper path is used alone: if nothing is there, no other
+  place is tried. Without one, the helper is found, in order, at the absolute
   path in `EBOOK_READER_HELPER`, beside the running program, or in
   `../libexec/ebook-manager/` relative to it. `PATH` is not searched. `bwrap`
   is used from the configured path, `/usr/bin/bwrap` or `/bin/bwrap`.
@@ -39,7 +41,8 @@ and media-overlay books, and every platform other than native Linux packages.
 - **M1** Inspecting a file returns its title, authors, identifiers, languages
   and EPUB version from the package document, with whitespace collapsed.
   A book with several titles gives the one marked as the main title, else the
-  first.
+  first. Each text value is cut at 2,000 characters and each list at 64
+  entries.
 - **M2** Authors are the creators with the author role or no role, in package
   order, each with the publisher's sort name when given. When no creator
   qualifies, all creators are returned. Each identifier has its value, a
@@ -62,8 +65,11 @@ and media-overlay books, and every platform other than native Linux packages.
   is split into runs flagged bold, italic, code, superscript or subscript.
 - **R3** Whitespace in the source is folded: runs of spaces, tabs and line
   breaks become one space, and blocks do not start or end with one.
-  Non-breaking spaces and forced line breaks are kept. Preformatted text keeps
-  its spacing. Named and numeric character references are replaced. Control
+  Non-breaking spaces and forced line breaks inside a block are kept; a forced
+  break at the very end of a block is dropped. Preformatted text keeps its
+  spacing, including spaces at the ends of lines, and loses only the line
+  breaks before its first and after its last line. Each table row is one block
+  with a tab between cells, so an empty cell keeps its column. Named and numeric character references are replaced. Control
   characters are removed. Documents in UTF-8, UTF-16, ISO-8859-1 and
   Windows-1252 are decoded; HTML-style markup with unclosed or upper-case tags
   is read.
@@ -74,21 +80,29 @@ and media-overlay books, and every platform other than native Linux packages.
 - **R5** The table of contents comes from the EPUB 3 navigation document, else
   the EPUB 2 NCX, as a flat list in order with a nesting depth. An entry that
   points into the reading order has a chapter index and optional anchor; a
-  heading-only entry or one that points elsewhere has no target. A chapter
-  reports which block an anchor falls in. A book with no usable contents is
+  heading-only entry or one that points elsewhere has no target. Entries
+  nested more than 32 levels deep are left out. A chapter reports which block
+  an anchor falls in, or that it has no such anchor. A book with no usable contents is
   still read by chapter.
 - **R6** Scripts, style sheets, frames, embedded objects, audio, video, event
   handlers, hidden elements and remote references are not interpreted and are
-  not returned. A picture becomes a placeholder block with its text
-  alternative; picture data and addresses are not returned.
+  not returned. A picture that stands alone in its block becomes a placeholder
+  block with its text alternative. A picture inside a line of text adds its
+  text alternative to that line, so a decorative initial still spells its word.
+  Picture data and addresses are not returned. A chapter that refers to a
+  picture, style sheet, script or media file at a remote address carries a
+  remote-references warning; nothing is fetched.
 - **R7** A reading position is a chapter index and block index with the text
   form `epubpos1:<chapter>:<block>`. The interface stores it and passes it back
   after a restart. A position past the last chapter becomes the start of the
-  last chapter. Malformed position text is rejected.
-- **R8** A chapter whose markup is damaged returns the text that could be read
-  and a malformed-markup warning. A reading-order item that is not a text
-  document returns no text and an unsupported-content warning, or a picture
-  placeholder when it is an image.
+  last chapter. A block index past the end of its chapter becomes the last
+  block, and a chapter with no blocks has no position to scroll to. Malformed
+  position text is rejected.
+- **R8** Unclosed and mismatched tags are repaired without comment, as in
+  HTML. Markup that cannot be read as tags at all returns the text around it
+  and a malformed-markup warning. A reading-order item that is a picture,
+  raster or SVG, returns one picture placeholder. Any other item that is not a
+  text document returns no text and an unsupported-content warning.
 - **R9** A chapter with more blocks than the limit (50,000 by default) is cut
   there and flagged as truncated.
 - **R10** A sixty-chapter, 600,000-word book opens and every chapter is read in
@@ -103,11 +117,14 @@ to the reader.
   is refused as not an EPUB.
 - **F2** A missing file, a directory or an unreadable file is refused before
   any sandbox starts.
-- **F3** Opening a protected book (M4), or one with encrypted ZIP entries, is
-  refused as protected. Obfuscated fonts alone do not prevent reading.
-- **F4** A book with no package document, no readable reading order or an
-  unparseable package is refused as damaged. A chapter file missing from the
-  archive fails only that chapter. A chapter index past the end is refused.
+- **F3** Opening a protected book (M4) is refused as protected. A book with a
+  ZIP-encrypted entry anywhere in its archive counts as protected from the
+  moment it is opened or inspected. Obfuscated fonts alone do not prevent
+  reading.
+- **F4** A book with no package document, a package document in which no
+  package element can be found, or no readable reading order is refused as
+  damaged. A chapter or picture file missing from the archive fails only that
+  chapter. A chapter index past the end is refused.
 - **F5** A reference that climbs out of the container or names a host file or
   remote address is never followed. XML document type declarations are not
   processed, so entities defined by the book are left as written.
@@ -115,10 +132,17 @@ to the reader.
   8 MiB for a package or navigation document and 16 MiB for a chapter, counted
   on unpacked output rather than the size the archive declares; 10,000
   reading-order items; 20,000 contents entries; a 96 MiB reply. Passing one
-  gives a limit error. Compression other than stored and deflate is refused as
-  unsupported.
-- **F7** The helper limits itself to 768 MiB of address space and to the
-  call's time allowance in CPU seconds. The host stops the sandbox after 15
+  gives a limit error; in particular, contents that are too long or too large
+  are an error and never a shortened list. One call unpacks at most the
+  container file, the encryption list, the package, the two contents documents
+  and one chapter, so the per-document limits also bound the total. Nothing is
+  unpacked to disk: archive entry names are only looked up, a looked-up name
+  never starts with `/` or contains `..`, and an entry marked as a symbolic
+  link is read as ordinary bytes. Compression other than stored and deflate is
+  refused as unsupported.
+- **F7** Before reading the book the helper limits itself to 768 MiB of
+  address space, the call's time allowance plus two in CPU seconds, 32 open
+  files and no core dump, and does not run if a limit cannot be set. The host stops the sandbox after 15
   seconds of wall-clock time. A helper stopped by any of these is reported and
   the next call works.
 - **F8** If the file's size or modification time changes after a book is

@@ -13,6 +13,9 @@ pub struct Extracted {
     pub head_title: Option<String>,
     pub truncated: bool,
     pub malformed: bool,
+    /// The document asked for something from a remote address. Nothing was
+    /// fetched; the caller can record that the book tried.
+    pub remote_references: bool,
 }
 
 const MAX_DEPTH: usize = 400;
@@ -127,6 +130,8 @@ struct Extractor<'a> {
     lists: Vec<Option<u32>>,
     item_fresh: Vec<bool>,
     cur: Current,
+    row_cells: u32,
+    remote: bool,
     anchors: Vec<String>,
     anchor_count: usize,
     blocks: Vec<Block>,
@@ -155,6 +160,8 @@ pub fn extract(src: &str, max_blocks: usize, resolve: &dyn Fn(&str) -> Option<Li
         lists: Vec::new(),
         item_fresh: Vec::new(),
         cur: Current::default(),
+        row_cells: 0,
+        remote: false,
         anchors: Vec::new(),
         anchor_count: 0,
         blocks: Vec::new(),
@@ -178,7 +185,15 @@ pub fn extract(src: &str, max_blocks: usize, resolve: &dyn Fn(&str) -> Option<Li
         head_title: Some(title).filter(|t| !t.is_empty()),
         truncated: x.truncated,
         malformed: !clean,
+        remote_references: x.remote,
     }
+}
+
+fn is_remote(reference: &str) -> bool {
+    let r = reference.trim_start().to_ascii_lowercase();
+    ["http://", "https://", "ftp://", "//"]
+        .iter()
+        .any(|p| r.starts_with(p))
 }
 
 fn hidden(attrs: &[(String, String)]) -> bool {
@@ -199,6 +214,12 @@ impl Extractor<'_> {
         }
         let mut fx = Fx::default();
         let n = name.as_str();
+        if n != "a" && n != "area" && !self.remote {
+            self.remote = attrs.iter().any(|(key, value)| {
+                let key = key.rsplit(':').next().unwrap_or(key);
+                matches!(key, "src" | "href" | "poster" | "data") && is_remote(value)
+            });
+        }
         if self.skip > 0 {
             // Inside skipped content: track nesting only.
         } else if self.head > 0 {
@@ -269,12 +290,16 @@ impl Extractor<'_> {
                     anchors: Vec::new(),
                 });
             }
+            "tr" => self.row_cells = 0,
             "td" | "th" => {
-                if !self.cur.spans.is_empty() {
+                // One tab before every cell after the first, so an empty
+                // cell still holds its column.
+                if self.row_cells > 0 {
                     self.cur.pending_space = false;
                     self.push_raw('\t');
                     self.cur.line_start = true;
                 }
+                self.row_cells += 1;
             }
             "br" => {
                 if self.pre > 0 {
@@ -515,7 +540,11 @@ impl Extractor<'_> {
             }
         }
         while let Some(last) = cur.spans.last_mut() {
-            let kept = last.text.trim_end_matches(['\n', ' ', '\t']).len();
+            let kept = if pre {
+                last.text.trim_end_matches('\n').len()
+            } else {
+                last.text.trim_end_matches(['\n', ' ', '\t']).len()
+            };
             last.text.truncate(kept);
             if last.text.is_empty() {
                 cur.spans.pop();
@@ -708,7 +737,7 @@ mod tests {
             &|_| None,
         );
         let got: Vec<String> = x.blocks.iter().map(Block::text).collect();
-        assert_eq!(got, vec!["One", "Two bold still", "Three &bogus;\tcell"]);
+        assert_eq!(got, vec!["One", "Two bold still", "Three &bogus; cell"]);
     }
 
     #[test]
@@ -725,6 +754,44 @@ mod tests {
             lines("<p>a&#27;[31mb&#7;c&#x200B;d</p>"),
             vec!["a[31mbc\u{200b}d"]
         );
+    }
+
+    #[test]
+    fn keeps_trailing_spaces_in_preformatted_text() {
+        let x = run("<pre>  line one  \n  line two  \n</pre>");
+        assert_eq!(x.blocks[0].text(), "  line one  \n  line two  ");
+    }
+
+    #[test]
+    fn keeps_an_empty_first_cell_in_its_column() {
+        assert_eq!(
+            lines("<table><tr><td>East</td><td></td><td>West</td></tr><tr><td></td><td>High</td><td>Low</td></tr><tr><td></td><td> </td></tr></table>"),
+            vec!["East\t\tWest", "\tHigh\tLow"]
+        );
+    }
+
+    #[test]
+    fn notes_remote_references_without_returning_them() {
+        assert!(
+            !run(
+                "<p>Plain <a href='http://example.com/'>link</a> <img src='local.png' alt=''/></p>"
+            )
+            .remote_references
+        );
+        for body in [
+            "<img src='https://tracker.example/p.gif' alt=''/>",
+            "<script src='//cdn.example/x.js'></script>",
+            "<video poster='http://example.com/p.jpg'></video>",
+            "<svg><image xlink:href='http://example.com/c.jpg'/></svg>",
+        ] {
+            let x = run(body);
+            assert!(x.remote_references, "{body}");
+            assert!(!serde_json::to_string(&x.blocks)
+                .unwrap()
+                .contains("example"));
+        }
+        let head = extract("<html><head><link rel='stylesheet' href='https://fonts.example/css'/></head><body><p>x</p></body></html>", 10, &|_| None);
+        assert!(head.remote_references);
     }
 
     #[test]

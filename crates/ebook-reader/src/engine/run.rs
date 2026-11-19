@@ -34,20 +34,28 @@ fn usage() -> WireError {
     WireError::new(WireErrorKind::Usage, "bad helper arguments")
 }
 
-fn restrict(limits: &Limits, cpu_seconds: u64) {
+/// Lower this process's own limits. Hard and soft are set together, so they
+/// cannot be raised again. A limit that cannot be set is a reason not to run.
+fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
     let set = |resource, value: u64| {
-        let _ = setrlimit(
+        setrlimit(
             resource,
             Rlimit {
                 current: Some(value),
                 maximum: Some(value),
             },
-        );
+        )
+        .map_err(|e| {
+            WireError::new(
+                WireErrorKind::NotIsolated,
+                format!("cannot set a resource limit: {e}"),
+            )
+        })
     };
-    set(Resource::As, limits.memory_bytes);
-    set(Resource::Cpu, cpu_seconds.max(1));
-    set(Resource::Core, 0);
-    set(Resource::Nofile, 32);
+    set(Resource::As, limits.memory_bytes)?;
+    set(Resource::Cpu, cpu_seconds.max(1))?;
+    set(Resource::Core, 0)?;
+    set(Resource::Nofile, 32)
 }
 
 fn dispatch(args: &[String]) -> Result<Payload, WireError> {
@@ -57,7 +65,7 @@ fn dispatch(args: &[String]) -> Result<Payload, WireError> {
         None => Limits::default(),
     };
     let cpu = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
-    restrict(&limits, cpu);
+    restrict(&limits, cpu)?;
     isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why))?;
     if op == "probe" {
         return Ok(Payload::Probe(ProbeReport { isolated: true }));
@@ -96,12 +104,29 @@ fn open(
     limits: &Limits,
 ) -> Result<BookOutline, WireError> {
     readable(&package)?;
-    let toc = toc::load(archive, &package, limits);
-    let chapters = (0..package.spine.len() as u32)
-        .map(|index| ChapterInfo {
-            index,
-            title: toc_title(&toc, index),
-            linear: package.spine[index as usize].linear,
+    let toc = toc::load(archive, &package, limits)?;
+    // One pass over the contents: the first label that points into each chapter.
+    let mut titles: Vec<Option<&str>> = vec![None; package.spine.len()];
+    for entry in &toc {
+        let slot = entry
+            .target
+            .as_ref()
+            .and_then(|t| titles.get_mut(t.chapter as usize));
+        if let Some(slot) = slot {
+            if slot.is_none() && !entry.title.is_empty() {
+                *slot = Some(&entry.title);
+            }
+        }
+    }
+    let chapters = package
+        .spine
+        .iter()
+        .zip(&titles)
+        .enumerate()
+        .map(|(index, (item, title))| ChapterInfo {
+            index: index as u32,
+            title: title.map(str::to_owned),
+            linear: item.linear,
         })
         .collect();
     Ok(BookOutline {
@@ -138,7 +163,7 @@ fn chapter(
             package.spine.len().to_string(),
         )
     })?;
-    let toc = toc::load(archive, package, limits);
+    let toc = toc::load(archive, package, limits)?;
     let mut out = Chapter {
         index,
         title: toc_title(&toc, index),
@@ -146,7 +171,12 @@ fn chapter(
         truncated: false,
         warnings: Vec::new(),
     };
-    if item.media_type.starts_with("image/") && item.media_type != "image/svg+xml" {
+    if item.media_type.starts_with("image/") {
+        if !archive.contains(&item.path) {
+            return Err(WireError::invalid(
+                "a picture in the reading order is missing",
+            ));
+        }
         out.blocks.push(Block {
             kind: BlockKind::Image,
             spans: Vec::new(),
@@ -183,6 +213,9 @@ fn chapter(
     };
     let extracted = text::extract(&source, limits.max_blocks_per_chapter as usize, &resolve);
     out.truncated = extracted.truncated;
+    if extracted.remote_references {
+        out.warnings.push(ChapterWarning::RemoteReferences);
+    }
     if extracted.malformed {
         out.warnings.push(ChapterWarning::MalformedMarkup);
     }

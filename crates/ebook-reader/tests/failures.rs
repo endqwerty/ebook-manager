@@ -354,6 +354,15 @@ fn oversized_books_hit_limits_not_memory() {
         Err(ReaderError::LimitExceeded { .. })
     ));
 
+    // Contents longer than the limit are an error, not a shorter list.
+    let mut cfg = config();
+    cfg.limits.max_toc_entries = 2;
+    let brief = Reader::new(cfg).unwrap();
+    assert!(matches!(
+        brief.open(&dir.file("toc.epub", &epub3())),
+        Err(ReaderError::LimitExceeded { .. })
+    ));
+
     let mut cfg = config();
     cfg.limits.max_spine_items = 2;
     let short = Reader::new(cfg).unwrap();
@@ -494,4 +503,62 @@ fn installed_layout_finds_the_helper_and_reads() {
         }
     });
     assert!(message.contains("reader component is missing"), "{message}");
+}
+
+/// F3: a ZIP-encrypted entry anywhere in the archive is noticed when the book
+/// is opened, not when the reader reaches that chapter.
+#[test]
+fn zip_encrypted_entries_are_noticed_at_open() {
+    // Mark one chapter's entry as encrypted the way the ZIP format does: bit 0
+    // of the general-purpose flags in its local and central headers.
+    let mut bytes = simple(&["<p>one</p>", "<p>two</p>"], &[]);
+    let name = b"OEBPS/c1.xhtml";
+    let mut marked = 0;
+    for at in 0..bytes.len() - name.len() {
+        if &bytes[at..at + name.len()] != name {
+            continue;
+        }
+        if at >= 30 && &bytes[at - 30..at - 26] == b"PK\x03\x04" {
+            bytes[at - 30 + 6] |= 1;
+            marked += 1;
+        }
+        if at >= 46 && &bytes[at - 46..at - 42] == b"PK\x01\x02" {
+            bytes[at - 46 + 8] |= 1;
+            marked += 1;
+        }
+    }
+    assert_eq!(marked, 2);
+    let dir = Scratch::new();
+    let path = dir.file("locked.epub", &bytes);
+    assert_eq!(
+        reader().open(&path).unwrap_err(),
+        ReaderError::Unsupported(Unsupported::Protected)
+    );
+    let m = reader().inspect(&path).unwrap();
+    assert!(m.protected);
+    assert_eq!(m.title.as_deref(), Some("Simple"));
+}
+
+/// F7: extreme settings and indices give answers, not panics.
+#[test]
+fn extreme_settings_do_not_panic() {
+    let dir = Scratch::new();
+    let path = dir.file("b.epub", &epub3());
+    let mut cfg = config();
+    cfg.timeout = Duration::MAX;
+    cfg.limits.max_output_bytes = u64::MAX;
+    cfg.limits.max_chapter_bytes = u64::MAX;
+    cfg.limits.max_package_bytes = u64::MAX;
+    cfg.limits.max_file_bytes = u64::MAX;
+    let book = Reader::new(cfg).unwrap().open(&path).unwrap();
+    assert!(book.read_chapter(1).is_ok());
+    let err = book.read_chapter(u32::MAX).unwrap_err();
+    assert_eq!(
+        err,
+        ReaderError::ChapterOutOfRange {
+            index: u32::MAX,
+            count: 5
+        }
+    );
+    assert!(err.to_string().contains("4294967296"));
 }

@@ -424,3 +424,74 @@ fn a_novel_sized_book_is_read_within_bounds() {
         "reading every chapter took {elapsed:?}"
     );
 }
+
+/// R6: a chapter that refers to remote resources says so; nothing is fetched.
+#[test]
+fn remote_references_are_flagged() {
+    let dir = Scratch::new();
+    let book = reader().open(&dir.file("book.epub", &epub3())).unwrap();
+    assert_eq!(
+        book.read_chapter(3).unwrap().warnings,
+        [ChapterWarning::RemoteReferences]
+    );
+    assert!(book.read_chapter(2).unwrap().warnings.is_empty());
+}
+
+/// R7: a saved block index is brought into the chapter that was read, and an
+/// empty chapter has nowhere to scroll.
+#[test]
+fn saved_blocks_are_clamped_to_the_chapter() {
+    let dir = Scratch::new();
+    let opf = br#"<package version="3.0"><metadata/><manifest>
+        <item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>
+        <item id="f" href="font.otf" media-type="font/otf"/></manifest>
+        <spine><itemref idref="a"/><itemref idref="f"/></spine></package>"#;
+    let bytes = zip(&[
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", opf),
+        (
+            "OEBPS/a.xhtml",
+            b"<html><body><p>One.</p><p>Two.</p></body></html>",
+        ),
+        ("OEBPS/font.otf", b"not text"),
+    ]);
+    let book = reader().open(&dir.file("b.epub", &bytes)).unwrap();
+    let text = book.read_chapter(0).unwrap();
+    assert_eq!(text.clamp_block(0), Some(0));
+    assert_eq!(text.clamp_block(1), Some(1));
+    assert_eq!(text.clamp_block(u32::MAX), Some(1));
+    let empty = book.read_chapter(1).unwrap();
+    assert_eq!(empty.warnings, [ChapterWarning::UnsupportedContent]);
+    assert_eq!(empty.clamp_block(5), None);
+}
+
+/// R8: a picture in the reading order, SVG or raster, is a placeholder.
+#[test]
+fn pictures_in_the_reading_order_are_placeholders() {
+    let dir = Scratch::new();
+    let opf = br#"<package version="3.0"><metadata/><manifest>
+        <item id="s" href="plate.svg" media-type="image/svg+xml"/>
+        <item id="p" href="plate.png" media-type="image/png"/>
+        <item id="g" href="gone.png" media-type="image/png"/></manifest>
+        <spine><itemref idref="s"/><itemref idref="p"/><itemref idref="g"/></spine></package>"#;
+    let bytes = zip(&[
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", opf),
+        (
+            "OEBPS/plate.svg",
+            b"<svg xmlns='http://www.w3.org/2000/svg'><text>drawn words</text></svg>",
+        ),
+        ("OEBPS/plate.png", b"\x89PNG"),
+    ]);
+    let book = reader().open(&dir.file("b.epub", &bytes)).unwrap();
+    for index in [0, 1] {
+        let ch = book.read_chapter(index).unwrap();
+        assert_eq!(ch.blocks.len(), 1);
+        assert_eq!(ch.blocks[0].kind, BlockKind::Image);
+        assert!(ch.warnings.is_empty());
+    }
+    assert!(matches!(
+        book.read_chapter(2),
+        Err(ebook_reader::ReaderError::InvalidBook { .. })
+    ));
+}

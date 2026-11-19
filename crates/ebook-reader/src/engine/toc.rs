@@ -5,6 +5,7 @@ use super::package::Package;
 use super::xml::{parse_tree, Element};
 use super::{encoding, paths, truncate_chars};
 use crate::model::{Limits, Target, TocEntry};
+use crate::wire::{WireError, WireErrorKind};
 use std::collections::HashMap;
 
 const MAX_DEPTH: u32 = 32;
@@ -13,14 +14,12 @@ struct Builder<'a> {
     base: &'a str,
     chapters: &'a HashMap<&'a str, u32>,
     max: usize,
+    over: bool,
     out: Vec<TocEntry>,
 }
 
 impl Builder<'_> {
     fn push(&mut self, title: String, depth: u32, href: Option<&str>) {
-        if self.out.len() >= self.max {
-            return;
-        }
         let mut title = title;
         truncate_chars(&mut title, 500);
         let target = href
@@ -36,6 +35,10 @@ impl Builder<'_> {
         if title.is_empty() && target.is_none() {
             return;
         }
+        if self.out.len() >= self.max {
+            self.over = true;
+            return;
+        }
         self.out.push(TocEntry {
             title,
             depth,
@@ -45,45 +48,61 @@ impl Builder<'_> {
 }
 
 /// A broken or missing contents file gives an empty list, never a failed book:
-/// the reading order alone is enough to read.
-pub fn load(archive: &mut Archive, package: &Package, limits: &Limits) -> Vec<TocEntry> {
+/// the reading order alone is enough to read. A contents file past a limit, or
+/// an encrypted one, is an error: silently short contents would mislead.
+pub fn load(
+    archive: &mut Archive,
+    package: &Package,
+    limits: &Limits,
+) -> Result<Vec<TocEntry>, WireError> {
     let chapters = package.chapter_index();
     let max = limits.max_toc_entries as usize;
-    let mut read = |path: &str| -> Option<Element> {
-        let bytes = archive.read(path, limits.max_package_bytes).ok()?;
-        Some(parse_tree(&encoding::decode(&bytes).ok()?))
+    let mut read = |path: &str| -> Result<Option<Element>, WireError> {
+        match archive.read(path, limits.max_package_bytes) {
+            Ok(bytes) => Ok(encoding::decode(&bytes).ok().map(|text| parse_tree(&text))),
+            Err(e) if matches!(e.kind, WireErrorKind::Limit | WireErrorKind::Protected) => Err(e),
+            Err(_) => Ok(None),
+        }
+    };
+    let finish = |b: Builder<'_>| -> Result<Vec<TocEntry>, WireError> {
+        if b.over {
+            return Err(WireError::limit("number of contents entries"));
+        }
+        Ok(b.out)
     };
     if let Some(path) = &package.nav {
-        if let Some(tree) = read(path) {
+        if let Some(tree) = read(path)? {
             let mut b = Builder {
                 base: path,
                 chapters: &chapters,
                 max,
+                over: false,
                 out: Vec::new(),
             };
             if let Some(list) = find_toc_nav(&tree).and_then(|nav| nav.find("ol")) {
                 nav_list(list, 0, &mut b);
             }
             if !b.out.is_empty() {
-                return b.out;
+                return finish(b);
             }
         }
     }
     if let Some(path) = &package.ncx {
-        if let Some(tree) = read(path) {
+        if let Some(tree) = read(path)? {
             let mut b = Builder {
                 base: path,
                 chapters: &chapters,
                 max,
+                over: false,
                 out: Vec::new(),
             };
             if let Some(map) = tree.find("navmap") {
                 ncx_points(map, 0, &mut b);
             }
-            return b.out;
+            return finish(b);
         }
     }
-    Vec::new()
+    Ok(Vec::new())
 }
 
 fn find_toc_nav(root: &Element) -> Option<&Element> {

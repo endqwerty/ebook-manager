@@ -160,6 +160,9 @@ fn collect<'a>(root: &'a Element, name: &str, out: &mut Vec<&'a Element>) {
 /// OCF lists encrypted resources in META-INF/encryption.xml. Anything encrypted
 /// with an algorithm other than font obfuscation means the text may be locked.
 fn is_protected(archive: &mut Archive, limits: &Limits) -> Result<bool, WireError> {
+    if archive.has_encrypted_entries() {
+        return Ok(true);
+    }
     if !archive.contains("META-INF/encryption.xml") {
         return Ok(false);
     }

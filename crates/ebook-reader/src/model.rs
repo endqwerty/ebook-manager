@@ -123,6 +123,13 @@ impl Chapter {
             .map(|i| i as u32)
     }
 
+    /// Bring a saved block index into this chapter. `None` when the chapter
+    /// has no blocks, so there is nothing to scroll to.
+    pub fn clamp_block(&self, block: u32) -> Option<u32> {
+        let last = u32::try_from(self.blocks.len().checked_sub(1)?).unwrap_or(u32::MAX);
+        Some(block.min(last))
+    }
+
     /// The chapter's text with one line per block. Meant for search and tests.
     pub fn plain_text(&self) -> String {
         let mut out = String::new();
@@ -140,6 +147,10 @@ pub enum ChapterWarning {
     MalformedMarkup,
     /// The item is not a text document this build can show.
     UnsupportedContent,
+    /// The chapter refers to pictures, styles or media at a remote address.
+    /// Nothing was fetched. Opening the book elsewhere could tell that
+    /// address the book was opened.
+    RemoteReferences,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

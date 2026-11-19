@@ -137,7 +137,11 @@ impl Reader {
         }
         cmd.args(["--remount-ro", "/", "--chdir", "/", "--", HELPER_IN_SANDBOX]);
         let mut args: Vec<OsString> = vec![op[0].into(), inner.limits_json.clone().into()];
-        args.push((inner.timeout.as_secs() + 2).to_string().into());
+        args.push(
+            (inner.timeout.as_secs().saturating_add(2))
+                .to_string()
+                .into(),
+        );
         args.extend(op[1..].iter().map(OsString::from));
         cmd.args(args);
         cmd.env_clear();
@@ -182,7 +186,10 @@ fn collect(
     max_output: u64,
     timeout: Duration,
 ) -> Result<Collected, ReaderError> {
-    let deadline = Instant::now() + timeout;
+    let now = Instant::now();
+    let deadline = now
+        .checked_add(timeout)
+        .unwrap_or_else(|| now + Duration::from_secs(365 * 24 * 60 * 60));
     let failed = |what: &str| ReaderError::HelperFailed {
         detail: what.to_owned(),
     };
@@ -196,7 +203,7 @@ fn collect(
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         let result = stdout
-            .take(max_output + 1)
+            .take(max_output.saturating_add(1))
             .read_to_end(&mut buf)
             .map(|_| buf);
         let _ = tx.send(result);
@@ -424,8 +431,9 @@ impl Book {
         }
     }
 
-    /// Bring a saved position into this book's chapter range. Use the result's
-    /// `block` with `min(block, chapter.blocks.len() - 1)` after reading.
+    /// Bring a saved position into this book's chapter range: a chapter past
+    /// the end becomes the start of the last chapter. The block is checked
+    /// against the chapter once it is read, with [`Chapter::clamp_block`].
     pub fn clamp(&self, pos: Position) -> Position {
         let last = self.chapters.len().saturating_sub(1) as u32;
         if pos.chapter > last {

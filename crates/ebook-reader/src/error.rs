@@ -94,7 +94,7 @@ impl fmt::Display for ReaderError {
                 write!(
                     f,
                     "Chapter {} does not exist; this book has {count}.",
-                    index + 1
+                    u64::from(*index) + 1
                 )
             }
         }
