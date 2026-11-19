@@ -236,10 +236,33 @@ SQLite connection and can move to another thread. It holds one view at a time.
 
 `open` does all its reading in one read transaction, so the order, the filter
 and the first page see one state of the catalogue, and it records that state's
-change counter in the view. `window`, `locate` and `shelf` each read in their
-own transaction and first compare the counter. If the catalogue has changed
-they fail with `StaleView`, and the shell opens the query again. A row number
-`n` is stable, so nothing else can go wrong between calls.
+change counter in the view. `changed` compares the counter and is the signal
+to open the query again.
+
+A view stays readable after the catalogue changes. `window`, `locate` and
+`shelf` each read in their own transaction and refuse only a token that is
+not the reader's current view. Between reopens a view shows current rows at
+the ranks they had when it opened, and a book added since is absent until the
+next `open`. This is safe because rows are fetched by the private row number
+`n`, which never moves to another book, and a row is never deleted: a rank
+can show values newer than the order, and never a different book. An import
+writes in a stream, and a view that a write made unusable could never be
+read on a large library, where a write always lands before an open returns.
+
+This holds for one catalogue file. A file rebuilt from the portable folder
+numbers its rows afresh, so a view of the old file must never be answered
+from the new one. Each catalogue file gets a random identity in `meta` when
+it is created. A view records it at `open`, and `window`, `locate` and
+`shelf` read it in the same transaction as their rows. When it differs or
+cannot be read they fail with `CatalogueReplaced`. `open` and `changed` fail
+the same way when the file at the catalogue's path is no longer the one the
+reader opened, because its connection would go on reading the old file and
+never see a change. The shell drops that reader, asks the library for a new
+one and opens its query again. `a_view_does_not_outlive_its_catalogue_file`.
+
+Deleting a book will break this. A view can then hold a row number that no
+longer exists, and `window`, `locate` and `shelf` will have to tolerate a
+missing row.
 
 `open` works in two steps, and keeps the result of the first between calls.
 
@@ -318,14 +341,24 @@ the helper's sandbox.
   the width and height as big-endian 32-bit numbers followed by the pixels.
   The library stores the digest and colours in the book record. The shell
   reads thumbnails straight from that folder on a loader thread and never
-  through the library's writer.
+  through the library's writer. The app writes one kind of file there and
+  reads only that kind: a regular file and not a link, of at most 512 KiB,
+  made of a PNG header, image data and an end and no other chunk, whose
+  header, read before anything is decoded, says eight bits a channel of
+  red, green and blue, no alpha, not interlaced, and no larger than 256 by
+  384. The app writes and reads these files with the `png` crate, so a
+  file holds nothing a palette or transparency chunk could change. Its pixels must hash to the digest it is named
+  by, and the picture shown is made from those hashed pixels. Any other
+  file counts as missing.
 - A book whose cover is missing, fails to decode or would need enlarging by
   more than three times is still imported, with no cover facts. The shell
   draws its binding set in type.
 - The thumbnail folder is a cache. When a book has a digest and no file, the
   shell shows the average colour and asks for the thumbnail again from the
   managed EPUB in the background. It installs the result only if its digest
-  equals the one in the record.
+  equals the one in the record. Two books can share a cover. Each that has asked
+  for it by the time a repair fails is tried before the cover is given up,
+  and a book that asks later is tried then.
 - The word count and cover facts come from one helper request, the survey.
   The two results are independent: a cover that cannot be used leaves the
   word count, and an unknown word count leaves the cover. The count is
@@ -386,6 +419,11 @@ button that reveals a `GtkSearchBar`, and the window menu, which holds Small,
 Medium and Large cover sizes and Refresh library. On a window under 640 wide
 the view switch is a menu and Table is absent from it. Typing anywhere in the
 content opens the search bar with the typed text and moves focus to it.
+The window passes each key press and release to the search field's own key
+handling until the field is on screen with the focus, so the keys go
+through its input method and none typed while the bar opens is lost. The
+bar opens when there is text, so a dead key waits for its letter, and
+while it waits Escape and Backspace cancel it and Space completes it.
 The Sort menu's More opens the sort editor as a popover of three rows. Every
 menu, popover and the table's column menu opens and works from the keyboard.
 
@@ -408,17 +446,65 @@ flowchart LR
   arrived waits for that page.
 - **Changing the query.** A new search or sort cancels the one in flight and
   opens a view. The model swaps the count, the first page and the token
-  together and emits one `items-changed`.
+  together. It reports the swap as a removal of every item and then an
+  addition. Given both in one `items-changed`, a GTK list asks the model for
+  every added item to see which rows it can keep, which is 100,000 calls.
 - **Selection, focus and scroll position** are kept by book ID in the model:
   the selected books, the focused book and the first book on screen. After a
   view is replaced, `locate` finds where they went. Books no longer in the
   view leave the selection, and the view scrolls to keep the focused book on
   screen if it is still there, else the first book that was on screen, else
-  the top.
+  the top. A view replaced because the catalogue changed, and not by the
+  reader, keeps the first book on screen where it was and does not scroll to
+  the focused one. With no book focused, the one found again is the first
+  selected.
+- **The selection is a set of book IDs.** A row says whether its book is
+  selected when it arrives, so a new view is shown without finding the
+  selected books in it and cannot show a selection that is out of date. A
+  place selected before its row arrives is held by its rank until the row
+  comes, and is dropped if the view is replaced first. After a view is
+  shown the model asks which selected books it holds and drops the rest,
+  which is safe whenever the answer comes because it only removes books
+  that are not there.
+- **Placing the reader has one rule.** Their place is found in a view
+  before the view is shown; if they scrolled or moved the focus while it
+  was being found, the view is shown, the place they moved to is found
+  once, and if they have moved again by then the view stays where they
+  put it. The scroll correction that follows a placement a frame or two
+  later gives way the same way, to any wheel, pointer or key in the books.
+- **A command acts on the books selected when it is given.** It takes
+  their IDs then, and the places whose rows have not arrived, and acts on
+  those whatever is selected by the time the rows come.
+- **The model's state is data.** `browse/core.rs` holds it as one enum and
+  handles everything that can happen to it in one function, from a state
+  and an event to a state and a list of effects, with no GTK in it. The
+  GObject calls the function and carries out the effects. The states are
+  loading, with an open in flight; showing a view, with or without an open
+  in flight; lost, a view that can no longer be read with the open that
+  will replace it; and error, with its text. The enum cannot hold a lost
+  view with nothing coming, an error beside a view, or loading with
+  nothing asked for.
+- **When a view cannot be read.** The read thread answers every request,
+  with what was asked for or with a refusal, and drops none. An open names
+  the view the model is showing, and the read thread says `Unchanged` only
+  of that view: asked about any other, it gives the view it holds or opens
+  one. For a view the model has already replaced a refusal means nothing.
+  For the view on screen it means the view is lost: its loaded rows stay,
+  each place waiting for a row is told none will come, a command waiting
+  on one says so, and the query is opened again. When the newest open
+  fails the window shows why, with Try Again and without the rows of an
+  older query, and a change to the catalogue or Try Again opens it afresh.
+  Try Again starts a new read thread if the last one stopped. When the
+  catalogue file is replaced the read thread asks for a new reader.
+  `the_model_and_the_read_thread_always_settle` drives the function and
+  the real read thread through several thousand seeded steps and checks,
+  each time the replies have drained, that the model shows the reader's
+  own view for its own query or an error, and that no place is left
+  waiting.
 - **When the catalogue changes** (an import, an edit, a saved position), the
-  write thread tells the window. The model coalesces these, reopens the same
-  query off the main thread, and swaps as above. During an import it reopens
-  at most once a second.
+  write thread tells the window after each job. The model asks the read
+  thread whether the catalogue changed and, if so, reopens the same query
+  there and swaps as above. It shows such a refresh at most once a second.
 - **Grid** is a `GtkGridView`. A cell is a custom `Cover` widget and a caption.
   `Cover` draws the frame, image, edge line, spine shade and shadows from
   [the cover table](interface.md#covers), the binding set in type for a book
@@ -446,8 +532,9 @@ flowchart LR
   with a perspective transform and moves nothing else.
 - **Actions** are `GAction`s on the window with accelerators, also offered in
   the context menu on a book and the Menu key: Read (Return, double click),
-  Edit, Send to device, and the view, sort and search commands. An action
-  takes the book's ID and fetches the full record with `Library::book`. The
+  Edit, Send to device, and the view, sort and search commands. Every key,
+  Return included, acts on the selection, and a book's menu on that book. An
+  action takes the book's ID and fetches the full record with `Library::book`. The
   Edit window gains sort title, author sort names, series and position.
 - **Remembered choices**: the view, the sort for each view, the cover size and
   the table's columns, order and widths are saved in `settings.json` in the
@@ -503,12 +590,19 @@ needed 135 reads for its primary-key fetches and import needed 25 for its
 indexed lookups. None of these samples fetched bytes from physical storage.
 CI reports the step as **Scale benchmark**.
 
-The window's own start is measured from the third pull request on, when the
-window is paged. Until then the desktop keeps `Library::search` and its
-current window, and is no faster than today. It is measured in the desktop smoke run: with a 100,000
-book catalogue in place, the time from starting the process to the first
-titles being readable through the accessibility tree must be under 2 seconds
-plus the driver's own polling interval.
+The window's own start is measured by `apps/desktop/tests/scale.py`, which CI
+runs as **Desktop at 100,000 books**. With a generated catalogue of 100,000
+books in place it starts the app five times after one uncounted start. The
+median time from starting the process to the first titles being readable
+through the accessibility tree must be under 2 seconds plus the time the
+driver's own look takes, which was up to 0.07 seconds. Locally the median is
+0.26 seconds, with a range of 0.25 to 0.30, so the limit is about eight times
+the measurement. A launch is bounded by GTK starting, 0.1 seconds, and by the
+catalogue putting the books in order on one thread, 0.06 seconds. The rest
+builds and draws the first rows. The check then searches, jumps to the last
+row, and imports 400 generated EPUBs. During that import the count on screen
+must change no more often than once a second, and the books on screen and the
+selected one must be the same after three refreshes.
 
 ## Behaviour
 
@@ -536,8 +630,10 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 8. When a view is replaced, then a call with the old token fails with
    `StaleView`. `an_old_token_is_refused`.
 9. When a book is imported, edited or read after a view opened, then `changed`
-   reports true and a reopened view shows the new values in the right place.
-   `a_reopened_view_reflects_changes`.
+   reports true, the open view still returns its books at their ranks with
+   their new values and without the added book, and a reopened view shows
+   the new order. `a_reopened_view_reflects_changes`. A write after `open`
+   does not stop `locate`. `a_write_after_open_does_not_stop_locate`.
 10. When `locate` is given IDs, then it returns each book's rank, and none for
     a book the filter hides. `locate_finds_books_by_id`.
 11. When the first sort key is Author, Series or a date, then `shelf` returns
@@ -573,7 +669,10 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 17. When the reader switches between Grid, List, Table and Shelf, sorts, types
     a search, and opens, edits and exports a book using only the keyboard,
     then each works, and the view and sort are as left after a restart.
-    `apps/desktop/tests/smoke.py`.
+    `apps/desktop/tests/smoke.py`. The first pull request of the window
+    proves the Grid half: typing a search, and opening, editing and
+    exporting a book from the keyboard. Switching views, sorting and what
+    is kept across a restart are proved with the second.
 18. When the shelf is resized, then the first fully visible book stays at the
     top, and when a book is selected then only that spine changes.
     `apps/desktop/tests/smoke.py`, and a unit test of the row packing.
@@ -637,12 +736,17 @@ same time.
    Closes [#28](https://github.com/endqwerty/ebook-manager/issues/28).
 2. **Helper facts and covers** (done). Everything under `crates/ebook-reader`.
    Behaviour 15.
-3. **The window** (open). After 1 and 2. Import passes the helper's facts
-   into `ParsedMetadata`, the reader saves the fraction read, the thumbnail
-   cache, the survey, the model, Grid, List and Table, the controls, actions
-   and remembered choices, and the launch time check. Behaviour 17 without the
-   shelf.
+3. **The window** (in two pull requests, the first done). After 1 and 2.
+   Behaviour 17 without the shelf.
    Closes [#25](https://github.com/endqwerty/ebook-manager/issues/25).
+   - First (done): import passes the helper's facts into `ParsedMetadata`,
+     the reader saves the fraction read, the thumbnail cache, the survey, the
+     model, Grid, search, the actions and their keys, the Edit window's
+     filing fields, and the launch time check. `Library::search` is deleted.
+     A view stays readable after the catalogue changes, which the first
+     pull request's contract did not allow and an import needs.
+   - Second (open): List and Table, the view switch, the Sort menu and its
+     editor, the cover sizes and the remembered choices.
 4. **The shelf** (open). After 3. Behaviour 18.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).
 

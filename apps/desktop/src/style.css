@@ -1,11 +1,23 @@
-.shelf-title { font-family: serif; font-size: 32pt; font-weight: bold; }
-.book-cover {
-  min-width: 42px;
-  min-height: 56px;
-  border-radius: 2px 6px 6px 2px;
-  border-left: 5px solid #416458;
-  background: #315047;
-  color: #faeac3;
-  font: bold 18pt serif;
+/* The serif roles: the screen title and the headline of an empty state.
+   No serif is bundled yet, so these use the system's. */
+.screen-title,
+.library-state .title {
+  font-family: serif;
+  font-weight: 600;
+}
+/* The serif's letters reach a pixel past the box the renderer repaints
+   when a title moves. A background of the window's own colour makes the
+   repainted box cover them. */
+.screen-title,
+.library-state .title {
+  padding: 3px 0;
+  background: var(--window-bg-color);
+}
+/* Books sit directly on the window. */
+gridview.books {
+  background: none;
+}
+gridview.books > child {
+  padding: 6px;
 }
 .reading-text { font: 15pt serif; }

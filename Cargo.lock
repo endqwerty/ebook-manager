@@ -252,6 +252,8 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "libc",
+ "png",
+ "sha2",
  "tempfile",
 ]
 
