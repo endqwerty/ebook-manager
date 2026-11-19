@@ -704,6 +704,23 @@ def run(binary, evidence, root):
         click("Back to library")
         time.sleep(0.3)
         print("PASS a page turned just before leaving is where the book reopens", flush=True)
+        # Closing the library window under an open reader, an instant after a
+        # turn, still records that turn, and the app ends cleanly.
+        click("Read")
+        find("Page 5 of", contains=True)
+        library = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"], text=True
+        ).splitlines()[-1]
+        xd("key", "Right")
+        xd("windowclose", library)
+        assert proc.wait(timeout=10) == 0, proc.returncode
+        proc = subprocess.Popen([binary], env=env)
+        find("Mira Vale")
+        click("Read")
+        find("Page 6 of", contains=True)
+        click("Back to library")
+        time.sleep(0.3)
+        print("PASS a page turned just before the library closes is where the book reopens", flush=True)
         # Closing the reader lets its view go, and the view's web process
         # with it.
         deadline = time.monotonic() + 10

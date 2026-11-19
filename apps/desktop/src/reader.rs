@@ -263,6 +263,8 @@ struct Reading {
     confirmed: Cell<Option<Place>>,
     /// The window has been asked to close and is saving its last place.
     closing: Cell<bool>,
+    /// The page's process has been ended because the app is going.
+    ended: Cell<bool>,
     pending_save: Cell<Option<glib::SourceId>>,
     /// The window's own colours, replaced when the appearance changes.
     colours: gtk::CssProvider,
@@ -354,6 +356,7 @@ impl Reading {
             place: Cell::new(None),
             confirmed: Cell::new(None),
             closing: Cell::new(false),
+            ended: Cell::new(false),
             pending_save: Cell::new(None),
             colours,
         });
@@ -410,6 +413,16 @@ impl Reading {
             });
             let weak = Rc::downgrade(&reading);
             parent.connect_unrealize(move |_| {
+                if let Some(r) = weak.upgrade() {
+                    r.leave();
+                }
+            });
+        }
+        // The application can also quit with no window being closed, as it
+        // does when the session ends.
+        if let Some(app) = gio::Application::default() {
+            let weak = Rc::downgrade(&reading);
+            app.connect_shutdown(move |_| {
                 if let Some(r) = weak.upgrade() {
                     r.leave();
                 }
@@ -692,7 +705,7 @@ impl Reading {
             };
             // A page ended while a turn was unanswered says it did not
             // move. That is not the chapter's edge.
-            if reading.closing.get() {
+            if reading.closing.get() || reading.ended.get() {
                 return;
             }
             if moved
@@ -760,34 +773,45 @@ impl Reading {
         self.pending_save.set(Some(timer));
     }
 
-    /// The reader is going without its own close: hand over a place that is
-    /// waiting to be saved, and end the page's process before anything can
-    /// leave it to shut itself down.
+    /// The reader is going without its own close: the window it was opened
+    /// from is closing, or the application is quitting. Write the last place
+    /// and wait for it, because the process may end as soon as this
+    /// returns, then end the page's process before anything can leave it to
+    /// shut itself down.
     fn leave(&self) {
         self.flush();
+        // A turn left unanswered from here on is not a chapter's edge.
+        self.ended.set(true);
         self.view.shut();
     }
 
-    /// Send a place that is waiting for its timer to the library now. The
-    /// save is handed over before this returns, so it does not depend on the
-    /// main loop running again. It is not waited for.
+    /// Write the last confirmed place now, and wait until the library has
+    /// it or two seconds have passed. The library's thread takes its jobs in
+    /// order, so every save made before this one is written too. Saving a
+    /// place that is already the saved one writes nothing.
     fn flush(&self) {
         // The reader's own close saves for itself.
         if self.closing.get() {
             return;
         }
-        let Some(timer) = self.pending_save.take() else {
-            return;
-        };
-        timer.remove();
+        if let Some(timer) = self.pending_save.take() {
+            timer.remove();
+        }
         let Some(position) = self.position() else {
             return;
         };
         let save = self.store.save_position(self.model.id.clone(), position);
         let mut save = std::pin::pin!(save);
-        // The first poll queues the job for the library's thread.
+        // This runs inside a signal handler, where the main loop cannot be
+        // waited on. The save is answered by the library's own thread, so
+        // asking again until it has answered is enough.
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        let _ = std::future::Future::poll(save.as_mut(), &mut context);
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::future::Future::poll(save.as_mut(), &mut context).is_pending()
+            && std::time::Instant::now() < limit
+        {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
 
     fn persist(&self) {

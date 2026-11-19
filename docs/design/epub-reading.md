@@ -184,9 +184,12 @@ things the design now holds to.
 - A web process left to shut itself down when its view is destroyed now and
   then aborts, under load, in a timer's destructor. The reader ends the
   process outright before the view goes: on its own close, when its window
-  goes off screen, and when the window it was opened from closes. WebKit
+  goes off screen, when the window it was opened from closes, and when the
+  application quits. On the last two it first writes the last place and
+  waits up to two seconds for the library to have it, because the process
+  may end at once. WebKit
   ends a running process with a kill signal, which leaves no core dump, and
-  cancels one that is still starting before it runs.
+  cancels one that is still starting.
 - WebKit's memory limit ends a web process only while that process answers.
   See [The bounds on a chapter](#the-bounds-on-a-chapter).
 
