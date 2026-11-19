@@ -36,20 +36,132 @@ pub struct WireResource {
 
 const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+/// Every element the markup writer writes. The host accepts no other.
+pub const MARKUP_ELEMENTS: [&str; 71] = [
+    "a",
+    "abbr",
+    "address",
+    "article",
+    "aside",
+    "b",
+    "bdi",
+    "bdo",
+    "blockquote",
+    "br",
+    "caption",
+    "cite",
+    "code",
+    "col",
+    "colgroup",
+    "dd",
+    "del",
+    "details",
+    "dfn",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "i",
+    "img",
+    "ins",
+    "kbd",
+    "li",
+    "main",
+    "mark",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "q",
+    "rp",
+    "rt",
+    "ruby",
+    "s",
+    "samp",
+    "section",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "summary",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "time",
+    "tr",
+    "u",
+    "ul",
+    "var",
+    "wbr",
+];
+/// Attributes the writer copies from the book, by the name it writes.
+pub const MARKUP_ATTRIBUTES: [&str; 11] = [
+    "id",
+    "class",
+    "lang",
+    "dir",
+    "title",
+    "alt",
+    "colspan",
+    "rowspan",
+    "start",
+    "value",
+    "data-epub-type",
+];
+
+/// `/c/<n>` with an optional `#<anchor>`, or `/r/<n>`: the only addresses
+/// the writer writes.
+fn book_address(value: &str, prefix: &str, fragment: bool) -> bool {
+    let Some(rest) = value.strip_prefix(prefix) else {
+        return false;
+    };
+    let (digits, anchor) = match rest.split_once('#') {
+        Some((d, a)) if fragment => (d, a),
+        Some(_) => return false,
+        None => (rest, ""),
+    };
+    !digits.is_empty()
+        && digits.len() <= 10
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && anchor
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'%'))
+}
+
 /// The UTF-16 length of the text in markup the helper wrote, or `None` when
-/// the markup is not exactly in the writer's form. The form is small enough
-/// to check without an XML parser:
+/// the markup is not in the writer's form. The form is small enough to
+/// check without an XML parser:
 ///
-/// - text, with `&amp;`, `&lt;` and `&gt;` as its only entities and no `>`;
+/// - text, with `&amp;`, `&lt;` and `&gt;` as its only entities, no `>`, and
+///   no control character but tab and line feed;
 /// - `<name attr="value" ...>`, the same ending in `/>`, and `</name>`, with
-///   names in lower-case letters and digits, attribute names also with `-`,
 ///   one space before each attribute and values in double quotes;
-/// - in a value, no `<`, `>` or `"`, and the entities above plus `&quot;`;
-/// - no control character but tab and line feed in text, and none in a value.
+/// - `name` from [`MARKUP_ELEMENTS`]; `attr` from [`MARKUP_ATTRIBUTES`], or
+///   `href` or `data-external` on `a`, or `src` on `img`, none twice;
+/// - `href` only as `/c/<n>` or `/c/<n>#<anchor>`, and `src` only as `/r/<n>`;
+/// - in a value, no `<`, `>`, `"` or control character, and the entities
+///   above plus `&quot;`.
 ///
-/// Comments, CDATA sections, processing instructions, declarations, carriage
-/// returns and character references are outside it. Nesting is not checked:
-/// the view's XML parser refuses markup that is not balanced.
+/// Comments, CDATA sections, processing instructions, declarations,
+/// namespace declarations, carriage returns and character references are
+/// outside it. Nesting is not checked: the view's XML parser refuses markup
+/// that is not balanced.
 pub fn markup_text_units(markup: &str) -> Option<u32> {
     fn plain(c: char) -> bool {
         !c.is_control() && !matches!(c, '\u{feff}' | '\u{fffe}' | '\u{ffff}')
@@ -58,24 +170,41 @@ pub fn markup_text_units(markup: &str) -> Option<u32> {
         let found = allowed.iter().find(|e| rest.starts_with(**e))?;
         Some(&rest[found.len()..])
     }
-    fn name(rest: &str, dash: bool) -> Option<&str> {
+    /// A name at the start of `rest`, and what follows it.
+    fn name(rest: &str) -> Option<(&str, &str)> {
         let end = rest
-            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || (dash && c == '-')))
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
             .unwrap_or(rest.len());
-        (end > 0 && rest.as_bytes()[0].is_ascii_lowercase()).then(|| &rest[end..])
+        (end > 0).then(|| rest.split_at(end))
     }
     /// The rest after one tag that starts at `<`.
     fn tag(rest: &str) -> Option<&str> {
         let rest = &rest[1..];
         if let Some(end) = rest.strip_prefix('/') {
-            return name(end, false)?.strip_prefix('>');
+            let (element, rest) = name(end)?;
+            return MARKUP_ELEMENTS
+                .contains(&element)
+                .then(|| rest.strip_prefix('>'))?;
         }
-        let mut rest = name(rest, false)?;
+        let (element, mut rest) = name(rest)?;
+        if !MARKUP_ELEMENTS.contains(&element) {
+            return None;
+        }
+        let mut seen: Vec<&str> = Vec::new();
         loop {
             if let Some(done) = rest.strip_prefix("/>").or_else(|| rest.strip_prefix('>')) {
                 return Some(done);
             }
-            rest = name(rest.strip_prefix(' ')?, true)?.strip_prefix("=\"")?;
+            let (attribute, after) = name(rest.strip_prefix(' ')?)?;
+            let known = MARKUP_ATTRIBUTES.contains(&attribute)
+                || (element == "a" && matches!(attribute, "href" | "data-external"))
+                || (element == "img" && attribute == "src");
+            if !known || seen.contains(&attribute) {
+                return None;
+            }
+            seen.push(attribute);
+            let value = after.strip_prefix("=\"")?;
+            rest = value;
             loop {
                 let c = rest.chars().next()?;
                 rest = match c {
@@ -85,6 +214,15 @@ pub fn markup_text_units(markup: &str) -> Option<u32> {
                     c if plain(c) => &rest[c.len_utf8()..],
                     _ => return None,
                 };
+            }
+            let value = &value[..value.len() - rest.len()];
+            let placed = match attribute {
+                "href" => book_address(value, "/c/", true),
+                "src" => book_address(value, "/r/", false),
+                _ => true,
+            };
+            if !placed {
+                return None;
             }
             rest = &rest[1..];
         }

@@ -108,8 +108,9 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   attribute, no style, no frame, form control or embedded object, and no
   address other than `/c/<chapter>#<anchor>`, `/r/<id>` and the inert
   `data-external`. The host does not parse it again, but it checks
-  that every tag, attribute and entity is written the way the helper writes
-  them, counts the text, and refuses a reply that fails either. It does not
+  that every element, attribute, address and entity is one the helper
+  writes, written the way the helper writes it, counts the text, and refuses
+  a reply that fails either. It does not
   check that tags are balanced. An `id` or a link's anchor longer than 256
   characters is left out. It is still the book's
   content, so show it only where no script runs and nothing else loads, and

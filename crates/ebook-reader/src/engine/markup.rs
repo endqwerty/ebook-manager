@@ -8,6 +8,7 @@
 use super::text::{css_is_remote, hidden, is_remote};
 use super::xml::{attr, attr_local, tokenize, Tok};
 use super::{clean_inline, truncate_chars};
+use crate::wire::{MARKUP_ATTRIBUTES, MARKUP_ELEMENTS};
 
 pub struct Sanitised {
     /// Children of `<body>`.
@@ -45,75 +46,8 @@ const MAX_VALUE_CHARS: usize = 1024;
 /// one would make two long names that share a start into one target.
 const MAX_ANCHOR_CHARS: usize = 256;
 
-/// Written as elements. Everything else is left out and its content kept,
-/// unless it is in `DROPPED`.
-const KEPT: [&str; 64] = [
-    "a",
-    "abbr",
-    "address",
-    "article",
-    "aside",
-    "b",
-    "bdi",
-    "bdo",
-    "blockquote",
-    "br",
-    "caption",
-    "cite",
-    "code",
-    "col",
-    "colgroup",
-    "dd",
-    "del",
-    "details",
-    "dfn",
-    "div",
-    "dl",
-    "dt",
-    "em",
-    "figcaption",
-    "figure",
-    "footer",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "header",
-    "hgroup",
-    "hr",
-    "i",
-    "img",
-    "ins",
-    "kbd",
-    "li",
-    "main",
-    "mark",
-    "nav",
-    "ol",
-    "p",
-    "pre",
-    "q",
-    "rp",
-    "rt",
-    "ruby",
-    "s",
-    "samp",
-    "section",
-    "small",
-    "span",
-    "strong",
-    "sub",
-    "summary",
-    "sup",
-    "table",
-    "tbody",
-    "td",
-    "tfoot",
-    "th",
-];
-const KEPT_MORE: [&str; 7] = ["thead", "time", "tr", "u", "ul", "var", "wbr"];
+/// Written as elements: `MARKUP_ELEMENTS`. Everything else is left out and
+/// its content kept, unless it is in `DROPPED`.
 /// Written with no content and no end tag of their own.
 const EMPTY: [&str; 5] = ["br", "hr", "img", "col", "wbr"];
 /// Left out with everything inside them.
@@ -122,15 +56,9 @@ const DROPPED: [&str; 22] = [
     "audio", "video", "canvas", "svg", "math", "input", "button", "select", "textarea", "datalist",
     "noscript", "head", "title",
 ];
-const ATTRIBUTES: [&str; 10] = [
-    "id", "class", "lang", "dir", "title", "alt", "colspan", "rowspan", "start", "value",
-];
 
 fn kept(name: &str) -> Option<&'static str> {
-    KEPT.iter()
-        .chain(KEPT_MORE.iter())
-        .find(|k| **k == name)
-        .copied()
+    MARKUP_ELEMENTS.iter().find(|k| **k == name).copied()
 }
 
 struct Skip {
@@ -427,7 +355,10 @@ impl Writer<'_> {
             let name = match key.as_str() {
                 "xml:lang" => "lang",
                 "epub:type" => "data-epub-type",
-                k => match ATTRIBUTES.iter().find(|a| **a == k) {
+                // Only `epub:type` becomes `data-epub-type`; a book's own
+                // attribute of that name is not copied.
+                "data-epub-type" => continue,
+                k => match MARKUP_ATTRIBUTES.iter().find(|a| **a == k) {
                     Some(a) => a,
                     None => continue,
                 },
@@ -663,8 +594,8 @@ mod tests {
         }
         for (key, value) in &attrs {
             assert!(
-                ATTRIBUTES.contains(&key.as_str())
-                    || ["href", "src", "data-external", "data-epub-type"].contains(&key.as_str()),
+                MARKUP_ATTRIBUTES.contains(&key.as_str())
+                    || ["href", "src", "data-external"].contains(&key.as_str()),
                 "{key} is not an allowed attribute"
             );
             match key.as_str() {

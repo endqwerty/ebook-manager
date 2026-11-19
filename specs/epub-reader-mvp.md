@@ -262,14 +262,17 @@ and not this crate's.
   Any other item that is not a text document gives empty markup and the
   unsupported-content warning. A chapter index past the end and a changed
   file are refused as for R1 to R9 (F4, F8). The host checks
-  that the markup it receives is in the helper's exact form and that the
+  that the markup it receives is in the helper's own form and that the
   length is the count of its text, and refuses the reply otherwise. The form
   is text with `&amp;`, `&lt;` and `&gt;` as its only entities, and tags
-  written as `<name attr="value">`, `<name attr="value"/>` and `</name>` with
-  lower-case names and double-quoted values that hold no `<`, `>` or `"`. A
-  comment, a CDATA section, a processing instruction, a declaration, a
-  character reference, a carriage return or another control character is
-  refused. The host does not check that tags are balanced. The
+  written as `<name attr="value">`, `<name attr="value"/>` and `</name>`,
+  with only the elements and attributes of C1, no attribute twice, `href`
+  only on `a` and only as `/c/<n>` or `/c/<n>#<anchor>`, `src` only on `img`
+  and only as `/r/<n>`, and double-quoted values that hold no `<`, `>` or
+  `"`. A comment, a CDATA section, a processing instruction, a declaration,
+  a namespace declaration, a character reference or a carriage return is
+  refused. So is any other control character, except a tab or a line feed
+  in text. The host does not check that tags are balanced. The
   title is the contents label, else the text of the first heading alone, else
   the document title. The language is the
   chapter's own, else the package's first. Right-to-left is set by

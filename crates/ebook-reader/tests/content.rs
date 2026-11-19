@@ -445,7 +445,7 @@ fn malformed_content_and_resource_replies_are_refused() {
     };
     let opened = fake(
         "good",
-        &content("<p class=\"a b\" data-epub-type=\"x&amp;&quot;&lt;&gt;\">ab\tc<br/><img src=\"/r/1\" alt=\"\"/></p>\n", 5),
+        &content("<p class=\"a b\" data-epub-type=\"x&amp;&quot;&lt;&gt;\">ab\tc<br/><img src=\"/r/1\" alt=\"\"/><a href=\"/c/12#a%20b\">d</a><a href=\"/c/0\" data-external=\"https://example.org/\">e</a></p>\n", 7),
     );
     // A size past the chapter limit is brought down to it.
     assert_eq!(
@@ -455,7 +455,7 @@ fn malformed_content_and_resource_replies_are_refused() {
     let good = opened.read_content(0).unwrap();
     assert_eq!(good.index, 0);
     assert!(good.markup.starts_with("<p class=\"a b\""));
-    assert_eq!(good.length, 5);
+    assert_eq!(good.length, 7);
     assert_eq!(good.title.as_deref(), Some("Atitle"));
     assert_eq!(good.language.as_deref(), Some("en"));
     assert!(good.styles.is_empty());
@@ -478,6 +478,29 @@ fn malformed_content_and_resource_replies_are_refused() {
         ("nested", "<p <b>>z</p>", 1),
         ("upper", "<P>z</P>", 1),
         ("mixed-name", "<pX>x</pX>", 1),
+        ("repeated", "<p title=\"a\" title=\"b\">x</p>", 1),
+        (
+            "namespace",
+            "<p xmlns=\"http://www.w3.org/XML/1998/namespace\">x</p>",
+            1,
+        ),
+        ("unknown-element", "<widget>x</widget>", 1),
+        ("unknown-end", "<p>x</widget>", 1),
+        ("script", "<script>x</script>", 1),
+        ("unknown-attribute", "<p arbitrary=\"v\">x</p>", 1),
+        ("handler", "<p onclick=\"v\">x</p>", 1),
+        ("style", "<p style=\"color:red\">x</p>", 1),
+        ("outside-href", "<a href=\"https://example.org/\">x</a>", 1),
+        ("script-href", "<a href=\"javascript:x\">x</a>", 1),
+        ("relative-href", "<a href=\"/c/1/../x\">x</a>", 1),
+        ("misplaced-href", "<p href=\"/c/1\">x</p>", 1),
+        (
+            "outside-src",
+            "<img src=\"https://example.org/p.png\" alt=\"\"/>",
+            0,
+        ),
+        ("path-src", "<img src=\"/r/1/../../x\" alt=\"\"/>", 0),
+        ("misplaced-src", "<p src=\"/r/1\">x</p>", 1),
         ("empty-value", "<p title=>x</p>", 1),
         ("bare-attribute", "<p hidden>x</p>", 1),
         ("single-quotes", "<p title='a'>x</p>", 1),
