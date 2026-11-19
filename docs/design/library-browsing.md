@@ -258,7 +258,9 @@ gives the ranks of books by ID, for keeping selection and scroll position.
 `shelf` returns each book's spine thickness in view order,
 `min(48, 16 + round(words / 12000))` or 24 when the length is unknown, and
 the group starts for a first sort key of Author (the first letter of the sort
-name as the locale files it, so `A`, `a` and in English `Å` are one group), Series (series name) or a date (year). Any other first key has no
+name as the locale files it, so `A`, `a` and in English `Å` are one group,
+Danish `Aa` is with `Å`, Czech `Ch` is its own letter, and names beginning
+with a digit or no letter are one group named `#`), Series (series name) or a date (year). Any other first key has no
 groups.
 
 A group for books with no author is named `Unknown author`, with no series

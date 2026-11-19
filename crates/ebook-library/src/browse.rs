@@ -338,21 +338,10 @@ fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfSt
             if previous.is_none_or(|p: &String| {
                 p.is_empty() != name.is_empty() || !keys.same_letter(p, name)
             }) {
-                let caption = match name.chars().next() {
-                    // The plain letter where the locale files this one under
-                    // it, so the group reads `A` whether its first name
-                    // starts with `a`, `A` or `Å`.
-                    Some(c) => {
-                        let own = c.to_string();
-                        let plain = sortkey::fold(&own);
-                        let letter = if keys.same_letter(&own, &plain) {
-                            plain
-                        } else {
-                            own
-                        };
-                        letter.to_uppercase()
-                    }
-                    None => "Unknown author".into(),
+                let caption = if name.is_empty() {
+                    "Unknown author".into()
+                } else {
+                    keys.caption(name)
                 };
                 groups.push((rank as u32, caption));
                 previous = Some(name);

@@ -20,6 +20,10 @@ impl Keys {
             .filter_map(|k| std::env::var(k).ok())
             .find(|v| !v.is_empty())
             .unwrap_or_default();
+        Self::for_locale(&name)
+    }
+    /// `name` as the environment writes it, such as `da_DK.UTF-8`.
+    pub fn for_locale(name: &str) -> Result<Self> {
         let locale = name
             .split(['.', '@'])
             .next()
@@ -37,11 +41,57 @@ impl Keys {
             letters: Collator::try_new(prefs, base)?,
         })
     }
+    /// The letter a name is filed under, as the start of the name: one
+    /// character, or two where the locale files the pair as a letter of its
+    /// own, as Danish does `Aa` and Czech `Ch`. Such a pair sorts after every
+    /// other name that begins with its first character.
+    fn letter<'a>(&self, name: &'a str) -> &'a str {
+        let name = name.trim_start();
+        let mut ends = name.char_indices().map(|(i, c)| i + c.len_utf8());
+        let Some(one) = ends.next() else {
+            return "";
+        };
+        match ends.next() {
+            Some(two)
+                if name[one..two].chars().all(char::is_alphabetic)
+                    && self
+                        .letters
+                        .compare(&name[..two], &format!("{}\u{FFFF}", &name[..one]))
+                        .is_gt() =>
+            {
+                &name[..two]
+            }
+            _ => &name[..one],
+        }
+    }
     /// Whether two names are filed under the same letter in this locale: `A`,
     /// `a` and, in English, `Å`. Swedish files `Å` as a letter of its own.
+    /// Names that begin with a digit are one group.
     pub fn same_letter(&self, a: &str, b: &str) -> bool {
-        let first = |s: &str| s.chars().next().map(String::from).unwrap_or_default();
-        self.letters.compare(&first(a), &first(b)).is_eq()
+        let digit = |s: &str| s.trim_start().starts_with(char::is_numeric);
+        match (digit(a), digit(b)) {
+            (true, true) => true,
+            (false, false) => self.letters.compare(self.letter(a), self.letter(b)).is_eq(),
+            _ => false,
+        }
+    }
+    /// What to call the group a name is filed in: its letter in capitals,
+    /// without marks where the locale files the marked letter with the plain
+    /// one, and `#` for a name that begins with a digit or with no letter.
+    pub fn caption(&self, name: &str) -> String {
+        let letter = self.letter(name);
+        if !letter.starts_with(char::is_alphabetic) {
+            return "#".into();
+        }
+        let plain = fold(letter);
+        let shown = if self.letters.compare(letter, &plain).is_eq() {
+            &plain
+        } else {
+            letter
+        };
+        let mut chars = shown.chars();
+        let first = chars.next().into_iter().flat_map(char::to_uppercase);
+        first.chain(chars.flat_map(char::to_lowercase)).collect()
     }
     pub fn key(&self, s: &str) -> Vec<u8> {
         let mut out = Vec::new();
@@ -119,4 +169,55 @@ pub(crate) fn position(s: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The captions of a list of names in the order given, one per group.
+    fn groups(locale: &str, names: &[&str]) -> Vec<String> {
+        let keys = Keys::for_locale(locale).unwrap();
+        let mut out: Vec<(String, &str)> = Vec::new();
+        for name in names {
+            if out
+                .last()
+                .is_none_or(|(_, first)| !keys.same_letter(first, name))
+            {
+                out.push((keys.caption(name), name));
+            }
+        }
+        out.into_iter().map(|(caption, _)| caption).collect()
+    }
+
+    #[test]
+    fn letters_follow_the_locale() {
+        let nordic = ["Adams", "apa", "Zorn", "Åberg", "ålund", "Ärlig", "Öberg"];
+        assert_eq!(groups("sv_SE.UTF-8", &nordic), ["A", "Z", "Å", "Ä", "Ö"]);
+        let plain = ["Adams", "Åberg", "ålund", "apa", "Ärlig", "Öberg", "Zorn"];
+        assert_eq!(groups("en_US.UTF-8", &plain), ["A", "O", "Z"]);
+        assert_eq!(groups("C", &plain), ["A", "O", "Z"]);
+    }
+
+    #[test]
+    fn a_pair_the_locale_files_as_one_letter_is_one_group() {
+        // Danish files Aa with Å, after Z.
+        let danish = ["Adams", "Zorn", "Åberg", "Aagaard", "Ålund"];
+        assert_eq!(groups("da_DK.UTF-8", &danish), ["A", "Z", "Å"]);
+        // Czech files Ch after H.
+        let czech = ["Cibulka", "Čapek", "Hrabal", "Chapek", "Ivan"];
+        assert_eq!(groups("cs_CZ.UTF-8", &czech), ["C", "Č", "H", "Ch", "I"]);
+        // Elsewhere the same names are under their first character.
+        assert_eq!(
+            groups("en_US.UTF-8", &["Aagaard", "Adams", "Chapek", "Cibulka"]),
+            ["A", "C"]
+        );
+    }
+
+    #[test]
+    fn names_without_a_leading_letter_share_one_group() {
+        let odd = ["2 Pac", "3 Doors", "10cc", "100 Monkeys", " Plato"];
+        assert_eq!(groups("en_US.UTF-8", &odd), ["#", "P"]);
+        assert_eq!(Keys::for_locale("C").unwrap().caption("\u{301}i"), "#");
+    }
 }

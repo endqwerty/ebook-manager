@@ -313,15 +313,15 @@ fn shelf_strip_matches_the_view() -> Result<()> {
 
 #[test]
 fn author_groups_follow_the_letter_as_filed() -> Result<()> {
+    // Plain letters, so the answer is the same in every locale. Letters
+    // with marks and locale rules are checked beside `Keys`.
     let mut s = Shelf::new()?;
     for name in [
         "John Adams",
-        "Anders Ångström",
-        "Jane Austen",
-        "Bo åberg",
+        "jane austen",
         "Umberto Eco",
-        "Jean Écrivain",
-        "George Eliot",
+        "George ELIOT",
+        "10cc",
     ] {
         s.add(ParsedMetadata {
             authors: vec![name.into()],
@@ -330,7 +330,10 @@ fn author_groups_follow_the_letter_as_filed() -> Result<()> {
     }
     let v = s.view("", &[(Field::Author, false)])?;
     let shelf = s.reader.shelf(v.token)?;
-    assert_eq!(&*shelf.groups, &[(0, "A".into()), (4, "E".into())]);
+    assert_eq!(
+        &*shelf.groups,
+        &[(0, "#".into()), (1, "A".into()), (3, "E".into())]
+    );
     Ok(())
 }
 
