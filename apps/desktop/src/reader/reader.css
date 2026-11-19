@@ -51,9 +51,11 @@ body {
 }
 p { margin: 0 0 0.8em; }
 h1, h2, h3, h4, h5, h6 { line-height: 1.25; break-after: avoid; margin: 1.2em 0 0.6em; }
-/* The page's top margin is the space above a chapter's first line. A
-   heading's own space above it would push the text further down. */
-body > :first-child, body > :first-child > :first-child { margin-top: 0 !important; }
+/* The page's top margin is the space above a chapter's first line. The
+   space a heading keeps above itself would push a chapter that opens with
+   one further down. */
+body > :is(h1, h2, h3, h4, h5, h6):first-child,
+body > :first-child > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0 !important; }
 h1 { font-size: 1.6em; }
 h2 { font-size: 1.35em; }
 h3 { font-size: 1.15em; }

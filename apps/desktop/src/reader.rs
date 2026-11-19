@@ -261,6 +261,8 @@ struct Reading {
     /// The last place a chapter reported, for saving. A chapter that is
     /// still loading, or fails, does not lose it.
     confirmed: Cell<Option<Place>>,
+    /// The window has been asked to close and is saving its last place.
+    closing: Cell<bool>,
     pending_save: Cell<Option<glib::SourceId>>,
     /// The window's own colours, replaced when the appearance changes.
     colours: gtk::CssProvider,
@@ -351,6 +353,7 @@ impl Reading {
             loading: Cell::new(None),
             place: Cell::new(None),
             confirmed: Cell::new(None),
+            closing: Cell::new(false),
             pending_save: Cell::new(None),
             colours,
         });
@@ -394,11 +397,14 @@ impl Reading {
         });
         let r = reading.clone();
         w.connect_close_request(move |w| {
+            // One close at a time, and from here nothing but this handler
+            // saves: a place that arrives while the last save is being
+            // written must not be saved after it.
+            if r.closing.replace(true) {
+                return glib::Propagation::Stop;
+            }
             if let Some(timer) = r.pending_save.take() {
                 timer.remove();
-            }
-            if r.confirmed.get().is_none() {
-                return glib::Propagation::Proceed;
             }
             let w = w.clone();
             let r = r.clone();
@@ -417,17 +423,17 @@ impl Reading {
                         .ok()
                         .and_then(Result::ok)
                         .flatten();
-                if let (Some((offset, page, pages)), Some(place)) = (now, r.place.get()) {
+                // The answer names its own chapter: the one that has landed
+                // in the view, whether or not its first place has reached
+                // the shell yet. No answer means a chapter still loading, or
+                // a page that is stuck, and the last confirmed place stands.
+                if let Some((chapter, offset, page, pages)) = now {
                     r.confirmed.set(Some(Place {
-                        chapter: place.chapter,
+                        chapter,
                         offset,
                         page,
                         pages,
                     }));
-                }
-                // The window is closing: nothing more is saved after this.
-                if let Some(timer) = r.pending_save.take() {
-                    timer.remove();
                 }
                 let Some(position) = r.position() else {
                     w.destroy();
@@ -486,6 +492,11 @@ impl Reading {
     }
 
     fn event(self: &Rc<Self>, event: Event) {
+        // A closing reader has taken its last place. Nothing that arrives
+        // after that changes what is saved or starts something new.
+        if self.closing.get() {
+            return;
+        }
         match event {
             Event::Ready { chapter, length } => {
                 if self.loading.get() == Some(chapter) {
@@ -725,6 +736,10 @@ impl Reading {
     /// save is handed over before this returns, so it does not depend on the
     /// main loop running again. It is not waited for.
     fn flush(&self) {
+        // The reader's own close saves for itself.
+        if self.closing.get() {
+            return;
+        }
         let Some(timer) = self.pending_save.take() else {
             return;
         };

@@ -12,6 +12,8 @@
 	// The shell has named the landing place. Nothing is reported before that:
 	// a resize in between would report the first page as the reader's place.
 	let landed = false;
+	// The layout has changed and the held place has not been shown again yet.
+	let reflowing = false;
 	let held = { offset: 0, edge: "start", textless: false, page: 0, pages: 1 };
 
 	const index = () => {
@@ -151,6 +153,7 @@
 
 	// Show the held place again after the layout changed.
 	const restore = () => {
+		reflowing = false;
 		if (!landed) return;
 		if (held.edge === "start") show(0);
 		else if (held.edge === "end") show(pages() - 1);
@@ -208,6 +211,7 @@
 		// the layout when it arrives, so the place is restored after that.
 		style(properties) {
 			assign(properties);
+			reflowing = true;
 			const after = () => settle(restore);
 			document.fonts.ready.then(after, after);
 			return true;
@@ -221,7 +225,13 @@
 		// The place showing now, as "offset,page,pages", or "" before the
 		// landing. A turn asked for earlier has happened by the time this
 		// answers, because calls are answered in the order they were made.
-		where: () => (ready && landed ? [place(), page(), pages()].join(",") : ""),
+		where: () => {
+			if (!ready || !landed) return "";
+			// A reflow still waiting for its frame would be sampled at the
+			// old scroll position. Go back to the held place first.
+			if (reflowing) restore();
+			return [place(), page(), pages()].join(",");
+		},
 	};
 	Object.defineProperty(window, "__reader", { value: Object.freeze(api) });
 
@@ -252,6 +262,7 @@
 	let resizing = 0;
 	addEventListener("resize", () => {
 		if (!ready) return;
+		reflowing = true;
 		cancelAnimationFrame(resizing);
 		resizing = requestAnimationFrame(restore);
 	});

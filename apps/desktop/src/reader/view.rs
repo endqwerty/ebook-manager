@@ -528,18 +528,18 @@ impl View {
         );
     }
 
-    /// The place showing now, as (offset, page, pages), asked of the page
-    /// itself, or `None` when no chapter has landed or the page does not
-    /// answer. It is answered after any turn already asked for, so it is the
+    /// The place showing now, as (chapter, offset, page, pages), asked of
+    /// the page itself, or `None` when no chapter has landed or the page does
+    /// not answer. It is answered after any turn already asked for, so it is the
     /// place to save when the reader leaves.
-    pub fn current(&self, done: impl FnOnce(Option<(u32, u32, u32)>) + 'static) {
-        let Some((number, length)) = self
+    pub fn current(&self, done: impl FnOnce(Option<(u32, u32, u32, u32)>) + 'static) {
+        let Some((number, chapter, length)) = self
             .0
             .load
             .borrow()
             .as_ref()
             .filter(|l| l.ready)
-            .map(|l| (l.number, l.length))
+            .map(|l| (l.number, l.chapter, l.length))
         else {
             return done(None);
         };
@@ -560,7 +560,7 @@ impl View {
                         && place.0 <= length
                         && place.2 > 0
                         && place.1 < place.2)
-                        .then_some(place)
+                        .then_some((chapter, place.0, place.1, place.2))
                 });
                 done(parsed)
             },

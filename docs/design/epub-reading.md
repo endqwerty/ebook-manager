@@ -604,8 +604,13 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   chapter that begins with a picture begins there.
 - **On leaving,** the shell asks the page where it is before it saves. The
   page answers after any turn already asked for, so a turn made the instant
-  before closing is the place saved. A page that does not answer within a
-  second is not waited for, and the last reported place is saved.
+  before closing is the place saved. The page first goes back to the held
+  place if a reflow is still waiting for its frame, so a resize just before
+  closing is not read at the old scroll position. The answer names the
+  chapter that has landed in the view. A page that does not answer within a
+  second, or a chapter still loading, is not waited for, and the last
+  reported place is saved. From the moment the reader is asked to close,
+  nothing else is saved: a place that arrives later is dropped.
 - **To restore,** the script turns the offset into a `Range`, finds its
   column, and shows that page. The same text comes back after the font or the
   window changes. Its line on the page can differ.

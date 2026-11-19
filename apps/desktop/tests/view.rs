@@ -1022,6 +1022,73 @@ fn a_style_set_during_a_load_applies() -> Outcome {
     Ok(())
 }
 
+/// What the reader asks the page as it closes: the place showing now,
+/// after any turn already asked for and any reflow still waiting.
+fn the_page_says_where_it_is_on_leaving() -> Outcome {
+    let source = Rc::new(Chapters {
+        markup: HashMap::from([(3, long_chapter())]),
+        ..Chapters::default()
+    });
+    let stage = Stage::new(source, |_| {})?;
+    let current = |stage: &Stage| -> Result<Option<(u32, u32, u32, u32)>, Failed> {
+        let out = Rc::new(RefCell::new(None));
+        let slot = out.clone();
+        stage.view.current(move |now| {
+            slot.replace(Some(now));
+        });
+        check!(
+            spin(|| out.borrow().is_some(), Duration::from_secs(20)),
+            "the page never said where it is"
+        );
+        Ok(out.take().unwrap())
+    };
+    // Nothing has landed: there is nothing to say.
+    check!(
+        current(&stage)?.is_none(),
+        "a view with no chapter named a place"
+    );
+    stage.open(3, Landing::Offset(9000))?;
+    let (held, page, pages) = stage.last_place().unwrap();
+    check!(
+        current(&stage)? == Some((3, held, page, pages)),
+        "the page named {:?}, not {held} on {page}",
+        current(&stage)?
+    );
+    // A turn asked for and not yet answered is in the answer.
+    stage.view.turn(1, false, |_| {});
+    let Some((chapter, after, turned, _)) = current(&stage)? else {
+        return Err("no place after a turn".into());
+    };
+    check!(
+        chapter == 3 && turned == page + 1 && after > held,
+        "after a turn: page {turned}, offset {after}"
+    );
+    // A resize whose reflow has not happened yet does not move the place.
+    stage.window.set_default_size(520, 640);
+    let waited = Instant::now();
+    let mut narrowed = None;
+    while waited.elapsed() < Duration::from_secs(5) {
+        narrowed = current(&stage)?;
+        if stage
+            .app("return innerWidth")?
+            .parse::<f64>()
+            .unwrap_or(900.0)
+            < 700.0
+        {
+            narrowed = current(&stage)?;
+            break;
+        }
+    }
+    let Some((_, offset, _, _)) = narrowed else {
+        return Err("no place after a resize".into());
+    };
+    check!(
+        offset <= after && after - offset < 3000,
+        "a resize moved the place from {after} to {offset}"
+    );
+    Ok(())
+}
+
 /// A book through the real sandboxed helper, as the reader serves it.
 struct Helper(ebook_reader::Book);
 
@@ -1284,6 +1351,10 @@ const TESTS: &[Test] = &[
     (
         "pages_without_text_keep_their_place",
         pages_without_text_keep_their_place,
+    ),
+    (
+        "the_page_says_where_it_is_on_leaving",
+        the_page_says_where_it_is_on_leaving,
     ),
     (
         "a_late_error_does_not_fail_a_newer_load",
