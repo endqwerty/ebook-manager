@@ -1,6 +1,7 @@
 use crate::*;
-pub(crate) fn open(path: &Path) -> Result<Connection> {
+pub(crate) fn open(path: &Path) -> Result<(Connection, bool)> {
     let existing = path.try_exists()?;
+    let mut rebuilt = !existing;
     let mut db = Connection::open(path)?;
     db.execute_batch("PRAGMA trusted_schema=OFF")?;
     if existing {
@@ -19,6 +20,7 @@ pub(crate) fn open(path: &Path) -> Result<Connection> {
         {
             db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
             drop(db);
+            rebuilt = true;
             fs::rename(path, path.with_extension(format!("sqlite.old-{}", uid())))?;
             File::open(path.parent().unwrap())?.sync_all()?;
             db = Connection::open(path)?;
@@ -37,7 +39,7 @@ pub(crate) fn open(path: &Path) -> Result<Connection> {
  CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value);
  INSERT OR IGNORE INTO meta VALUES('version',1),('counter',0),('tip',0);
  COMMIT;")?;
-    Ok(db)
+    Ok((db, rebuilt))
 }
 
 pub(crate) fn project(db: &Connection, b: &Book, keys: &sortkey::Keys) -> Result<()> {
