@@ -137,7 +137,9 @@ revision, round, reviewer, finding and next action. Before dispatch, mark the
 round in flight and give the T3 task a unique public-safe title containing the
 issue number, item and round. Put that exact title on the issue. On takeover,
 find it with `t3_thread_list` (include subagents, filter by title) and read
-the matching thread. If it needs intervention, contact the dispatching session.
+the matching thread. Its `parentThreadId` identifies the dispatching session.
+If that session is unavailable, keep a live reader in flight. If the reader
+terminated without a result, record the failed attempt before arranging a new pass.
 If the API never accepted a dispatch, record that and recover the same round.
 Record the result, deciding check or failed attempt. A pass against a superseded
 interface still counts. Use its findings only where their evidence still holds,
