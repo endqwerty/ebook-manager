@@ -385,3 +385,41 @@ fn a_new_key_profile_refiles_existing_rows() -> Result<()> {
     );
     Ok(())
 }
+#[test]
+fn a_view_does_not_outlive_its_catalogue_file() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let stage = dir.path().join("stage");
+    let add = |lib: &mut Library, title: &str| -> Result<()> {
+        std::fs::write(&stage, title)?;
+        lib.import(&stage, &stage, &meta(title), ImportChoice::KeepSeparate)?;
+        Ok(())
+    };
+    let app = dir.path().join("app");
+    let mut lib = Library::open(&app)?;
+    add(&mut lib, "First")?;
+    let mut reader = lib.browse_reader()?;
+    let view = reader.open(&Default::default(), &Cancel::default())?;
+    // The catalogue file is replaced, as when it is rebuilt from the
+    // portable folder, and the new one gains a book.
+    drop(lib);
+    std::fs::rename(app.join("library.sqlite"), app.join("library.sqlite.aside"))?;
+    let mut lib = Library::open(&app)?;
+    add(&mut lib, "Second")?;
+    let replaced = |result: Result<()>| result.unwrap_err().is::<CatalogueReplaced>();
+    assert!(replaced(reader.window(view.token, 0, 8).map(drop)));
+    assert!(replaced(reader.locate(view.token, &[]).map(drop)));
+    assert!(replaced(reader.shelf(view.token).map(drop)));
+    assert!(replaced(reader.changed().map(drop)));
+    assert!(replaced(
+        reader
+            .open(&Default::default(), &Cancel::default())
+            .map(drop)
+    ));
+    // A reader opened on the new file sees it whole.
+    let mut reader = lib.browse_reader()?;
+    assert_eq!(
+        titles(reader.open(&Default::default(), &Cancel::default())?),
+        ["First", "Second"]
+    );
+    Ok(())
+}

@@ -249,6 +249,17 @@ can show values newer than the order, and never a different book. An import
 writes in a stream, and a view that a write made unusable could never be
 read on a large library, where a write always lands before an open returns.
 
+This holds for one catalogue file. A file rebuilt from the portable folder
+numbers its rows afresh, so a view of the old file must never be answered
+from the new one. Each catalogue file gets a random identity in `meta` when
+it is created. A view records it at `open`, and `window`, `locate` and
+`shelf` read it in the same transaction as their rows. When it differs or
+cannot be read they fail with `CatalogueReplaced`. `open` and `changed` fail
+the same way when the file at the catalogue's path is no longer the one the
+reader opened, because its connection would go on reading the old file and
+never see a change. The shell drops that reader, asks the library for a new
+one and opens its query again. `a_view_does_not_outlive_its_catalogue_file`.
+
 Deleting a book will break this. A view can then hold a row number that no
 longer exists, and `window`, `locate` and `shelf` will have to tolerate a
 missing row.

@@ -17,6 +17,7 @@ pub(crate) fn open(path: &Path) -> Result<Connection> {
             )?
         {
             db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL")?;
+            identify(&db)?;
             return Ok(db);
         }
         let busy: i32 = db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
@@ -27,7 +28,27 @@ pub(crate) fn open(path: &Path) -> Result<Connection> {
         db = Connection::open(path)?;
     }
     db.execute_batch(include_str!("schema.sql"))?;
+    identify(&db)?;
     Ok(db)
+}
+
+/// Gives a catalogue file an identity of its own, once. A browse view
+/// records it, so a view of one file is never read against another.
+fn identify(db: &Connection) -> Result<()> {
+    db.execute(
+        "INSERT OR IGNORE INTO meta VALUES('identity',?)",
+        [Uuid::new_v4().to_string()],
+    )?;
+    Ok(())
+}
+
+/// The identity of the catalogue file a connection is reading.
+pub(crate) fn identity(db: &Connection) -> Result<String> {
+    Ok(
+        db.query_row("SELECT value FROM meta WHERE key='identity'", [], |r| {
+            r.get(0)
+        })?,
+    )
 }
 
 pub(crate) fn project(db: &Connection, b: &Book, keys: &sortkey::Keys) -> Result<()> {
