@@ -78,6 +78,7 @@ const SKIP_TAGS: [&str; 9] = [
 #[derive(Default, Clone, Copy)]
 struct Fx {
     block: bool,
+    gap: bool,
     row: bool,
     skip: bool,
     head: bool,
@@ -201,23 +202,32 @@ fn is_remote(reference: &str) -> bool {
         .any(|p| r.starts_with(p))
 }
 
-/// Style text that loads something from a remote address.
+/// Style text that loads something from a remote address: a `url(...)` or
+/// an `@import "..."` whose target is remote. Addresses that only appear in
+/// comments or other text do not count.
 fn css_is_remote(css: &str) -> bool {
     let css = css.to_ascii_lowercase();
-    let loads = css.contains("url(") || css.contains("@import");
-    let scheme = ["http://", "https://", "ftp://"]
-        .iter()
-        .any(|p| css.contains(p));
-    let relative = [
-        "url(//",
-        "url('//",
-        "url(\"//",
-        "@import '//",
-        "@import \"//",
-    ]
-    .iter()
-    .any(|p| css.contains(p));
-    (loads && scheme) || relative
+    let target = |rest: &str, closers: &[char]| -> bool {
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix(['"', '\'']).unwrap_or(rest);
+        let end = rest.find(closers).unwrap_or(rest.len());
+        is_remote(&rest[..end])
+    };
+    let mut rest = css.as_str();
+    while let Some(at) = rest.find("url(") {
+        rest = &rest[at + 4..];
+        if target(rest, &[')', '"', '\'']) {
+            return true;
+        }
+    }
+    let mut rest = css.as_str();
+    while let Some(at) = rest.find("@import") {
+        rest = &rest[at + 7..];
+        if target(rest, &[';', '"', '\'', ' ']) {
+            return true;
+        }
+    }
+    false
 }
 
 fn hidden(attrs: &[(String, String)]) -> bool {
@@ -238,10 +248,13 @@ impl Extractor<'_> {
         }
         let mut fx = Fx::default();
         let n = name.as_str();
-        if n != "a" && n != "area" && !self.remote {
+        if !self.remote {
+            // A hyperlink's own address is a place to go, not something to load.
+            let hyperlink = n == "a" || n == "area";
             self.remote = attrs.iter().any(|(key, value)| {
                 let key = key.rsplit(':').next().unwrap_or(key);
                 match key {
+                    "href" if hyperlink => false,
                     "src" | "href" | "poster" | "data" => is_remote(value),
                     "srcset" => value.split([',', ' ', '\t', '\n']).any(is_remote),
                     "style" => css_is_remote(value),
@@ -277,10 +290,11 @@ impl Extractor<'_> {
             if self.in_row == 0 || table_part {
                 self.flush();
                 fx.block = true;
-            } else if !self.cur.spans.is_empty() && !self.cur.line_start {
+            } else {
                 // Inside a table cell a paragraph is a gap, not a new block:
-                // the row stays on one line.
-                self.cur.pending_space = true;
+                // the row stays on one line, with a space on either side.
+                fx.gap = true;
+                self.gap();
             }
         }
         if let Some(id) =
@@ -402,6 +416,9 @@ impl Extractor<'_> {
         if fx.block {
             self.flush();
         }
+        if fx.gap {
+            self.gap();
+        }
         if fx.row {
             self.in_row -= 1;
         }
@@ -496,6 +513,13 @@ impl Extractor<'_> {
             self.cur.line_start = false;
             self.push_raw(c);
             self.cur.has_text |= is_text;
+        }
+    }
+
+    /// A word break where a block boundary was folded into the line.
+    fn gap(&mut self) {
+        if !self.cur.spans.is_empty() && !self.cur.line_start {
+            self.cur.pending_space = true;
         }
     }
 
@@ -872,6 +896,40 @@ mod tests {
         ] {
             assert!(!run(body).remote_references, "{body}");
         }
+    }
+
+    #[test]
+    fn separates_cell_paragraphs_from_text_on_either_side() {
+        assert_eq!(
+            lines("<table><tr><td>lead<p>Left</p>tail</td><td><div>Right</div></td></tr></table>"),
+            vec!["lead Left tail\tRight"]
+        );
+    }
+
+    #[test]
+    fn judges_style_targets_not_stray_addresses() {
+        for css in [
+            "background: url( //example.test/a )",
+            "background:url( 'https://example.test/a.png' )",
+            "@import \"//example.test/x.css\";",
+            "@import url(http://example.test/x.css);",
+        ] {
+            assert!(css_is_remote(css), "{css}");
+        }
+        for css in [
+            "background: url(local.png) /* see https://example.test/docs */",
+            "content: 'http://example.test'",
+            "@import 'local.css'; /* //cdn */",
+        ] {
+            assert!(!css_is_remote(css), "{css}");
+        }
+        assert!(
+            run(
+                "<p><a href='x.xhtml' style='background:url(https://example.test/b.png)'>x</a></p>"
+            )
+            .remote_references
+        );
+        assert!(!run("<p><a href='https://example.test/'>x</a></p>").remote_references);
     }
 
     #[test]

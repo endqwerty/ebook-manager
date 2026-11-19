@@ -160,10 +160,13 @@ pub fn parse_tree_checked(src: &str) -> (Element, bool) {
     let mut overflow = 0usize;
     let mut nodes = 0usize;
     tokenize(src, false, |tok| {
-        nodes += 1;
-        if nodes > MAX_NODES {
-            whole = false;
-            return false;
+        // An element counts once, at its start; so does each run of text.
+        if !matches!(tok, Tok::End { .. }) {
+            nodes += 1;
+            if nodes > MAX_NODES {
+                whole = false;
+                return false;
+            }
         }
         match tok {
             Tok::Start { name, attrs } => {

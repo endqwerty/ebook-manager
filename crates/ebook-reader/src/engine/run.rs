@@ -41,12 +41,13 @@ fn usage() -> WireError {
 /// cannot be raised again. A limit that cannot be set is a reason not to run.
 fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
     let set = |resource, value: u64| {
-        // A ceiling inherited from the application that is already lower is
-        // kept: it cannot be raised, and it is at least as strict.
-        let value = match getrlimit(resource).maximum {
-            Some(ceiling) => value.min(ceiling),
-            None => value,
-        };
+        // A limit inherited from the application that is already lower,
+        // soft or hard, is kept: this only ever tightens.
+        let inherited = getrlimit(resource);
+        let value = [inherited.current, inherited.maximum]
+            .into_iter()
+            .flatten()
+            .fold(value, u64::min);
         setrlimit(
             resource,
             Rlimit {

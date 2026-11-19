@@ -762,3 +762,88 @@ fn helper_is_built_with_overflow_checks() {
     );
     assert!(out.stdout.is_empty());
 }
+
+/// F6: a ZIP64 archive with the longest possible comment is counted by its
+/// real number of entries, not by the 65,535 placeholder in its end record.
+#[test]
+fn zip64_archives_are_counted_by_their_real_entries() {
+    let mut bytes = simple(&["<p>one</p>"], &[]);
+    let end = bytes.len() - 22;
+    assert_eq!(&bytes[end..end + 4], b"PK\x05\x06");
+    let total = u16::from_le_bytes([bytes[end + 10], bytes[end + 11]]) as u64;
+    let dir_size = u32::from_le_bytes(bytes[end + 12..end + 16].try_into().unwrap()) as u64;
+    let dir_at = u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as u64;
+    bytes.truncate(end);
+
+    let record_at = bytes.len() as u64;
+    bytes.extend_from_slice(b"PK\x06\x06");
+    bytes.extend_from_slice(&44u64.to_le_bytes());
+    bytes.extend_from_slice(&45u16.to_le_bytes());
+    bytes.extend_from_slice(&45u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&total.to_le_bytes());
+    bytes.extend_from_slice(&total.to_le_bytes());
+    bytes.extend_from_slice(&dir_size.to_le_bytes());
+    bytes.extend_from_slice(&dir_at.to_le_bytes());
+    bytes.extend_from_slice(b"PK\x06\x07");
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&record_at.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(b"PK\x05\x06");
+    bytes.extend_from_slice(&[0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]);
+    bytes.extend_from_slice(&[0xFF; 8]);
+    bytes.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    bytes.extend_from_slice(&vec![b'c'; 0xFFFF]);
+
+    let dir = Scratch::new();
+    let book = reader().open(&dir.file("zip64.epub", &bytes)).unwrap();
+    assert_eq!(book.read_chapter(0).unwrap().plain_text(), "one\n");
+}
+
+/// F7: a lower soft memory limit inherited from the application is kept too,
+/// not raised to the helper's own.
+#[test]
+fn a_lower_inherited_soft_memory_limit_is_kept() {
+    let dir = Scratch::new();
+    // About 12 MiB of text needs several times that to unpack, decode and
+    // split into blocks: more than the 64 MiB soft limit below, far less than
+    // the helper's own 768 MiB.
+    let body = "<p>word word word word</p>\n".repeat(450_000);
+    let heavy = dir.file("heavy.epub", &simple(&[&body], &[]));
+    let script = "#!/bin/sh\nulimit -Sv 65536\nexec /usr/bin/bwrap \"$@\"\n";
+    let wrapped = dir.file("soft-bwrap", script.as_bytes());
+    Command::new("/bin/chmod")
+        .arg("+x")
+        .arg(&wrapped)
+        .status()
+        .unwrap();
+    let mut cfg = ReaderConfig {
+        bwrap_path: Some(wrapped),
+        ..config()
+    };
+    cfg.limits.max_compression_ratio = u32::MAX;
+    cfg.limits.max_blocks_per_chapter = 1_000_000;
+    let mut outcome = None;
+    settle(|| match Reader::new(cfg.clone()) {
+        Ok(r) => {
+            outcome = Some(
+                r.open(&heavy)
+                    .and_then(|b| b.read_chapter(0))
+                    .map(|c| c.blocks.len()),
+            );
+            String::new()
+        }
+        Err(e) => format!("{e:?}"),
+    });
+    assert!(
+        matches!(outcome, Some(Err(ReaderError::HelperFailed { .. }))),
+        "{outcome:?}"
+    );
+    // The same book reads under the helper's own limit.
+    let mut cfg = config();
+    cfg.limits.max_compression_ratio = u32::MAX;
+    cfg.limits.max_blocks_per_chapter = 1_000_000;
+    let roomy = Reader::new(cfg).unwrap().open(&heavy).unwrap();
+    assert_eq!(roomy.read_chapter(0).unwrap().blocks.len(), 450_000);
+}
