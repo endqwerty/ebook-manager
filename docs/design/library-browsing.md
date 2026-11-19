@@ -78,7 +78,7 @@ folder restores them without opening any EPUB.
 | Title, authors | The helper, as today | Yes |
 | Sort title | Absent unless the reader sets it. The catalogue derives the filing form from the title. | Yes |
 | Author sort names | The `sort_name` the helper already returns, else derived, per author | Yes |
-| Series memberships: name and position text, in order. The first is the primary series. | EPUB 3 `belongs-to-collection` with `collection-type` `series` and `group-position`. For EPUB 2, the `calibre:series` and `calibre:series_index` `meta` names, known from inspecting files that calibre writes, which [Rule 1](../../AGENTS.md#rule-1-never-look-at-calibres-source-code) allows. | Yes |
+| Series memberships: name and position text, in order. The first is the primary series. | EPUB 3 `belongs-to-collection` with `collection-type` `series` and `group-position`. For EPUB 2, the `calibre:series` and `calibre:series_index` `meta` names, known from inspecting files that calibre writes, which [Rule 1](../../AGENTS.md#rule-1-never-look-at-calibres-source-code) allows. An index such as `3.0` is given as `3`. | Yes |
 | Date added | The library, at first import, in UTC. A replacement keeps it. | No |
 | Date published, as the text the file gives, first language, and whether pages run right to left | The helper | No |
 | Survey version | The library, when the helper's word count and cover facts were last asked for. See [Covers](#covers). | No |
@@ -283,10 +283,13 @@ the helper's sandbox.
   within 256 by 384 by averaging areas. It refuses a cover whose image file,
   as unpacked from the EPUB, is over 20 MiB, or whose decoded size is over 40
   million pixels. The helper's existing limits on unpacked bytes, reply size,
-  memory and time apply as they do to any request. It returns raw RGB pixels with their width and height,
-  the average colour, and the spine colour: the most common colour, after
-  rounding each channel to 5 bits, on the tenth of the image at the bound
-  side, else on the whole image. The bound side is the left unless the
+  memory and time apply as they do to any request. Both caps are fields of
+  `Limits` (`max_cover_bytes`, `max_cover_pixels`), and the pixel count is
+  checked from the header before decoding. It returns raw RGB pixels with their width and height,
+  the average colour of the thumbnail, and the spine colour: the most common colour, after
+  rounding each channel to 5 bits, on the tenth of the thumbnail's width at the bound
+  side, or on all of it when it is under 10 pixels wide, given as the mean
+  of the pixels in that colour. The bound side is the left unless the
   package's page progression is right to left.
 - The host checks that both sides are at least 1 and within the limit and
   that the byte length equals width times height times 3, computed without
@@ -308,7 +311,11 @@ the helper's sandbox.
   The two results are independent: a cover that cannot be used leaves the
   word count, and an unknown word count leaves the cover. The count is
   unknown when any linear spine item could not be resolved, was skipped or
-  was truncated. A helper that times out, crashes or cannot start is an error
+  was truncated. A spine item that is a picture adds no words, and picture
+  text alternatives are not counted. The cover is read first and the text
+  takes what remains of the call's 64 MiB unpacking allowance, so a book whose
+  cover and text exceed it has an unknown count. A protected book surveys as
+  an unknown count and no cover, a result, so it is not asked again. A helper that times out, crashes or cannot start is an error
   and not a result.
 - Import runs the survey after the metadata request and passes its facts in
   with the metadata. The record stores the survey version that ran, 1 for
@@ -332,6 +339,7 @@ pub struct Metadata { /* as today, and: */ pub series: Vec<SeriesMembership>,
 pub struct Thumbnail { /* checked: width, height, RGB pixels */ }
 pub struct Survey { pub words: Option<u32>, pub cover: Option<SurveyedCover> }
 pub struct SurveyedCover { pub thumbnail: Thumbnail, pub average: Rgb, pub spine: Rgb }
+pub struct Rgb { pub r: u8, pub g: u8, pub b: u8 }   // Rgb::to_u32 gives 0xRRGGBB
 impl Reader { pub fn survey(&self, epub: &Path) -> Result<Survey, ReaderError>; }
 
 // ebook-library (pull request 1)
@@ -591,7 +599,7 @@ same time.
    new fields with empty values, and `Library::search` stays for it until the
    third pull request deletes it. Behaviour 1 to 14 and 16.
    Closes [#28](https://github.com/endqwerty/ebook-manager/issues/28).
-2. **Helper facts and covers** (open). Everything under `crates/ebook-reader`.
+2. **Helper facts and covers** (done). Everything under `crates/ebook-reader`.
    Behaviour 15.
 3. **The window** (open). After 1 and 2. Import passes the helper's facts
    into `ParsedMetadata`, the reader saves the fraction read, the thumbnail
@@ -612,6 +620,9 @@ same time.
 - **Is one journal file per change workable at a million books?** Assumed
   not, and left alone here. Reading positions make it worse than the book
   count suggests. It needs its own design before sync.
-- **Which decoders does the helper link?** Assumed the `image` crate with only
-  its JPEG, PNG, GIF and WebP features, subject to the
-  [licence check](https://github.com/endqwerty/ebook-manager/issues/21).
+- **Which decoders does the helper link?** The `image` crate with only its
+  JPEG, PNG, GIF and WebP features, all pure Rust. It brings `zune-jpeg`,
+  `png`, `gif`, `image-webp`, `moxcms` and their dependencies, licensed MIT,
+  Apache-2.0, Zlib, BSD-3-Clause or Unlicense; the
+  [licence check](https://github.com/endqwerty/ebook-manager/issues/21) has
+  the final word.
