@@ -7,6 +7,7 @@ fn facts() -> ParsedMetadata {
         title: "A Small Atlas".into(),
         authors: vec!["Quinn".into()],
         identifier: Some("atlas:1".into()),
+        ..Default::default()
     }
 }
 fn add(l: &mut Library, path: &Path) -> Result<Book> {
@@ -29,6 +30,8 @@ fn exact_duplicate_and_review_preserve_both_revisions() -> Result<()> {
     );
     l.edit(&b.id, "New title", &b.authors)?;
     let pos = ReadingPosition {
+        last_read: None,
+        fraction: None,
         chapter: 1,
         offset: 30,
         version_id: b.version_id.clone(),
@@ -69,6 +72,8 @@ fn portable_only_rebuild_restores_bytes_metadata_and_position() -> Result<()> {
     let b = add(&mut l, &stage)?;
     let edited = l.edit(&b.id, "../../The Map", &["Dana".into()])?;
     let pos = ReadingPosition {
+        last_read: None,
+        fraction: None,
         version_id: b.version_id.clone(),
         chapter: 1,
         offset: 42,
@@ -162,6 +167,8 @@ fn shared_identifier_does_not_hide_an_exact_version() -> Result<()> {
     let mut l = Library::open(&d.path().join("app"))?;
     let b = add(&mut l, &a)?;
     let p = ReadingPosition {
+        last_read: None,
+        fraction: None,
         version_id: b.version_id.clone(),
         chapter: 2,
         offset: 8,
@@ -251,6 +258,30 @@ fn retry_reports_the_committed_book_while_publication_is_pending() -> Result<()>
     let outcome = l.import(&stage, &alias, &unidentified, ImportChoice::Review)?;
     assert!(
         matches!(outcome, ImportOutcome::NeedsReview(books) if books.len()==1 && books[0].id==ids[0])
+    );
+    Ok(())
+}
+
+#[test]
+fn survey_facts_survive_import() -> Result<()> {
+    let d = tempdir()?;
+    let stage = d.path().join("stage");
+    fs::write(&stage, b"bytes")?;
+    let mut lib = Library::open(&d.path().join("app"))?;
+    let mut raw = serde_json::to_value(facts())?;
+    raw["survey"] = serde_json::json!({"version":1,"words":14500,"cover":null});
+    let ImportOutcome::Added(book) = lib.import(
+        &stage,
+        &stage,
+        &serde_json::from_value(raw.clone())?,
+        ImportChoice::Review,
+    )?
+    else {
+        panic!("expected book")
+    };
+    assert_eq!(
+        serde_json::to_value(book.imported)?["survey"],
+        raw["survey"]
     );
     Ok(())
 }

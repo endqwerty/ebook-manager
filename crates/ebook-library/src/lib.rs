@@ -29,11 +29,36 @@ impl std::fmt::Display for PublicationPending {
     }
 }
 impl std::error::Error for PublicationPending {}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ParsedMetadata {
     pub title: String,
     pub authors: Vec<String>,
     pub identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub author_sorts: Vec<Option<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series: Vec<(String, Option<String>)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub right_to_left: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub survey: Option<SurveyFacts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurveyFacts {
+    pub version: u32,
+    pub words: Option<u32>,
+    pub cover: Option<CoverFacts>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoverFacts {
+    pub digest: String,
+    pub average: u32,
+    pub spine: u32,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Book {
@@ -45,12 +70,24 @@ pub struct Book {
     pub authors: Vec<String>,
     pub imported: ParsedMetadata,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_sorts: Option<Vec<Option<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<Vec<(String, Option<String>)>>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadingPosition {
     pub version_id: String,
     pub chapter: u32,
     pub offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_read: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fraction: Option<f32>,
 }
 #[derive(Debug, Clone)]
 pub enum ImportChoice {
@@ -247,7 +284,7 @@ impl Library {
         lib.refresh()?;
         Ok(lib)
     }
-    fn book(&self, id: &str) -> Result<Book> {
+    pub fn book(&self, id: &str) -> Result<Book> {
         let data: String = self
             .db
             .query_row("SELECT data FROM books WHERE id=?", [id], |r| r.get(0))?;
@@ -376,6 +413,15 @@ impl Library {
                 authors: meta.authors.clone(),
                 imported: meta.clone(),
                 sha256: sha.clone(),
+                added: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_secs()
+                        .try_into()?,
+                ),
+                sort_title: None,
+                author_sorts: None,
+                series: None,
             },
         };
         if replaced {
@@ -417,12 +463,22 @@ impl Library {
         self.commit(Change::Book(b.clone()), None)?;
         Ok(b)
     }
+    pub fn set_survey(&mut self, id: &str, version_id: &str, facts: SurveyFacts) -> Result<()> {
+        let mut book = self.book(id)?;
+        if book.version_id == version_id && book.imported.survey.as_ref() != Some(&facts) {
+            book.imported.survey = Some(facts);
+            self.commit(Change::Book(book), None)?;
+        }
+        Ok(())
+    }
     pub fn save_position(&mut self, id: &str, pos: &ReadingPosition) -> Result<()> {
         ensure!(
             self.book(id)?.version_id == pos.version_id,
             "reading position belongs to another version"
         );
-        if self.load_position(id)?.as_ref() == Some(pos) {
+        if self.load_position(id)?.is_some_and(|old| {
+            old.chapter == pos.chapter && old.offset == pos.offset && old.fraction == pos.fraction
+        }) {
             return self
                 .publish()
                 .context(PublicationPending { book_id: id.into() });
@@ -584,6 +640,7 @@ fn append(db: &Connection, e: &Entry, data: &str) -> Result<()> {
         e.format == 1 && uuid_ok(&e.id) && e.parent == tip(db)?,
         "incompatible journal history"
     );
+    ensure!(data.len() <= 8 * 1024 * 1024, "record too large");
     match &e.change {
         Change::Book(b) => {
             b.validate()?;
@@ -593,6 +650,10 @@ fn append(db: &Connection, e: &Entry, data: &str) -> Result<()> {
             )?;
         }
         Change::Position { id, position } => {
+            ensure!(
+                position.fraction.is_none_or(|f| (0.0..=1.0).contains(&f)),
+                "invalid reading fraction"
+            );
             let raw: String =
                 db.query_row("SELECT data FROM books WHERE id=?", [id], |r| r.get(0))?;
             ensure!(

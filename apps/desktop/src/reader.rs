@@ -414,6 +414,8 @@ impl View {
             .partition_point(|p| *p <= iter.offset())
             .saturating_sub(1) as u32;
         Some(ReadingPosition {
+            last_read: None,
+            fraction: None,
             version_id: self.model.version_id.clone(),
             chapter,
             offset: block,
@@ -442,6 +444,8 @@ impl View {
     fn persist(&self, chapter: u32, offset: u32) {
         let id = self.model.id.clone();
         let pos = ReadingPosition {
+            last_read: None,
+            fraction: None,
             version_id: self.model.version_id.clone(),
             chapter,
             offset,
