@@ -9,6 +9,21 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+/// A program written a moment ago can be "text file busy" while another test
+/// thread is between fork and exec with the write handle inherited. Run again
+/// until that passes; it is a property of the test process, not the reader.
+fn settle(mut run: impl FnMut() -> String) -> String {
+    let mut last = String::new();
+    for _ in 0..50 {
+        last = run();
+        if !last.to_lowercase().contains("busy") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    last
+}
+
 fn open_err(bytes: &[u8]) -> ReaderError {
     let dir = Scratch::new();
     reader().open(&dir.file("b.epub", bytes)).unwrap_err()
@@ -32,16 +47,15 @@ fn reader_fails_closed_without_a_working_sandbox() {
     // A "bwrap" that runs the helper with no sandbox at all: the helper's own
     // check refuses, so the reader is still not created.
     let dir = Scratch::new();
-    let fake = dir.file("fake-bwrap", b"#!/bin/sh\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift; shift\nexec \"$HELPER\" \"$@\"\n");
-    Command::new("/bin/chmod").arg("+x").arg(&fake).status().unwrap();
-    // The fake needs the helper path; env is cleared by the host, so bake it in.
     let script = format!("#!/bin/sh\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift; shift\nexec '{HELPER}' \"$@\"\n");
-    std::fs::write(&fake, script).unwrap();
+    let fake = dir.file("fake-bwrap", script.as_bytes());
+    Command::new("/bin/chmod").arg("+x").arg(&fake).status().unwrap();
     let cfg = ReaderConfig { bwrap_path: Some(fake), ..config() };
-    match Reader::new(cfg) {
-        Err(ReaderError::SandboxUnavailable { reason }) => assert!(reason.contains("visible"), "{reason}"),
+    let refusal = settle(|| match Reader::new(cfg.clone()) {
+        Err(ReaderError::SandboxUnavailable { reason }) => reason,
         other => panic!("expected a refusal, got {other:?}"),
-    }
+    });
+    assert!(refusal.contains("visible"), "{refusal}");
 }
 
 /// S2: run directly, outside any sandbox, the helper will not touch a book.
@@ -291,9 +305,20 @@ fn installed_layout_finds_the_helper_and_reads() {
         std::fs::create_dir_all(&helper_dir).unwrap();
         std::fs::copy(&example, bin.join("epub-dump")).unwrap();
         std::fs::copy(HELPER, helper_dir.join("ebook-reader-helper")).unwrap();
-        let out = Command::new(bin.join("epub-dump")).arg(&book).arg("2").env_clear().current_dir("/").output().unwrap();
-        let text = String::from_utf8_lossy(&out.stdout);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let (ok, text) = {
+            let mut ok = false;
+            let text = settle(|| {
+                match Command::new(bin.join("epub-dump")).arg(&book).arg("2").env_clear().current_dir("/").output() {
+                    Ok(out) => {
+                        ok = out.status.success();
+                        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+                    }
+                    Err(e) => e.to_string(),
+                }
+            });
+            (ok, text)
+        };
+        assert!(ok, "{text}");
         assert!(text.contains("title: The Lighthouse at Low Tide"), "{text}");
         assert!(text.contains("# Chapter One\nThe keeper\u{2019}s boat"), "{text}");
     }
@@ -301,7 +326,9 @@ fn installed_layout_finds_the_helper_and_reads() {
     let bare = dir.0.join("bare/bin");
     std::fs::create_dir_all(&bare).unwrap();
     std::fs::copy(&example, bare.join("epub-dump")).unwrap();
-    let out = Command::new(bare.join("epub-dump")).arg(&book).env_clear().output().unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("reader component is missing"));
+    let message = settle(|| match Command::new(bare.join("epub-dump")).arg(&book).env_clear().output() {
+        Ok(out) => String::from_utf8_lossy(&out.stderr).into_owned(),
+        Err(e) => e.to_string(),
+    });
+    assert!(message.contains("reader component is missing"), "{message}");
 }
