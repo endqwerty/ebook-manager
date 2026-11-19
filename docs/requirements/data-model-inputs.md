@@ -81,6 +81,9 @@ Grouped by who owns them. Each line names a thing and the area that explains it.
   Publisher and imprint. Series, with kind, nesting and per-source names. Tag tree.
   (01, 03)
 - Covers: the chosen one and the candidates. (03)
+- A spine colour taken from the chosen cover, and the book's length in words where
+  known, for the shelf view. The core can list every book's spine thickness in sort
+  order without loading the books. (01)
 - Custom field definitions and values. (01)
 - Field provenance, locks and storage class. Candidate records awaiting review.
   (03)

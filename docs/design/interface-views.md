@@ -139,6 +139,13 @@ a top and a front. The realism comes from shape, light, shadow and one fine
 cloth grain. There is no wood grain and no picture of any material, and every
 colour has a value for light and for dark.
 
+This look is the one to build ([LIB-29](../requirements/01-library.md#finding-and-viewing)).
+The picture at the top of this page shows it in light and dark. The file
+[`interface-views-sample.html`](interface-views-sample.html) draws it with CSS
+gradients, one transform and one generated noise tile, and a shell can read the
+exact values there. Where the sample and this table differ, the table is right.
+No shell draws it yet.
+
 | Part | Value |
 |---|---|
 | Height | Every spine in the view is the same height: 144 at the small size, 192 at medium and 240 at large. |
@@ -294,7 +301,8 @@ and extending a selection without a dropped frame before the shelf ships there.
    the tip look right, the page now draws cloth with a nap and a grain, the tops
    of the books, and a recess with a back and a board. Its colours are warm
    neutrals given for light and dark, in place of the platform's fill colours,
-   which were flat and cold. Wood grain is still left out.
+   which were flat and cold. Wood grain is still left out. The result was shown
+   in the sample and accepted, so this is settled and no longer an open call.
 4. **Index letters are in the serif.** This adds a fourth place for the serif
    in the library window. A letter standing alone is the plainest library cue
    there is.
