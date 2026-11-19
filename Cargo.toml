@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/ebook-device"]
+resolver = "2"
