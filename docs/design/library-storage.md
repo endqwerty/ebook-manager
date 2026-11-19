@@ -76,7 +76,10 @@ from the portable folder alone. Compare IDs and values after a retry. Repeat
 with a full disk, a restored writer, a relayed edit and an externally edited
 sidecar. Include a fileless book and an interrupted multi-record import.
 
-The simulation exercised logical publication and replay in memory. Filesystem
+Run `python3 docs/design/storage-model.py 1000` to exercise logical publication
+and replay in memory. Each history uses three devices. The model reruns the
+histories with writer identity reuse and with peer publication disabled so the
+reader can see which recovery checks fail. Filesystem
 durability, detection of restored writer state, private-data erasure, device
 pairing and access control still need implementation evidence. The first network
 trial must demonstrate that an unapproved device receives no records. The first
