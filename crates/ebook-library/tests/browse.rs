@@ -312,6 +312,29 @@ fn shelf_strip_matches_the_view() -> Result<()> {
 }
 
 #[test]
+fn author_groups_follow_the_letter_as_filed() -> Result<()> {
+    let mut s = Shelf::new()?;
+    for name in [
+        "John Adams",
+        "Anders Ångström",
+        "Jane Austen",
+        "Bo åberg",
+        "Umberto Eco",
+        "Jean Écrivain",
+        "George Eliot",
+    ] {
+        s.add(ParsedMetadata {
+            authors: vec![name.into()],
+            ..meta(name)
+        })?;
+    }
+    let v = s.view("", &[(Field::Author, false)])?;
+    let shelf = s.reader.shelf(v.token)?;
+    assert_eq!(&*shelf.groups, &[(0, "A".into()), (4, "E".into())]);
+    Ok(())
+}
+
+#[test]
 fn a_new_key_profile_refiles_existing_rows() -> Result<()> {
     let mut s = Shelf::new()?;
     s.add(meta("Book 10"))?;

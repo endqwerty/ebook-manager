@@ -170,7 +170,10 @@ library rebuilds the key columns from `data`.
 with Unicode NFKD and marks removed, joined by a separator that cannot be
 typed. A search folds the typed text the same way, splits it on whitespace,
 and every word must appear somewhere in the book's text. Text that is empty or
-only whitespace is no filter.
+only whitespace is no filter. Removing marks makes some scripts match more
+than a reader of them would expect: a kana search ignores voicing marks and a
+Devanagari search ignores vowel signs. A ligature letter such as `Œ` is not
+found by typing `oe`.
 
 ### Opening without reading the journal
 
@@ -254,8 +257,8 @@ they fail with `StaleView`, and the shell opens the query again. A row number
 gives the ranks of books by ID, for keeping selection and scroll position.
 `shelf` returns each book's spine thickness in view order,
 `min(48, 16 + round(words / 12000))` or 24 when the length is unknown, and
-the group starts for a first sort key of Author (first letter of the sort
-name), Series (series name) or a date (year). Any other first key has no
+the group starts for a first sort key of Author (the first letter of the sort
+name as the locale files it, so `A`, `a` and in English `Å` are one group), Series (series name) or a date (year). Any other first key has no
 groups.
 
 A group for books with no author is named `Unknown author`, with no series

@@ -141,6 +141,7 @@ struct View {
 }
 pub struct BrowseReader {
     db: Connection,
+    keys: sortkey::Keys,
     view: Option<View>,
 }
 impl Library {
@@ -150,6 +151,7 @@ impl Library {
                 self.portable.with_file_name("library.sqlite"),
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
             )?,
+            keys: sortkey::Keys::new()?,
             view: None,
         })
     }
@@ -294,12 +296,14 @@ impl BrowseReader {
         })
     }
     pub fn shelf(&mut self, token: ViewToken) -> Result<ShelfStrip> {
-        self.read(token, shelf_rows)
+        self.read(token, |db, v| shelf_rows(db, v, &self.keys))
     }
 }
-fn shelf_rows(db: &Connection, v: &View) -> Result<ShelfStrip> {
+fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfStrip> {
+    let by_letter = v.sort.0[0].field == Field::Author;
     let group = match v.sort.0[0].field {
-        Field::Author => "coalesce(upper(substr(author_sort,1,1)), 'Unknown author')",
+        // The whole name: letters are compared as the locale files them.
+        Field::Author => "coalesce(author_sort,'')",
         Field::Series => "coalesce(series,'No series')",
         Field::Added => "coalesce(strftime('%Y',added,'unixepoch'),'No date')",
         Field::LastRead => "coalesce(strftime('%Y',last_read,'unixepoch'),'No date')",
@@ -321,12 +325,39 @@ fn shelf_rows(db: &Connection, v: &View) -> Result<ShelfStrip> {
         names[n] = r.get::<_, Option<String>>(2)?;
     }
     let mut groups: Vec<(u32, String)> = vec![];
+    let mut previous = None;
     let mut thickness = Vec::with_capacity(v.visible.len());
     for (rank, &n) in v.visible.iter().enumerate() {
         thickness.push(sizes[n as usize]);
-        if let Some(name) = &names[n as usize]
-            && groups.last().is_none_or(|(_, last)| last != name)
-        {
+        let Some(name) = &names[n as usize] else {
+            continue;
+        };
+        if by_letter {
+            // Names sharing a letter are adjacent in the view, so comparing
+            // with the group's first name is enough.
+            if previous.is_none_or(|p: &String| {
+                p.is_empty() != name.is_empty() || !keys.same_letter(p, name)
+            }) {
+                let caption = match name.chars().next() {
+                    // The plain letter where the locale files this one under
+                    // it, so the group reads `A` whether its first name
+                    // starts with `a`, `A` or `Å`.
+                    Some(c) => {
+                        let own = c.to_string();
+                        let plain = sortkey::fold(&own);
+                        let letter = if keys.same_letter(&own, &plain) {
+                            plain
+                        } else {
+                            own
+                        };
+                        letter.to_uppercase()
+                    }
+                    None => "Unknown author".into(),
+                };
+                groups.push((rank as u32, caption));
+                previous = Some(name);
+            }
+        } else if groups.last().is_none_or(|(_, last)| last != name) {
             groups.push((rank as u32, name.clone()));
         }
     }

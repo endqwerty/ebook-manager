@@ -71,7 +71,7 @@ pub(crate) fn project(db: &Connection, b: &Book, keys: &sortkey::Keys) -> Result
             keys.key(sortkey::filing(b)),
             author.as_ref().map(|s| keys.key(s)),
             name.map(|s| keys.key(s)),
-            position.map(sortkey::position),
+            position.map(sortkey::position).filter(|k| !k.is_empty()),
             b.added,
             m.published,
             survey.and_then(|s| s.words),

@@ -1,7 +1,9 @@
 use crate::*;
 use caseless::Caseless;
 use icu_collator::{
-    Collator, CollatorBorrowed, CollatorPreferences, preferences::CollationNumericOrdering,
+    Collator, CollatorBorrowed, CollatorPreferences,
+    options::{CollatorOptions, Strength},
+    preferences::CollationNumericOrdering,
 };
 use icu_locale::Locale;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
@@ -9,6 +11,7 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 pub(crate) struct Keys {
     pub profile: String,
     collator: CollatorBorrowed<'static>,
+    letters: CollatorBorrowed<'static>,
 }
 impl Keys {
     pub fn new() -> Result<Self> {
@@ -26,10 +29,19 @@ impl Keys {
             .unwrap_or(Locale::UNKNOWN);
         let mut prefs = CollatorPreferences::from(&locale);
         prefs.numeric_ordering = Some(CollationNumericOrdering::True);
+        let mut base = CollatorOptions::default();
+        base.strength = Some(Strength::Primary);
         Ok(Self {
             profile: format!("1-icu2.4-{locale}"),
             collator: Collator::try_new(prefs, Default::default())?,
+            letters: Collator::try_new(prefs, base)?,
         })
+    }
+    /// Whether two names are filed under the same letter in this locale: `A`,
+    /// `a` and, in English, `Å`. Swedish files `Å` as a letter of its own.
+    pub fn same_letter(&self, a: &str, b: &str) -> bool {
+        let first = |s: &str| s.chars().next().map(String::from).unwrap_or_default();
+        self.letters.compare(&first(a), &first(b)).is_eq()
     }
     pub fn key(&self, s: &str) -> Vec<u8> {
         let mut out = Vec::new();
@@ -53,7 +65,7 @@ pub(crate) fn filing(b: &Book) -> &str {
         .language
         .as_deref()
         .unwrap_or("")
-        .split('-')
+        .split(['-', '_'])
         .next()
         .unwrap()
         .to_ascii_lowercase()
