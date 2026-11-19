@@ -32,8 +32,20 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/mainworthy" version
 
-      # No code or tests yet. When the first test suite lands, run it here, write JUnit XML to results.xml even
-      # when tests fail, and replace `report --nothing-required` below with `report results.xml`.
+      - name: Install desktop and reader dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev bubblewrap xvfb dbus-x11
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f
+        with:
+          tool: nextest@0.9.152
+
+      - name: Build the application and helper
+        run: cargo build --workspace --bins --locked
+
+      - name: Run the workspace tests
+        run: dbus-run-session -- xvfb-run -a cargo nextest run --workspace --locked --profile ci --no-fail-fast
 
       - name: Report results and read the gate
         if: always()
@@ -42,5 +54,5 @@ jobs:
           MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
           MAINWORTHY_TOKEN: ${{ secrets.MAINWORTHY_TOKEN }}
         run: |
-          mainworthy report --nothing-required
+          mainworthy report target/nextest/ci/junit.xml
           mainworthy gate
