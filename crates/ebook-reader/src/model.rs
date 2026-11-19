@@ -221,6 +221,7 @@ pub struct ChapterInfo {
     /// The chapter document's unpacked size in bytes as the archive states
     /// it, capped at the chapter limit, and 0 when the archive lacks it. The
     /// book controls this number. Use it only to weigh chapters for progress.
+    #[serde(default)]
     pub size: u32,
 }
 

@@ -364,3 +364,119 @@ fn content_calls_refuse_what_chapter_reads_refuse() {
         Err(ReaderError::SourceChanged)
     ));
 }
+
+/// C5, S6: the host refuses content and resource replies that do not add up,
+/// whatever a misbehaving helper sends.
+#[test]
+fn malformed_content_and_resource_replies_are_refused() {
+    use ebook_reader::wire::{base64_encode, BookOutline, Payload, Response, WireResource};
+    use ebook_reader::{ChapterContent, ChapterInfo, Metadata};
+    let dir = Scratch::new();
+    let book = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let outline = serde_json::to_string(&Response::Ok(Payload::Book(BookOutline {
+        metadata: Metadata::default(),
+        chapters: vec![ChapterInfo {
+            index: 0,
+            title: None,
+            linear: true,
+            size: 9,
+        }],
+        toc: vec![],
+    })))
+    .unwrap();
+    let outline = dir.file("outline.json", outline.as_bytes());
+    // A stand-in for the whole sandbox that answers with fixed replies.
+    let fake = |name: &str, reply: &Payload| {
+        let reply = match reply {
+            Payload::Content(c) => Response::Ok(Payload::Content(c.clone())),
+            Payload::Resource(r) => Response::Ok(Payload::Resource(WireResource {
+                kind: r.kind,
+                base64: r.base64.clone(),
+            })),
+            _ => unreachable!(),
+        };
+        let reply = dir.file(
+            &format!("{name}.json"),
+            serde_json::to_string(&reply).unwrap().as_bytes(),
+        );
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}';;\n*' -- /helper open '*) cat '{}';;\n*) cat '{}';;\nesac\n",
+            outline.display(),
+            reply.display()
+        );
+        let path = dir.file(name, script.as_bytes());
+        std::process::Command::new("/bin/chmod")
+            .arg("+x")
+            .arg(&path)
+            .status()
+            .unwrap();
+        let cfg = ebook_reader::ReaderConfig {
+            bwrap_path: Some(path),
+            ..config()
+        };
+        // A program written a moment ago can be "text file busy" while
+        // another test thread is between fork and exec.
+        for _ in 0..50 {
+            match ebook_reader::Reader::new(cfg.clone()).and_then(|r| r.open(&book)) {
+                Ok(book) => return book,
+                Err(e) if format!("{e:?}").to_lowercase().contains("busy") => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                Err(e) => panic!("{name}: {e:?}"),
+            }
+        }
+        panic!("{name}: the stand-in never ran");
+    };
+    let content = |markup: &str, length: u32| {
+        Payload::Content(ChapterContent {
+            index: 7,
+            title: Some("A\u{7}title".into()),
+            markup: markup.into(),
+            length,
+            styles: vec![ResourceId(3)],
+            language: Some("e\u{0}n".into()),
+            right_to_left: false,
+            truncated: false,
+            warnings: vec![],
+        })
+    };
+    let good = fake("good", &content("<p>a\u{1b}b\tc</p>", 4))
+        .read_content(0)
+        .unwrap();
+    assert_eq!(good.index, 0);
+    assert_eq!(good.markup, "<p>ab\tc</p>");
+    assert_eq!(good.title.as_deref(), Some("Atitle"));
+    assert_eq!(good.language.as_deref(), Some("en"));
+    assert!(good.styles.is_empty());
+    assert!(matches!(
+        fake("long", &content("<p>ab</p>", 10)).read_content(0),
+        Err(ReaderError::HelperFailed { .. })
+    ));
+
+    let png = picture(1, 1, ImageFormat::Png, |_, _| [0, 0, 0, 255]);
+    let resource = |kind, base64: String| Payload::Resource(WireResource { kind, base64 });
+    let ok = fake("png", &resource(ResourceKind::Png, base64_encode(&png)))
+        .read_resource(ResourceId(0))
+        .unwrap();
+    assert_eq!(ok.bytes, png);
+    for (name, reply) in [
+        (
+            "mislabelled",
+            resource(ResourceKind::Jpeg, base64_encode(&png)),
+        ),
+        (
+            "not-a-picture",
+            resource(ResourceKind::Png, base64_encode(b"<script>")),
+        ),
+        (
+            "not-base64",
+            resource(ResourceKind::Png, "iVBORw0KGgo!".into()),
+        ),
+        ("empty", resource(ResourceKind::Gif, String::new())),
+    ] {
+        match fake(name, &reply).read_resource(ResourceId(0)) {
+            Err(ReaderError::HelperFailed { .. }) => {}
+            other => panic!("{name}: expected a refusal, got {other:?}"),
+        }
+    }
+}
