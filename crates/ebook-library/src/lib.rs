@@ -178,7 +178,7 @@ impl Library {
         ] {
             check_optional_file(&root.join(name))?;
         }
-        let (db, rebuilt) = catalogue::open(&root.join("library.sqlite"))?;
+        let db = catalogue::open(&root.join("library.sqlite"))?;
         let keys = sortkey::Keys::new()?;
         let mut lib = Self {
             db,
@@ -207,7 +207,7 @@ impl Library {
             tx.execute("UPDATE meta SET value=value+1 WHERE key='counter'", [])?;
         }
         tx.commit()?;
-        lib.recover(rebuilt)?;
+        lib.recover()?;
         Ok(lib)
     }
     pub fn book(&self, id: &str) -> Result<Book> {

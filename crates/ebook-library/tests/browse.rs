@@ -310,3 +310,32 @@ fn shelf_strip_matches_the_view() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn a_new_key_profile_refiles_existing_rows() -> Result<()> {
+    let mut s = Shelf::new()?;
+    s.add(meta("Book 10"))?;
+    s.add(meta("Book 2"))?;
+    let Shelf {
+        _dir: dir,
+        lib,
+        reader,
+        ..
+    } = s;
+    drop(reader);
+    drop(lib);
+    let db = rusqlite::Connection::open(dir.path().join("library.sqlite"))?;
+    db.execute(
+        "UPDATE meta SET value='older profile' WHERE key='profile'",
+        [],
+    )?;
+    db.execute("UPDATE book SET title_key=x'00'", [])?;
+    drop(db);
+    let lib = Library::open(dir.path())?;
+    let mut reader = lib.browse_reader()?;
+    assert_eq!(
+        titles(reader.open(&Default::default(), &Cancel::default())?),
+        ["Book 2", "Book 10"]
+    );
+    Ok(())
+}

@@ -69,16 +69,91 @@ fn portable_only_rebuild_restores_bytes_metadata_and_position() -> Result<()> {
     let stage = d.path().join("stage");
     fs::write(&stage, b"opaque bytes from reader")?;
     let mut l = Library::open(&app)?;
-    let b = add(&mut l, &stage)?;
+    let metadata = ParsedMetadata {
+        author_sorts: vec![Some("Quinn, A".into())],
+        series: vec![("Maps".into(), Some("10".into()))],
+        published: Some("1977-03".into()),
+        language: Some("en".into()),
+        right_to_left: true,
+        ..facts()
+    };
+    let ImportOutcome::Added(b) = l.import(&stage, &stage, &metadata, ImportChoice::Review)? else {
+        panic!("expected import")
+    };
+    let facts = SurveyFacts {
+        version: 1,
+        words: Some(123456),
+        cover: Some(CoverFacts {
+            digest: "b".repeat(64),
+            average: 0x334455,
+            spine: 0x112233,
+        }),
+    };
+    l.set_survey(&b.id, &b.version_id, facts)?;
+    l.edit_filing(
+        &b.id,
+        Some("Map".into()),
+        Some(vec![Some("Dana, D".into())]),
+        Some(vec![("Places".into(), Some("2.1".into()))]),
+    )?;
     let edited = l.edit(&b.id, "../../The Map", &["Dana".into()])?;
     let pos = ReadingPosition {
-        last_read: None,
-        fraction: None,
+        last_read: Some(500),
+        fraction: Some(0.4),
         version_id: b.version_id.clone(),
         chapter: 1,
         offset: 42,
     };
     l.save_position(&b.id, &pos)?;
+    fs::write(&stage, b"second")?;
+    l.import(
+        &stage,
+        &stage,
+        &ParsedMetadata {
+            title: "North".into(),
+            ..Default::default()
+        },
+        ImportChoice::KeepSeparate,
+    )?;
+    let views = |lib: &Library| -> Result<Vec<Vec<BrowseRow>>> {
+        let mut reader = lib.browse_reader()?;
+        [
+            Field::Title,
+            Field::Author,
+            Field::Series,
+            Field::Added,
+            Field::Published,
+            Field::LastRead,
+            Field::Progress,
+        ]
+        .into_iter()
+        .map(|field| {
+            let sort = SortOrder::new(vec![SortTerm {
+                field,
+                descending: false,
+            }])?;
+            Ok(reader
+                .open(
+                    &BrowseQuery {
+                        text: String::new(),
+                        sort,
+                    },
+                    &Cancel::default(),
+                )?
+                .first)
+        })
+        .collect()
+    };
+    let before = views(&l)?;
+    let row = before[0].iter().find(|r| r.id == b.id).unwrap();
+    assert_eq!(row.progress, Some(0.4));
+    assert_eq!(row.last_read, Some(500));
+    assert_eq!(row.author_sort.as_deref(), Some("Dana, D"));
+    assert_eq!(row.series, Some(("Places".into(), "2.1".into())));
+    assert_eq!(row.cover_rgb, Some(0x334455));
+    assert_eq!(row.spine_rgb, Some(0x112233));
+    assert_eq!(row.published.as_deref(), Some("1977-03"));
+    assert!(row.right_to_left);
     drop(l);
     let mut root = app;
     for relocate in [false, true] {
@@ -90,10 +165,14 @@ fn portable_only_rebuild_restores_bytes_metadata_and_position() -> Result<()> {
         }
         let mut l = Library::open(&root)?;
         l.refresh()?;
+        assert_eq!(views(&l)?, before);
         assert_eq!(l.search("dANA")?, vec![edited.clone()]);
         assert_eq!(l.search("map")?.len(), 1);
         assert_eq!(l.load_position(&b.id)?, Some(pos.clone()));
-        assert_eq!(fs::read(l.managed_file(&b.id)?)?, fs::read(&stage)?);
+        assert_eq!(
+            fs::read(l.managed_file(&b.id)?)?,
+            b"opaque bytes from reader"
+        );
     }
     Ok(())
 }
@@ -296,14 +375,187 @@ fn reopen_reads_one_journal_file_unless_the_tip_moved() -> Result<()> {
     let b = add(&mut library, &stage)?;
     library.edit(&b.id, "edited", &[])?;
     drop(library);
-    fs::write(
-        app.join("portable/changes/00000000000000000001.json"),
-        b"broken",
-    )?;
+    let first = app.join("portable/changes/00000000000000000001.json");
+    let tip = app.join("portable/changes/00000000000000000002.json");
+    let successor = app.join("portable/changes/00000000000000000003.json");
+    let original_first = fs::read(&first)?;
+    let original_tip = fs::read(&tip)?;
+    fs::write(&first, b"broken")?;
     let mut library = Library::open(&app)?;
     assert!(library.refresh().is_err());
     drop(library);
-    fs::remove_file(app.join("portable/changes/00000000000000000002.json"))?;
+    fs::remove_file(&tip)?;
     assert!(Library::open(&app).is_err());
+    fs::write(&first, original_first)?;
+    drop(Library::open(&app)?);
+    assert_eq!(fs::read(&tip)?, original_tip);
+    fs::write(&tip, b"inconsistent tip")?;
+    assert!(Library::open(&app).is_err());
+    fs::write(&tip, original_tip)?;
+    fs::write(successor, b"invalid successor")?;
+    assert!(Library::open(&app).is_err());
+    Ok(())
+}
+
+#[test]
+fn reopen_alone_publishes_an_interrupted_import() -> Result<()> {
+    for component in ["changes", "sidecars"] {
+        let dir = tempdir()?;
+        let app = dir.path().join("app");
+        let stage = dir.path().join("stage");
+        fs::write(&stage, b"original")?;
+        let mut lib = Library::open(&app)?;
+        let blocked = app.join("portable").join(component);
+        fs::remove_dir(&blocked)?;
+        fs::write(&blocked, b"unavailable")?;
+        let err = lib
+            .import(&stage, &stage, &facts(), ImportChoice::Review)
+            .unwrap_err();
+        let id = err
+            .downcast_ref::<PublicationPending>()
+            .unwrap()
+            .book_id
+            .clone();
+        drop(lib);
+        fs::remove_file(blocked)?;
+        let mut lib = Library::open(&app)?;
+        assert_eq!(fs::read(lib.managed_file(&id)?)?, b"original");
+        let changes = app.join("portable/changes");
+        assert_eq!(changes.read_dir()?.count(), 1);
+        assert!(changes.join("00000000000000000001.json").is_file());
+        let sidecars = app.join("portable/sidecars");
+        assert_eq!(sidecars.read_dir()?.count(), 1);
+        let sidecar: Book =
+            serde_json::from_slice(&fs::read(sidecars.read_dir()?.next().unwrap()?.path())?)?;
+        assert_eq!(sidecar, lib.book(&id)?);
+        fs::write(&stage, b"new bytes")?;
+        let outcome = lib.import(
+            &stage,
+            &stage,
+            &ParsedMetadata {
+                identifier: None,
+                ..facts()
+            },
+            ImportChoice::Review,
+        )?;
+        assert!(matches!(outcome,ImportOutcome::NeedsReview(books) if books==[sidecar]));
+    }
+    Ok(())
+}
+
+#[test]
+fn a_record_from_before_keeps_its_sidecar() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let dir = tempdir()?;
+    let portable = dir.path().join("portable");
+    fs::create_dir_all(portable.join("changes"))?;
+    fs::create_dir(portable.join("sidecars"))?;
+    let id = "00000000-0000-4000-8000-000000000001";
+    let snapshot = format!(
+        r#"{{
+  "id": "{id}",
+  "edition_id": "{id}",
+  "file_id": "{id}",
+  "version_id": "{id}",
+  "title": "Old",
+  "authors": [],
+  "imported": {{
+    "title": "Old",
+    "authors": [],
+    "identifier": null
+  }},
+  "sha256": "{}"
+}}"#,
+        "0".repeat(64)
+    );
+    let path = portable.join(format!(
+        "sidecars/{id}-{:x}.json",
+        Sha256::digest(snapshot.as_bytes())
+    ));
+    fs::write(&path, b"my edits")?;
+    fs::write(
+        portable.join("changes/00000000000000000001.json"),
+        format!(r#"{{"format":1,"id":"{id}","parent":null,"change":{{"Book":{snapshot}}}}}"#),
+    )?;
+    let lib = Library::open(dir.path())?;
+    assert!(lib.book(id)?.added.is_none());
+    assert_eq!(fs::read_to_string(&path)?, snapshot);
+    assert!(
+        portable
+            .join("sidecars")
+            .read_dir()?
+            .flatten()
+            .any(|entry| fs::read(entry.path()).is_ok_and(|v| v == b"my edits"))
+    );
+    Ok(())
+}
+
+#[test]
+fn changing_catalogue_version_preserves_old_database_and_replays_portable_history() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("stage");
+    fs::write(&path, b"edition")?;
+    let mut library = Library::open(dir.path())?;
+    let book = add(&mut library, &path)?;
+    drop(library);
+    let db = rusqlite::Connection::open(dir.path().join("library.sqlite"))?;
+    db.execute("UPDATE meta SET value=200 WHERE key='version'", [])?;
+    drop(db);
+    let library = Library::open(dir.path())?;
+    assert_eq!(library.book(&book.id)?, book);
+    let backup = dir
+        .path()
+        .read_dir()?
+        .flatten()
+        .find(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("library.sqlite.old-")
+        })
+        .unwrap();
+    let db = rusqlite::Connection::open(backup.path())?;
+    assert_eq!(
+        db.query_row("SELECT value FROM meta WHERE key='version'", [], |r| r
+            .get::<_, u32>(0))?,
+        200
+    );
+    Ok(())
+}
+
+#[test]
+fn an_incomplete_portable_copy_still_fails_on_a_second_open() -> Result<()> {
+    let dir = tempdir()?;
+    let changes = dir.path().join("portable/changes");
+    fs::create_dir_all(&changes)?;
+    fs::write(changes.join("00000000000000000002.json"), b"orphan")?;
+    for _ in 0..2 {
+        assert!(Library::open(dir.path()).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn survey_applies_only_to_the_version_examined() -> Result<()> {
+    let d = tempdir()?;
+    let path = d.path().join("book");
+    fs::write(&path, b"old")?;
+    let mut lib = Library::open(d.path())?;
+    let b = add(&mut lib, &path)?;
+    fs::write(&path, b"replacement")?;
+    let ImportOutcome::Replaced(new) =
+        lib.import(&path, &path, &facts(), ImportChoice::Replace(b.id.clone()))?
+    else {
+        panic!("expected replacement")
+    };
+    let facts = SurveyFacts {
+        version: 1,
+        words: None,
+        cover: None,
+    };
+    lib.set_survey(&b.id, &b.version_id, facts.clone())?;
+    assert_eq!(lib.unsurveyed(1)?.as_slice(), std::slice::from_ref(&new));
+    lib.set_survey(&b.id, &new.version_id, facts.clone())?;
+    assert!(lib.unsurveyed(1)?.is_empty());
+    assert_eq!(lib.book(&b.id)?.imported.survey, Some(facts));
     Ok(())
 }

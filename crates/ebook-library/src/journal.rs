@@ -1,6 +1,6 @@
 use crate::*;
 impl Library {
-    pub(super) fn recover(&mut self, rebuilt: bool) -> Result<()> {
+    pub(super) fn recover(&mut self) -> Result<()> {
         let seq: u64 = self
             .db
             .query_row("SELECT value FROM meta WHERE key='tip'", [], |r| r.get(0))?;
@@ -15,7 +15,12 @@ impl Library {
                 .is_ok_and(|v| v == bytes.as_bytes())
         };
         let successor = changes.join(format!("{:020}.json", seq + 1));
-        if !rebuilt
+        let recovered: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key='recovered')",
+            [],
+            |r| r.get(0),
+        )?;
+        if recovered
             && matches
             && successor
                 .symlink_metadata()
@@ -24,6 +29,8 @@ impl Library {
             self.publish()?;
         } else {
             self.refresh()?;
+            self.db
+                .execute("INSERT OR IGNORE INTO meta VALUES('recovered',1)", [])?;
         }
         Ok(())
     }
@@ -87,7 +94,9 @@ impl Library {
         let data = serde_json::to_vec_pretty(b)?;
         if path.try_exists()? {
             let edited = regular(&path)?;
-            if edited.metadata()?.len() != data.len() as u64 || read_entry(&path)? != data {
+            if edited.metadata()?.len() != data.len() as u64
+                || digest(&mut &edited)? != format!("{:x}", Sha256::digest(&data))
+            {
                 preserve(&path, "proposal")?;
             }
         }
