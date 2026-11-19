@@ -100,6 +100,14 @@ its code.
 changes behaviour updates its spec in the same pull request. The Git history of
 `specs/` is the project's history. Don't add changelogs or decision logs beside it.
 
+## Look and feel: interface design
+
+[`docs/design/interface.md`](docs/design/interface.md) says how every screen
+should look: what the platform's standard parts own, and how the app draws covers,
+type, shadows and motion. Read it before designing or building a screen in any
+shell. If a screen needs to break one of its rules, change the page in the same
+pull request and say why.
+
 ## Tests and CI: Mainworthy
 
 Every push to `main` and every pull request runs [check.yml](.github/workflows/check.yml)
