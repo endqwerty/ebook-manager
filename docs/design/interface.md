@@ -37,7 +37,7 @@ Four things, each of which you can measure on a screen.
 
 | Quality | Where it comes from |
 |---|---|
-| Order | Covers stand on one line per row. Every screen has one leading edge. Captions keep a fixed height. Numbers line up in columns. |
+| Order | Every cover is the same size and rows are level. Every screen has one leading edge. Captions keep a fixed height. Numbers line up in columns. |
 | Quiet | One prominent action per screen. No badges, and a message only for a problem that needs a decision. Nothing moves unless the reader caused it, apart from a cover fading in as it loads. |
 | Warmth | A serif for the names of things. Covers drawn as objects with weight. Paper tones in the reader. |
 | Books first | The frame takes its colour from the system. The only strong colour in the window is on the covers and the one prominent action. |
@@ -82,15 +82,15 @@ on Windows, CSS pixels in GTK and density-independent pixels on Android.
 
 - One leading edge per screen. The title, section headers, the first cover in each
   row and the first line of an empty state start at the same x position.
-- Covers in a row share their bottom edge. Covers have different proportions, so
-  their tops differ, as books of different heights do on a shelf. Never crop or
-  stretch a cover to a common shape. Scale it to the column width and let the row
-  take the height of its tallest cover.
+- Every cover in a grid is the same size: a frame two wide by three tall, as
+  wide as its column. Cover images come in many proportions, and
+  [the cover table](#covers) says how an image goes into the frame. Never stretch
+  an image.
 - The caption starts at the cover's leading edge. It is never centred under the
   cover. The title takes up to two lines and the author one, directly under the
   title's last line. The caption block keeps the height of three lines even when
-  the title needs one. Every item in a row therefore has the same height below
-  its cover, and the covers' bottom edges stay level.
+  the title needs one. Every item in a row is therefore the same height, and the
+  next row starts level.
 - Truncate at the end with an ellipsis. Wherever a title is truncated, the full
   title is available in a tooltip on pointer platforms and in book details
   everywhere.
@@ -139,13 +139,14 @@ A cover is the one thing in the window drawn as a physical object.
 
 | Property | Value |
 |---|---|
-| Shape | The image's own proportions. Corners of 2 units, 3 when the cover is 200 units wide or more. The platform's control radius never applies to a cover. |
+| Shape | A frame of 2:3, width to height, for every book. Corners of 2 units, 3 when the cover is 200 units wide or more. The platform's control radius never applies to a cover. |
+| Image in the frame | When the image's width is between 0.59 and 0.75 of its height, scale it to fill the frame and crop the overflow equally from both sides or from top and bottom. That covers most book covers and removes at most 6% from each side. Any other image, such as a square audiobook cover, is scaled to fit whole and centred, and the rest of the frame takes the image's average colour. Book details use the same frame. |
 | Edge | A 1 unit line inside the edge, white at 9% in dark appearance and black at 8% in light, so a cover the colour of the window keeps its outline. |
 | Spine | A shade over the leading 5% of the width, black at 14% fading to nothing. Leave it out when the cover is under 64 units wide. |
 | Widths | Small 96, medium 128, large 160. Medium is the default. With a row W wide and a chosen width c, the grid has floor((W + 20) / (c + 20)) columns and never fewer than two. The columns share the row equally, so covers are c wide or a little more. Only the two-column minimum can make them narrower than c. |
 | Gaps | 20 between columns. 12 from cover to caption. 28 from the caption block to the next row. The larger gap between rows makes each row read as a shelf. |
 | Progress | A line 2 units thick in the middle of the gap between cover and caption, as wide as the cover: a track in the separator colour, filled from the leading edge in the secondary label colour. Drawn only while a book is partly read. The gap is the same for every book. |
-| Loading | The catalogue stores each cover's pixel size and average colour when the book is imported. Until the image is decoded, draw a block of that size and colour, then cross-fade. If the catalogue has neither, use 2:3 and the platform's secondary fill colour. A cover never pops in and never shows a spinner. |
+| Loading | The catalogue stores each cover's average colour when the book is imported. Until the image is decoded, fill the frame with that colour, then cross-fade. If the catalogue has none, use the platform's secondary fill colour. A cover never pops in and never shows a spinner. |
 
 A book with no cover image gets a binding set in type. It is 2:3, a flat colour,
 with padding of 12% of its width. The title is at the top in the serif, semibold,
@@ -405,9 +406,11 @@ Each was the default taken to finish this page. Any can change.
 2. **The serif appears in three roles only.** Setting every book title under
    every cover in a serif would be more bookish, and also noisier and worse on
    low-density displays.
-3. **Covers keep their own proportions and share a bottom edge.** Cropping all
-   covers to 2:3 gives a tidier grid and is what most stores do. It was turned
-   down because it cuts artwork and removes the one cue that reads as a shelf.
+3. **Every cover is the same size, 2:3.** Showing each image at its own
+   proportions, with tops at different heights like books on a shelf, was the
+   first version. It was turned down because it made the grid look uneven for
+   no reason a reader of digital books would recognise. The cost is a crop of
+   up to 6% a side on covers close to 2:3.
 4. **A faint spine shade stays.** It is the only drawn hint that a cover is a
    book. Remove it if it reads as decoration on real covers.
 5. **Bundle one serif on GNOME and Android.** Neither guarantees a serif. Literata

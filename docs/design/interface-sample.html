@@ -5,7 +5,7 @@
 <title>Interface sample</title>
 <!-- Illustrates docs/design/interface.md. Add #dark to the address for dark appearance.
      Regenerate the pictures with:
-     chromium --headless --hide-scrollbars --window-size=820,1480 --screenshot=interface-sample-light.png interface-sample.html
+     chromium --headless --hide-scrollbars --window-size=820,1470 --screenshot=interface-sample-light.png interface-sample.html
      and the same with interface-sample.html#dark for interface-sample-dark.png. -->
 <style>
   /* Binding type is 11% and 9% of the cover's width: 10.8px and 8.8px on a 98px cover, 17.6px and 14.4px at 160px. */
@@ -69,15 +69,15 @@
   .prog i { display: block; height: 100%; border-radius: 1px; background: var(--dim); }
   .prog.none { background: transparent; }
 
-  /* Stand-ins for artwork, in assorted proportions. */
+  /* Stand-ins for artwork. Every cover is a 2:3 frame. */
   .c1 { aspect-ratio: 2/3; background: #1d3557; color: #e9e2cf; }
-  .c2 { aspect-ratio: 5/8; background: #7b2d26; color: #f1dfc0; }
-  .c3 { aspect-ratio: 3/4; background: #e8e0cc; color: #2b2a26; }
+  .c2 { aspect-ratio: 2/3; background: #7b2d26; color: #f1dfc0; }
+  .c3 { aspect-ratio: 2/3; background: #e8e0cc; color: #2b2a26; }
   .c4 { aspect-ratio: 2/3; background: #3a5a40; color: #faeac3; }
-  .c5 { aspect-ratio: 11/17; background: #1f1f22; color: #d9c48a; }
+  .c5 { aspect-ratio: 2/3; background: #1f1f22; color: #d9c48a; }
   .c6 { aspect-ratio: 2/3; background: #c9973f; color: #23190a; }
-  .c7 { aspect-ratio: 3/4; background: #4a3f6b; color: #ece6f5; }
-  .c8 { aspect-ratio: 5/8; background: #d7dbd4; color: #24322a; }
+  .c7 { aspect-ratio: 2/3; background: #4a3f6b; color: #ece6f5; }
+  .c8 { aspect-ratio: 2/3; background: #d7dbd4; color: #24322a; }
   .c9 { aspect-ratio: 2/3; background: #5c2a3a; color: #f3e3cf; }
   /* Bindings set in type, from the page's palette. */
   .b-umber { aspect-ratio: 2/3; background: #7a3b22; color: #f1e6cc; }
@@ -143,7 +143,7 @@
     </div>
   </div>
 </div>
-<p class="note">Covers of different proportions stand on one line per row, as books do on a shelf. No shelf is drawn. The screen title is the only serif. Captions start at the cover's leading edge and keep a fixed height, so rows stay level. A line marks a book being read and a check mark a finished one. The last two books have no cover image and get a binding set in type.</p>
+<p class="note">Every cover is the same size, so rows are level. No shelf is drawn. The screen title is the only serif. Captions start at the cover's leading edge and keep a fixed height, so rows stay level. A line marks a book being read and a check mark a finished one. The last two books have no cover image and get a binding set in type.</p>
 
 <h2>Cover states</h2>
 <div class="row3">
