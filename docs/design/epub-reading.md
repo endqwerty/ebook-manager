@@ -657,7 +657,12 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   only when its load is the one asked for last and that load is ready, and
   never an older report of that load over a newer one. A reflow repeats the
   count of the move it follows, so a move's answer that arrives after a
-  reflow made since is not shown over it: its page numbers are from before. A turn at a chapter's
+  reflow made since is not shown over it: its page numbers are from before.
+  Two reflows with no move between them have the same count, and the later
+  to arrive is shown. That is the later made, because every reflow is told
+  by the page's one message path, in order. Nobody has checked that order
+  inside WebKit; if it could differ, the page would show a stale page count
+  until the next report, and nothing saved would change. A turn at a chapter's
   edge moves to the next chapter only if the load it was made in is still
   the one showing. A chapter that fails shows nothing, so nothing turns
   from it, and the place held stays.

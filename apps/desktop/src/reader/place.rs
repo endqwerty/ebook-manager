@@ -614,9 +614,20 @@ mod tests {
                     continue;
                 }
                 // An answer arrives: any of those in flight, in any order.
+                // A turn's answer comes back on its own, so it can pass or be
+                // passed by anything. Reflows are all told by one path, the
+                // page's messages, so a load's reflows arrive in the order
+                // they were made: the oldest of them is the one delivered.
                 60..=89 if !in_flight.is_empty() => {
-                    let at = rng.below(in_flight.len() as u64) as usize;
-                    Input::Report(in_flight.swap_remove(at))
+                    let mut at = rng.below(in_flight.len() as u64) as usize;
+                    let chosen = in_flight[at];
+                    if !chosen.moved {
+                        at = in_flight
+                            .iter()
+                            .position(|r| !r.moved && r.load == chosen.load)
+                            .unwrap_or(at);
+                    }
+                    Input::Report(in_flight.remove(at))
                 }
                 90..=96 if timer => Input::Timer,
                 97 => Input::Failed,
@@ -625,6 +636,7 @@ mod tests {
             };
             // The reference takes the input first.
             let before_held = k.held();
+            let timer_before = timer;
             let before_submitted = reference.submitted.len();
             match input {
                 // A reader that has left asks for nothing.
@@ -761,14 +773,14 @@ mod tests {
                 // Exactly this: the held place, submitted once whether or
                 // not the timer submitted it before, then the wait, then
                 // the page's end.
-                let mut expected: Vec<Effect> = newest.map(Effect::Submit).into_iter().collect();
+                let mut expected: Vec<Effect> = Vec::new();
+                // The timer is stopped first, once, if and only if it runs.
+                if timer_before {
+                    expected.push(Effect::StopTimer);
+                }
+                expected.extend(newest.map(Effect::Submit));
                 expected.extend([Effect::AwaitLibrary, Effect::EndPage]);
-                let did: Vec<Effect> = effects
-                    .iter()
-                    .copied()
-                    .filter(|e| *e != Effect::StopTimer)
-                    .collect();
-                if did != expected {
+                if effects != expected {
                     return Err(format!(
                         "step {step}: leaving did {effects:?}, with {newest:?} held"
                     ));
