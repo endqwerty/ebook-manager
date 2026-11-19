@@ -3,14 +3,17 @@
 <head>
 <meta charset="utf-8">
 <title>Interface sample</title>
-<!-- Illustrates docs/design/interface.md. Add #dark to the address for dark appearance. -->
+<!-- Illustrates docs/design/interface.md. Add #dark to the address for dark appearance.
+     Regenerate the pictures with:
+     chromium --headless --hide-scrollbars --window-size=820,1480 --screenshot=interface-sample-light.png interface-sample.html
+     and the same with interface-sample.html#dark for interface-sample-dark.png. -->
 <style>
   :root {
     --background: #f6f6f7; --foreground: #1c1c1f; --card: #ffffff; --border: #dcdce0;
     --primary: #2f6fde; --primary-foreground: #ffffff; --radius: 10px;
     --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Adwaita Sans", Roboto, sans-serif;
     --contact: rgba(0,0,0,.16); --ambient: rgba(0,0,0,.16); --edge: rgba(0,0,0,.08);
-    --serif: "New York", "Iowan Old Style", "Sitka Text", "Source Serif 4", Charter, "Noto Serif", Georgia, serif;
+    --serif: "New York", "Iowan Old Style", "Sitka Text", Literata, "Source Serif 4", Charter, "Noto Serif", Georgia, serif;
     --hair: color-mix(in srgb, var(--foreground) 12%, transparent);
     --dim: color-mix(in srgb, var(--foreground) 62%, transparent);
     --faint: color-mix(in srgb, var(--foreground) 6%, transparent);
@@ -21,94 +24,88 @@
     --contact: rgba(0,0,0,.28); --ambient: rgba(0,0,0,.28); --edge: rgba(255,255,255,.09);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 24px; background: var(--background); font-family: var(--font-sans); font-size: 13px; line-height: 1.4; color: var(--foreground); }
+  body { margin: 0; padding: 24px; background: var(--background); font: 13px/18px var(--font-sans); color: var(--foreground); }
   h2 { font: 600 11px/1.3 var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 28px 0 10px; }
-  h2:first-child { margin-top: 0; }
-  p.note { color: var(--dim); margin: 8px 0 0; max-width: 62ch; }
+  h2:first-of-type { margin-top: 0; }
+  p.note { color: var(--dim); margin: 8px 0 0; max-width: 64ch; }
 
+  /* Stand-in frame: not part of the rules. */
   .window { display: grid; grid-template-columns: 158px 1fr; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
   .side { padding: 14px 8px; border-right: 1px solid var(--hair); background: var(--faint); }
   .side h3 { font: 600 11px/1 var(--font-sans); color: var(--dim); margin: 16px 8px 6px; }
   .side h3:first-child { margin-top: 2px; }
-  .side a { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: 6px; color: inherit; text-decoration: none; }
+  .side a { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: 6px; }
   .side a.on { background: color-mix(in srgb, var(--foreground) 10%, transparent); font-weight: 600; }
   .side a span { color: var(--dim); font-variant-numeric: tabular-nums; font-weight: 400; }
+  .field { align-self: center; width: 150px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--hair); color: var(--dim); background: var(--faint); }
+  .btn { align-self: center; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--hair); background: var(--faint); font-weight: 600; }
+  .btn.pri { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
 
+  /* Content layer: these follow the page. */
   .main { padding: 16px 20px 22px; min-width: 0; }
-  .bar { display: flex; align-items: baseline; gap: 10px; }
+  .bar { display: flex; align-items: baseline; gap: 10px; margin-bottom: 20px; }
   .bar h1 { font: 600 26px/1.15 var(--serif); letter-spacing: -.01em; margin: 0; }
   .bar .count { color: var(--dim); font-variant-numeric: tabular-nums; }
   .bar .sp { flex: 1; }
-  .field { align-self: center; width: 150px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--hair); color: var(--dim); background: var(--faint); }
-  .btn { align-self: center; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--hair); background: var(--faint); font-weight: 600; }
-
-  .shelf-label { display: flex; align-items: baseline; gap: 8px; margin: 20px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--hair); }
-  .shelf-label b { font: 600 13px/1.2 var(--font-sans); }
-  .shelf-label span { color: var(--dim); font-variant-numeric: tabular-nums; }
 
   .shelf { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 20px; row-gap: 28px; align-items: end; }
   .book { min-width: 0; }
   .cover {
-    position: relative; width: 100%; border-radius: 2px 3px 3px 2px; overflow: hidden;
+    position: relative; width: 100%; border-radius: 2px; overflow: hidden; container-type: inline-size;
     box-shadow: 0 1px 2px var(--contact), 0 6px 14px -4px var(--ambient);
-    display: flex; flex-direction: column; justify-content: space-between; padding: 12% 8% 10% 11%;
-    font-family: var(--serif);
+    display: flex; flex-direction: column; justify-content: space-between; padding: 12%;
   }
   .cover::before { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--edge); pointer-events: none; }
   .cover::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 5%; background: linear-gradient(90deg, rgba(0,0,0,.14), rgba(0,0,0,0)); pointer-events: none; }
-  .cover .t { font-weight: 600; font-size: 10px; line-height: 1.15; overflow-wrap: break-word; }
-  .cover .a { font-size: 8.5px; letter-spacing: .08em; text-transform: uppercase; opacity: .85; font-family: var(--font-sans); }
-  .cover .rule { height: 1px; background: currentColor; opacity: .45; margin: 6px 0; }
-  .meta { padding-top: 8px; }
+  .cover .t { font: 600 12cqw/1.15 var(--serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+  .cover .a { font: 9cqw/1.25 var(--font-sans); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .cover .rule { height: 1px; background: currentColor; margin: 6cqw 0; }
+  .meta { }
   .meta .lines { height: 54px; }
-  .meta .a i { font-style: normal; }
   .meta .t { font-weight: 600; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-  .meta .a { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .prog { height: 2px; border-radius: 1px; background: var(--hair); margin-top: 4px; }
-  .prog.none { background: transparent; }
+  .meta .a { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prog { height: 2px; border-radius: 1px; background: var(--hair); margin: 5px 0; }
   .prog i { display: block; height: 100%; border-radius: 1px; background: var(--dim); }
+  .prog.none { background: transparent; }
 
-  .c1 { aspect-ratio: 2/3; background: #24405c; color: #e9e2cf; }
-  .c2 { aspect-ratio: 5/8; background: #6f2a2a; color: #f1dfc0; }
+  /* Stand-ins for artwork, in assorted proportions. */
+  .c1 { aspect-ratio: 2/3; background: #1d3557; color: #e9e2cf; }
+  .c2 { aspect-ratio: 5/8; background: #7b2d26; color: #f1dfc0; }
   .c3 { aspect-ratio: 3/4; background: #e8e0cc; color: #2b2a26; }
-  .c4 { aspect-ratio: 2/3; background: #315047; color: #faeac3; }
+  .c4 { aspect-ratio: 2/3; background: #3a5a40; color: #faeac3; }
   .c5 { aspect-ratio: 11/17; background: #1f1f22; color: #d9c48a; }
-  .c6 { aspect-ratio: 2/3; background: #b98a3c; color: #23190a; }
-  .c7 { aspect-ratio: 3/4; background: #51446b; color: #ece6f5; }
+  .c6 { aspect-ratio: 2/3; background: #c9973f; color: #23190a; }
+  .c7 { aspect-ratio: 3/4; background: #4a3f6b; color: #ece6f5; }
   .c8 { aspect-ratio: 5/8; background: #d7dbd4; color: #24322a; }
-  .c9 { aspect-ratio: 2/3; background: #7a3b22; color: #f3e3cf; }
-  .c10 { aspect-ratio: 2/3; background: #2f3a2b; color: #e3d9b8; }
+  .c9 { aspect-ratio: 2/3; background: #5c2a3a; color: #f3e3cf; }
+  /* Bindings set in type, from the page's palette. */
+  .b-umber { aspect-ratio: 2/3; background: #7a3b22; color: #f1e6cc; }
+  .b-moss { aspect-ratio: 2/3; background: #2f3a2b; color: #f1e6cc; }
 
   .row3 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
   .cell { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
-  .cell .stage { height: 150px; display: flex; align-items: flex-end; justify-content: center; }
-  .cell .stage .cover { width: 84px; }
-  .cell b { display: block; margin-top: 12px; }
+  .cell .stage { height: 166px; display: flex; align-items: flex-end; justify-content: center; }
+  .cell .stage .cover { width: 96px; }
+  .cell b { display: block; margin-top: 14px; }
   .cell small { color: var(--dim); font-size: 12px; }
   .lift .cover { transform: translateY(-3px); box-shadow: 0 2px 3px var(--contact), 0 14px 22px -4px var(--ambient); }
   .sel .cover { outline: 3px solid var(--primary); outline-offset: 3px; }
+  .hc .cover { box-shadow: none; outline: 1px solid var(--foreground); }
+  .hc .cover::before, .hc .cover::after { display: none; }
 
-  .detail { display: grid; grid-template-columns: 132px 1fr; gap: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .detail { display: grid; grid-template-columns: 160px 1fr; gap: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .detail .cover { align-self: start; border-radius: 2px; }
   .detail h1 { font: 600 24px/1.15 var(--serif); letter-spacing: -.01em; margin: 0 0 2px; }
-  .detail .by { font-size: 14px; color: var(--dim); margin-bottom: 14px; }
+  .detail .by { font-size: 15px; line-height: 20px; color: var(--dim); }
+  .detail .acts { display: flex; gap: 8px; margin: 14px 0 16px; }
   .detail dl { display: grid; grid-template-columns: 84px 1fr; gap: 5px 12px; margin: 0; }
   .detail dt { color: var(--dim); text-align: right; }
   .detail dd { margin: 0; font-variant-numeric: tabular-nums; }
-  .detail .acts { display: flex; gap: 8px; margin-top: 16px; }
-  .detail .acts .btn.pri { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
-
-  @media (max-width: 560px) {
-    .window { grid-template-columns: 1fr; } .side { display: none; }
-    .shelf { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .row3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .detail { grid-template-columns: 96px 1fr; }
-    .field { display: none; }
-  }
 </style>
 </head>
 <body>
-
 <script>if(location.hash==="#dark")document.documentElement.dataset.theme="dark"</script>
+
 <h2>Library window, content layer</h2>
 <div class="window">
   <div class="side">
@@ -127,53 +124,49 @@
   <div class="main">
     <div class="bar">
       <h1>All books</h1><span class="count">1,284</span><span class="sp"></span>
-      <span class="field">Search</span><span class="btn">Add</span>
+      <span class="field">Search</span><span class="btn pri">Add</span>
     </div>
-
-    <div class="shelf-label"><b>Reading now</b><span>3</span></div>
     <div class="shelf">
-      <div class="book"><div class="cover c1"><div><div class="t">Moby-Dick</div><div class="rule"></div></div><div class="a">Herman Melville</div></div><div class="meta"><div class="lines"><div class="t">Moby-Dick</div><div class="a">Herman Melville</div></div><div class="prog"><i style="width:62%"></i></div></div></div>
-      <div class="book"><div class="cover c2"><div><div class="t">Middlemarch</div><div class="rule"></div></div><div class="a">George Eliot</div></div><div class="meta"><div class="lines"><div class="t">Middlemarch</div><div class="a">George Eliot</div></div><div class="prog"><i style="width:18%"></i></div></div></div>
-      <div class="book"><div class="cover c3"><div><div class="t">The Waste Land</div><div class="rule"></div></div><div class="a">T. S. Eliot</div></div><div class="meta"><div class="lines"><div class="t">The Waste Land</div><div class="a">T. S. Eliot</div></div><div class="prog"><i style="width:85%"></i></div></div></div>
-    </div>
-
-    <div class="shelf-label"><b>Recently added</b><span>7</span></div>
-    <div class="shelf">
-      <div class="book"><div class="cover c4"><div><div class="t">Walden</div><div class="rule"></div></div><div class="a">H. D. Thoreau</div></div><div class="meta"><div class="lines"><div class="t">Walden</div><div class="a">Henry David Thoreau</div></div><div class="prog none"></div></div></div>
-      <div class="book"><div class="cover c5"><div><div class="t">Frankenstein</div><div class="rule"></div></div><div class="a">Mary Shelley</div></div><div class="meta"><div class="lines"><div class="t">Frankenstein; or, The Modern Prometheus</div><div class="a">Mary Shelley</div></div><div class="prog none"></div></div></div>
-      <div class="book"><div class="cover c6"><div><div class="t">Dubliners</div><div class="rule"></div></div><div class="a">James Joyce</div></div><div class="meta"><div class="lines"><div class="t">Dubliners</div><div class="a">James Joyce <i>✓</i></div></div><div class="prog none"></div></div></div>
-      <div class="book"><div class="cover c7"><div><div class="t">Jane Eyre</div><div class="rule"></div></div><div class="a">Charlotte Brontë</div></div><div class="meta"><div class="lines"><div class="t">Jane Eyre</div><div class="a">Charlotte Brontë</div></div><div class="prog none"></div></div></div>
-      <div class="book"><div class="cover c8"><div><div class="t">Leaves of Grass</div><div class="rule"></div></div><div class="a">Walt Whitman</div></div><div class="meta"><div class="lines"><div class="t">Leaves of Grass</div><div class="a">Walt Whitman</div></div><div class="prog none"></div></div></div>
+      <div class="book"><div class="cover c1"><div><div class="t">Moby-Dick</div><div class="rule"></div></div><div class="a">Herman Melville</div></div><div class="meta"><div class="prog"><i style="width:62%"></i></div><div class="lines"><div class="t" title="Moby-Dick">Moby-Dick</div><div class="a">Herman Melville</div></div></div></div>
+      <div class="book"><div class="cover c2"><div><div class="t">Middlemarch</div><div class="rule"></div></div><div class="a">George Eliot</div></div><div class="meta"><div class="prog"><i style="width:18%"></i></div><div class="lines"><div class="t" title="Middlemarch">Middlemarch</div><div class="a">George Eliot</div></div></div></div>
+      <div class="book"><div class="cover c3"><div><div class="t">The Waste Land</div><div class="rule"></div></div><div class="a">T. S. Eliot</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="The Waste Land">The Waste Land</div><div class="a">T. S. Eliot</div></div></div></div>
+      <div class="book"><div class="cover c4"><div><div class="t">Walden</div><div class="rule"></div></div><div class="a">Henry David Thoreau</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Walden">Walden</div><div class="a">Henry David Thoreau</div></div></div></div>
+      <div class="book"><div class="cover c5"><div><div class="t">Frankenstein</div><div class="rule"></div></div><div class="a">Mary Shelley</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Frankenstein; or, The Modern Prometheus">Frankenstein; or, The Modern Prometheus</div><div class="a">Mary Shelley</div></div></div></div>
+      <div class="book"><div class="cover c6"><div><div class="t">Dubliners</div><div class="rule"></div></div><div class="a">James Joyce</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Dubliners">Dubliners</div><div class="a">James Joyce <span class="chk" title="Finished">✓</span></div></div></div></div>
+      <div class="book"><div class="cover c7"><div><div class="t">Jane Eyre</div><div class="rule"></div></div><div class="a">Charlotte Brontë</div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a">Charlotte Brontë</div></div></div></div>
+      <div class="book"><div class="cover c8"><div><div class="t">Leaves of Grass</div><div class="rule"></div></div><div class="a">Walt Whitman</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Leaves of Grass">Leaves of Grass</div><div class="a">Walt Whitman</div></div></div></div>
+      <div class="book"><div class="cover b-umber"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Persuasion">Persuasion</div><div class="a">Jane Austen</div></div></div></div>
+      <div class="book"><div class="cover b-moss"><div><div class="t">The Odyssey</div><div class="rule"></div></div><div class="a">Homer</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="The Odyssey">The Odyssey</div><div class="a">Homer <span class="chk" title="Finished">✓</span></div></div></div></div>
     </div>
   </div>
 </div>
-<p class="note">Covers of different proportions stand on one line per row, as books do on a shelf. No shelf is drawn. The screen title is the only serif. Captions start at the cover's left edge and keep a fixed height so rows stay level. A line marks a book being read and a check mark a finished one.</p>
+<p class="note">Covers of different proportions stand on one line per row, as books do on a shelf. No shelf is drawn. The screen title is the only serif. Captions start at the cover's leading edge and keep a fixed height, so rows stay level. A line marks a book being read and a check mark a finished one. The last two books have no cover image and get a binding set in type.</p>
 
 <h2>Cover states</h2>
 <div class="row3">
-  <div class="cell"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>At rest</b><small>Near-square corners, contact shadow, hairline edge.</small></div>
-  <div class="cell lift"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>Pointer over</b><small>Rises 3 units, shadow deepens. No scaling.</small></div>
-  <div class="cell sel"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>Selected</b><small>The platform's selection ring, in the system accent.</small></div>
-  <div class="cell"><div class="stage"><div class="cover c10"><div><div class="t">The Odyssey</div><div class="rule"></div></div><div class="a">Homer</div></div></div><b>No cover in the file</b><small>A plain cloth binding set in type.</small></div>
+  <div class="cell "><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>At rest</b><small>Corners of 2, contact and ambient shadow, hairline edge, spine shade.</small></div>
+  <div class="cell lift"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>Pointer over</b><small>Rises 3 units and the shadow lengthens. No scaling.</small></div>
+  <div class="cell sel"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>Selected</b><small>The platform's own selection visual, in the system accent.</small></div>
+  <div class="cell hc"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>More contrast</b><small>No shadow or shade. An outline outside the edge.</small></div>
 </div>
 
 <h2>Book details</h2>
 <div class="detail">
-  <div class="cover c1" style="align-self:start"><div><div class="t" style="font-size:16px">Moby-Dick</div><div class="rule"></div></div><div class="a">Herman Melville</div></div>
+  <div class="cover c1"><div><div class="t">Moby-Dick</div><div class="rule"></div></div><div class="a">Herman Melville</div></div>
   <div>
     <h1>Moby-Dick; or, The Whale</h1>
     <div class="by">Herman Melville</div>
+    <div class="acts"><span class="btn pri">Continue reading</span><span class="btn">Send to device</span></div>
     <dl>
       <dt>Published</dt><dd>1851</dd>
-      <dt>Series</dt><dd>None</dd>
+      <dt>Language</dt><dd>English</dd>
       <dt>Length</dt><dd>209,117 words</dd>
       <dt>Format</dt><dd>EPUB, 1.4 MB</dd>
       <dt>Added</dt><dd>12 November 2026</dd>
     </dl>
-    <div class="acts"><span class="btn pri">Continue reading</span><span class="btn">Send to device</span></div>
   </div>
 </div>
-<p class="note">The book's title is the second place serif appears. Labels align right against values, as on a catalogue card. Numbers use tabular figures. One prominent action per screen.</p>
+<p class="note">The book's title is the second place a serif appears. Labels align to the trailing edge against their values, as on a catalogue card. Numbers use tabular figures. One prominent action per screen. The book has no series, so that fact is left out.</p>
 
 </body>
 </html>
