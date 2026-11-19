@@ -1,0 +1,13 @@
+# ebook-library
+
+Call `Library::open(app_data)` with a private installation directory on a local Linux filesystem. Hold one handle per library. Other instances receive a lock error. Create a stable private staging file, have the isolated helper read it, and pass the same file to `import` with its bounded `ParsedMetadata` and the original source path. The crate treats the body as opaque bytes. The caller keeps the stage unchanged through any review decision. Imports accept regular files up to 512 MiB.
+
+Start with `ImportChoice::Review`. An exact current version returns its existing book. Changed bytes at a known source path or with a known package identifier return candidates. Resubmit with `KeepSeparate` or `Replace(candidate.id)`. Replacement keeps work, edition and file identities, creates a new version, and retains the prior bytes. A duplicate updates the device's source association. The visible title and author fields are editable. The current version's parsed values remain in `Book.imported`.
+
+Use `search("")` to list the shelf, or pass a title or author substring. Pass a shelf ID to `managed_file` to resolve an existing, digest-checked EPUB. Treat that path as read-only. Reading positions carry the version ID, a zero-based chapter index, and the reader's offset within it. Loading a replaced version returns an empty position.
+
+SQLite commits an import, edit, or position together with its journal entry. Publication then installs immutable JSON changes in sequence and readable metadata snapshots under `portable/sidecars`. File contents and parent directories are flushed on publication. If publication fails after commit, the error reports that the change was saved locally. Restore writable storage and call `refresh`, or reopen. A failed import before commit can leave unreferenced bytes. After a process kill, private temporary files can remain.
+
+To back up, close the library and copy the complete `portable` directory, including `books`, `changes` and `sidecars`. Place it under a new application directory and open there to rebuild SQLite. Preserve a damaged database in its original directory for diagnosis. The portable folder belongs to one private library and includes its reader's progress. Absolute source paths stay in local SQLite. Conflicting journal contents require restoring a consistent backup. This version supports single-device recovery. It assumes the application controls its directory while open.
+
+Run `cargo test --manifest-path crates/ebook-library/Cargo.toml` from the repository root. The tests create their own temporary files, interrupt publication at two boundaries and reopen from portable data.

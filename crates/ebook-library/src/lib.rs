@@ -115,7 +115,13 @@ impl Book {
     }
 }
 fn directory(path: &Path) -> Result<()> {
-    match fs::create_dir(path) {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(path) {
         Ok(()) => File::open(path.parent().unwrap())?.sync_all()?,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
         Err(e) => return Err(e.into()),
@@ -177,7 +183,14 @@ pub struct Library {
 }
 impl Library {
     pub fn open(app_data: &Path) -> Result<Self> {
-        fs::create_dir_all(app_data)?;
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(app_data)?;
         ensure!(
             app_data.symlink_metadata()?.is_dir(),
             "invalid library root"
@@ -246,10 +259,18 @@ impl Library {
         out.sort_by_cached_key(|b| (b.title.to_lowercase(), b.id.clone()));
         Ok(out)
     }
+    fn directory(&self, part: &str) -> Result<PathBuf> {
+        ensure!(
+            self.portable.symlink_metadata()?.is_dir(),
+            "unsafe portable directory"
+        );
+        let dir = self.portable.join(part);
+        directory(&dir)?;
+        Ok(dir)
+    }
     fn blob(&self, b: &Book) -> Result<PathBuf> {
         b.validate()?;
-        let dir = self.portable.join("books");
-        directory(&dir)?;
+        let dir = self.directory("books")?;
         Ok(dir.join(format!("{}.epub", b.sha256)))
     }
     pub fn managed_file(&self, id: &str) -> Result<PathBuf> {
@@ -269,11 +290,18 @@ impl Library {
         choice: ImportChoice,
     ) -> Result<ImportOutcome> {
         meta.validate()?;
-        let mut input = regular(staged)?;
-        let dir = self.portable.join("books");
-        directory(&dir)?;
+        let input = regular(staged)?;
+        const MAX_INPUT: u64 = 512 * 1024 * 1024;
+        ensure!(
+            input.metadata()?.len() <= MAX_INPUT,
+            "staged book exceeds 512 MiB"
+        );
+        let dir = self.directory("books")?;
         let mut tmp = NamedTempFile::new_in(&dir)?;
-        io::copy(&mut input, &mut tmp)?;
+        ensure!(
+            io::copy(&mut input.take(MAX_INPUT + 1), &mut tmp)? <= MAX_INPUT,
+            "staged book exceeds 512 MiB"
+        );
         let sha = digest(&mut tmp.reopen()?)?;
         let key = source.as_os_str().as_encoded_bytes();
         let prev: Option<String> = self
@@ -295,6 +323,7 @@ impl Library {
         }
         if let Some(b) = exact.as_ref().filter(|_| candidates.len() == 1) {
             self.store_blob(tmp, b)?;
+            self.publish()?;
             self.db.execute(
                 "INSERT OR REPLACE INTO sources VALUES(?,?)",
                 params![key, b.id],
@@ -396,7 +425,7 @@ impl Library {
             change,
         };
         let data = serde_json::to_string(&e)?;
-        append(&tx, &e, &data, false)?;
+        append(&tx, &e, &data)?;
         if let Some((path, id)) = source {
             tx.execute(
                 "INSERT OR REPLACE INTO sources VALUES(?,?)",
@@ -408,8 +437,7 @@ impl Library {
             .context("saved locally; portable publication pending")
     }
     fn publish(&mut self) -> Result<()> {
-        let dir = self.portable.join("changes");
-        directory(&dir)?;
+        let dir = self.directory("changes")?;
         let pending = self
             .db
             .prepare("SELECT seq,data FROM journal WHERE published=0 ORDER BY seq")?
@@ -437,8 +465,7 @@ impl Library {
     }
     fn sidecar(&self, b: &Book) -> Result<()> {
         b.validate()?;
-        let dir = self.portable.join("sidecars");
-        directory(&dir)?;
+        let dir = self.directory("sidecars")?;
         let path = dir.join(format!("{}-{}.json", b.id, sidecar_digest(b)?));
         let data = serde_json::to_vec_pretty(b)?;
         if path.try_exists()? {
@@ -450,8 +477,7 @@ impl Library {
         Ok(())
     }
     pub fn refresh(&mut self) -> Result<()> {
-        let dir = self.portable.join("changes");
-        directory(&dir)?;
+        let dir = self.directory("changes")?;
         let mut ordered = BTreeMap::new();
         for item in dir.read_dir()? {
             let item = item?;
@@ -470,11 +496,12 @@ impl Library {
             );
             ordered.insert(seq, item.path());
         }
+        let published_count = ordered.len() as u64;
+        let tx = self.db.transaction()?;
         for (idx, (seq, path)) in ordered.into_iter().enumerate() {
             ensure!(seq == idx as u64 + 1, "portable journal gap");
             let data = String::from_utf8(read_entry(&path)?)?;
-            let existing: Option<String> = self
-                .db
+            let existing: Option<String> = tx
                 .query_row("SELECT data FROM journal WHERE seq=?", [seq], |r| r.get(0))
                 .optional()?;
             if let Some(old) = existing {
@@ -482,25 +509,15 @@ impl Library {
                 continue;
             }
             let e: Entry = serde_json::from_str(&data)?;
-            let tx = self.db.transaction()?;
-            append(&tx, &e, &data, false)?;
-            tx.commit()?;
+            append(&tx, &e, &data)?;
         }
-        self.db.execute(
+        tx.execute(
             "UPDATE journal SET published=0 WHERE seq > ?",
-            [dir_seq(&dir)?],
+            [published_count],
         )?;
+        tx.commit()?;
         self.publish()
     }
-}
-fn dir_seq(dir: &Path) -> Result<u64> {
-    let mut count = 0;
-    for e in dir.read_dir()? {
-        if e?.path().extension().is_some_and(|s| s == "json") {
-            count += 1;
-        }
-    }
-    Ok(count)
 }
 fn sidecar_digest(b: &Book) -> Result<String> {
     Ok(format!(
@@ -517,7 +534,7 @@ fn tip(db: &Connection) -> Result<Option<String>> {
         )
         .optional()?)
 }
-fn append(db: &Connection, e: &Entry, data: &str, published: bool) -> Result<()> {
+fn append(db: &Connection, e: &Entry, data: &str) -> Result<()> {
     ensure!(
         e.format == 1 && uuid_ok(&e.id) && e.parent == tip(db)?,
         "incompatible journal history"
@@ -544,8 +561,8 @@ fn append(db: &Connection, e: &Entry, data: &str, published: bool) -> Result<()>
         }
     }
     db.execute(
-        "INSERT INTO journal(id,data,published) VALUES(?,?,?)",
-        params![e.id, data, published],
+        "INSERT INTO journal(id,data,published) VALUES(?,?,0)",
+        params![e.id, data],
     )?;
     Ok(())
 }
