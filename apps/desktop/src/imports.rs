@@ -77,7 +77,7 @@ fn discover(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
             match item {
                 Ok((kind, path)) if kind.is_dir() => dirs.push(path),
                 Ok((kind, path))
-                    if kind.is_file()
+                    if (kind.is_file() || kind.is_symlink() && !path.is_dir())
                         && path
                             .extension()
                             .is_some_and(|e| e.eq_ignore_ascii_case("epub")) =>

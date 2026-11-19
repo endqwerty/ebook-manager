@@ -133,6 +133,9 @@ def run(binary, evidence, root):
     source = books / "01-Atlas.epub"
     epub(source)
     shutil.copyfile(source, books / "02-Identical.epub")
+    linked = root / "Outside.epub"
+    shutil.copyfile(source, linked)
+    (books / "02-Linked.epub").symlink_to(linked)
     epub(books / "03-Revised.epub", revised=True)
     (books / "04-Damaged.epub").write_bytes(b"synthetic invalid file")
     originals = {p: hashlib.sha256(p.read_bytes()).digest() for p in books.iterdir()}
@@ -147,6 +150,7 @@ def run(binary, evidence, root):
         find("Import complete")
         for text in ("Added ·", "Duplicate ·", "Replaced ·", "Failed ·"):
             find(text, "label", contains=True)
+        find("02-Linked.epub\nDuplicate ·", "label", contains=True)
         capture("Import results", evidence / "import.png")
         click("Done")
         find("1 book")
@@ -195,27 +199,30 @@ def run(binary, evidence, root):
         ).splitlines()[-1]
         xd("mousemove", "--window", wid, 300, 260, "click", "--repeat", 12, 5)
         time.sleep(0.6)
-        capture("The Lantern Atlas · Revised", root / "scrolled.png")
-        before = markers(root / "scrolled.png")
+        capture("The Lantern Atlas · Revised", evidence / "scrolled.png")
+        before = markers(evidence / "scrolled.png")
         assert before and before[0] > 0, before
-        click("Back to library")
-        time.sleep(0.3)
-        click("Close", find("Ebook Manager", "frame"))
-        assert proc.wait(timeout=10) == 0
-        proc = subprocess.Popen([binary], env=env)
-        find("Mira Vale")
-        click("Read")
-        find("Chapter 2 of 2", contains=True)
-        assert "Northern shore" in Atspi.Text.get_text(find("", "text"), 0, -1)
-        capture("The Lantern Atlas · Revised", root / "resumed.png")
-        after = markers(root / "resumed.png")
-        assert after and abs(after[0] - before[0]) <= 1, (before, after)
-        print(
-            f"PASS first visible paragraph before close {before[0]}, after restart {after[0]}",
-            flush=True,
-        )
-        click("Back to library")
-        time.sleep(0.3)
+        # End the first process with the reader still open after scrolling settled.
+        proc.terminate()
+        proc.wait(timeout=10)
+        for attempt in range(3):
+            if attempt:
+                click("Close", find("Ebook Manager", "frame"))
+                assert proc.wait(timeout=10) == 0
+            proc = subprocess.Popen([binary], env=env)
+            find("Mira Vale")
+            click("Read")
+            find("Chapter 2 of 2", contains=True)
+            assert "Northern shore" in Atspi.Text.get_text(find("", "text"), 0, -1)
+            capture("The Lantern Atlas · Revised", evidence / "resumed.png")
+            after = markers(evidence / "resumed.png")
+            assert after and abs(after[0] - before[0]) <= 1, (before, after)
+            print(
+                f"PASS first visible paragraph before close {before[0]}, after restart {after[0]}",
+                flush=True,
+            )
+            click("Back to library")
+            time.sleep(0.3)
         print("PASS chapter navigation and resume after process restart", flush=True)
         for expected in ("Book exported", "Already exported"):
             click("Export")
