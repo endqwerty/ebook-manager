@@ -749,3 +749,16 @@ fn a_lower_inherited_memory_ceiling_is_kept() {
         "{trouble}"
     );
 }
+
+/// F7: the helper under test was built to stop on arithmetic overflow, in
+/// whichever profile and workspace built it.
+#[test]
+fn helper_is_built_with_overflow_checks() {
+    let out = Command::new(HELPER).arg("overflow-probe").output().unwrap();
+    assert!(
+        !out.status.success(),
+        "the helper wrapped on overflow: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(out.stdout.is_empty());
+}

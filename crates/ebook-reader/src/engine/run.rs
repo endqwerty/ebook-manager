@@ -15,6 +15,9 @@ use std::io::Write;
 /// `probe` | `metadata <limits>` | `open <limits>` | `chapter <limits> <index>`,
 /// followed by the CPU-seconds allowance where a limits argument is present.
 pub fn main(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("overflow-probe") {
+        return overflow_probe();
+    }
     let response = match dispatch(args) {
         Ok(payload) => Response::Ok(payload),
         Err(e) => Response::Err(e),
@@ -240,4 +243,14 @@ fn chapter(
     }
     out.blocks = extracted.blocks;
     Ok(out)
+}
+
+/// Sizes and counts here come from untrusted files, so arithmetic that
+/// overflows must stop the helper rather than wrap. This lets a test confirm
+/// that the helper it was handed was built that way: with overflow checks the
+/// addition panics and the process fails; without them it prints and succeeds.
+fn overflow_probe() -> i32 {
+    let sum = std::hint::black_box(u8::MAX) + std::hint::black_box(1u8);
+    println!("wrapped to {sum}");
+    0
 }
