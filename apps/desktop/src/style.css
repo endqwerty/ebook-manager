@@ -6,9 +6,10 @@
   font-weight: 600;
 }
 /* The serif's letters reach a pixel past the box the renderer repaints
-   when the title moves. A background of the window's own colour makes the
+   when a title moves. A background of the window's own colour makes the
    repainted box cover them. */
-.screen-title {
+.screen-title,
+.library-state .title {
   padding: 3px 0;
   background: var(--window-bg-color);
 }

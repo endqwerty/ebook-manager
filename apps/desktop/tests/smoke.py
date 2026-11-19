@@ -367,11 +367,19 @@ def gone(name):
     raise AssertionError(f"{name!r} is still shown")
 
 
+def search(words):
+    """Types into the library window, which opens the search. The pause lets
+    the search field take the focus: GTK drops a second key that arrives
+    within a few milliseconds of the one that opened it."""
+    type_text(words[0])
+    type_text(words[1:])
+
+
 def select_book(words):
     """Finds a book by typing and selects it, as a reader would."""
     focus("Ebook Manager")
     key("Escape")
-    type_text(words)
+    search(words)
     time.sleep(0.5)
     key("Down")
 
@@ -381,7 +389,8 @@ def painted(image, colour, fuzz):
     target = "rgb({},{},{})".format(*colour)
     out = subprocess.check_output(
         [
-            "magick",
+            # ImageMagick 7 names its command `magick`, and 6 `convert`.
+            shutil.which("magick") or "convert",
             str(image),
             "-alpha",
             "off",
@@ -482,9 +491,9 @@ def run(binary, evidence, root):
         print("PASS file picker import", flush=True)
         # Typing anywhere in the window searches.
         focus("Ebook Manager")
-        type_text("unmatched")
+        search("unmatched")
         find("No books match")
-        find("unmatched", "label", contains=True)
+        find("Nothing in the library matches “unmatched”.", "label")
         capture("Ebook Manager", evidence / "no-match.png")
         key("Escape")
         find("1 book")
@@ -510,6 +519,12 @@ def run(binary, evidence, root):
         # The series is searched, and the filing fields were stored.
         select_book("tidewater vale")
         find("The Lantern Atlas · Revised")
+        # Typing with a book focused goes on to the search field.
+        type_text("x")
+        find("Nothing in the library matches “tidewater valex”.", "label")
+        key("BackSpace")
+        find("The Lantern Atlas · Revised")
+        key("Down")
         key("F2")
         edit = find("Edit book", "frame")
         for name, value in (
@@ -643,8 +658,8 @@ def covers(binary, evidence, root, proc):
             # The teal cover's artwork, and a binding in one of the eight
             # colours for the two books with no cover. Each cover is some
             # 30,000 pixels.
-            teal = painted(image, (21, 84, 99), 8)
-            assert teal > 8000, teal
+            teal = painted(image, (21, 84, 99), 4)
+            assert teal > 20000, teal
             bound = sum(painted(image, colour, 0.5) for colour in BINDINGS)
             assert bound > 20000, bound
         finally:

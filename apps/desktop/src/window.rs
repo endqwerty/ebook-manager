@@ -721,6 +721,43 @@ pub fn open(app: &adw::Application) {
             library.search_for(search.text().as_str());
         }
     });
+    // With the search open and a book focused, typing goes on to the search
+    // field. The search bar itself passes keys on only while it is closed.
+    let typing = gtk::EventControllerKey::new();
+    typing.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(&library);
+    typing.connect_key_pressed(move |typing, key, _, modifiers| {
+        use gtk::gdk::ModifierType;
+        let Some(library) = weak.upgrade() else {
+            return glib::Propagation::Proceed;
+        };
+        let printable = key
+            .to_unicode()
+            .is_some_and(|c| !c.is_control() && c != ' ')
+            && !modifiers.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK);
+        let on_books = gtk::prelude::GtkWindowExt::focus(&library.window)
+            .is_none_or(|focus| focus.is_ancestor(&library.scrolled));
+        let field = {
+            let mut child = library.search.first_child();
+            while child.as_ref().is_some_and(|c| !c.is::<gtk::Text>()) {
+                child = child.and_then(|c| c.next_sibling());
+            }
+            child
+        };
+        match field {
+            Some(field)
+                if printable
+                    && on_books
+                    && library.search_bar.is_search_mode()
+                    && typing.forward(&field) =>
+            {
+                library.search.grab_focus();
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        }
+    });
+    window.add_controller(typing);
     // Down leaves the search field for the books it found.
     let leave = gtk::EventControllerKey::new();
     let weak = Rc::downgrade(&library);
