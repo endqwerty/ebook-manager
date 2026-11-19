@@ -209,6 +209,19 @@ def xd(*args):
     subprocess.run(["xdotool", *map(str, args)], check=True)
 
 
+def send_key(name):
+    # Some XKB maps make xdotool add Alt when looking up F2 or F11.
+    # Use the physical keycode from our private X server's keymap.
+    if name in ("F2", "F11"):
+        keymap = subprocess.check_output(
+            ["xkbcomp", "-xkb", os.environ["DISPLAY"], "-"], text=True
+        )
+        match = re.search(rf"<FK{int(name[1:]):02d}>\s*=\s*([0-9]+);", keymap)
+        assert match is not None, f"{name} is missing from the X server's keymap"
+        name = match[1]
+    xd("key", name)
+
+
 def picker(path, title):
     find(title, contains=True)
     wid = subprocess.check_output(
@@ -253,9 +266,7 @@ def keys(evidence):
     title = "The Lantern Atlas · Revised"
 
     def press(key):
-        # Some X keymaps make xdotool add Alt to reach the F11 symbol, and the
-        # reader ignores Alt+F11. Its keycode sends the bare key.
-        xd("key", {"F11": "95"}.get(key, key))
+        send_key(key)
         time.sleep(0.4)
 
     def page(name, blank=False):
@@ -335,7 +346,7 @@ def focus(title):
 
 def key(*names):
     for name in names:
-        xd("key", name)
+        send_key(name)
         time.sleep(0.15)
 
 
