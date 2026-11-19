@@ -233,8 +233,16 @@ pub struct Column {
     #[serde(default = "shown")]
     pub visible: bool,
     /// The width the reader gave it. Absent, the table decides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "read_width",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub width: Option<i32>,
+}
+
+fn read_width<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<i32>, D::Error> {
+    Ok(Option::<f64>::deserialize(input)?.map(|width| width.round() as i32))
 }
 
 fn shown() -> bool {
@@ -456,8 +464,8 @@ mod tests {
                 "sort": {"grid": [{"field": "added", "descending": true}],
                          "list": [{"field": "future"}],
                          "table": [{"field": "progress"}]},
-                "columns": [{"field": "future"}, {"field": "author", "width": 9}, {"field": "author"},
-                            {"field": "title", "visible": false}]}"#,
+                "columns": [{"field": "future"}, {"field": "author", "width": 180.6}, {"field": "author"},
+                            {"field": "title", "visible": false, "width": 9}]}"#,
         )
         .unwrap();
         let settings = Settings::load(&path);
@@ -480,7 +488,7 @@ mod tests {
                 Column {
                     field: SortField::Author,
                     visible: true,
-                    width: None
+                    width: Some(181)
                 },
                 Column {
                     field: SortField::Title,
