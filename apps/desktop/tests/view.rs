@@ -6,6 +6,11 @@
 #[allow(dead_code)]
 #[path = "../src/reader/view.rs"]
 mod view;
+// The reader's place-keeping, which the tests at the end drive with what a
+// real page says, as the reader's window does.
+#[allow(dead_code)]
+#[path = "../src/reader/place.rs"]
+mod place;
 
 use libtest_mimic::{Arguments, Failed, Trial};
 use std::cell::RefCell;
@@ -182,12 +187,13 @@ impl Stage {
     fn open(&self, chapter: u32, landing: Landing) -> Result<(u32, u32, u32, u32), Failed> {
         self.events.borrow_mut().clear();
         self.view.load(chapter, landing);
-        let Event::Ready { length, .. } = self.wait("ready", |e| {
+        let Event::Ready { load } = self.wait("ready", |e| {
             matches!(e, Event::Ready { .. } | Event::Failed(_))
         })?
         else {
             return Err(format!("the chapter failed: {:?}", self.events.borrow()).into());
         };
+        let length = load.length;
         let Event::Place {
             offset,
             page,
@@ -483,12 +489,16 @@ fn the_bridge_accepts_only_its_own_world_and_valid_messages() -> Outcome {
         events
             == [
                 Event::Place {
-                    chapter: 0,
+                    load: view::Load {
+                        number: 1,
+                        chapter: 0,
+                        length: 14,
+                    },
                     offset: 3,
                     page: 0,
                     pages: 1,
+                    count: 7,
                     moved: true,
-                    order: (1, 7),
                 },
                 Event::Jump {
                     chapter: 4,
@@ -1040,21 +1050,22 @@ fn a_turn_answered_after_a_chapter_change_is_still_told() -> Outcome {
     // the turn's answer can only arrive after the load has moved on.
     stage.view.turn(1, false, |_| {});
     stage.view.load(1, Landing::Start);
-    stage.wait("the next chapter's place", |e| {
-        matches!(e, Event::Place { chapter: 1, .. })
-    })?;
+    stage.wait(
+        "the next chapter's place",
+        |e| matches!(e, Event::Place { load, .. } if load.chapter == 1),
+    )?;
     let places: Vec<(u32, u32, bool, (u32, u32))> = stage
         .events
         .borrow()
         .iter()
         .filter_map(|e| match e {
             Event::Place {
-                chapter,
+                load,
                 page,
                 moved,
-                order,
+                count,
                 ..
-            } => Some((*chapter, *page, *moved, *order)),
+            } => Some((load.chapter, *page, *moved, (load.number, *count))),
             _ => None,
         })
         .collect();
@@ -1143,7 +1154,9 @@ fn a_move_carries_its_place_and_a_reflow_does_not_move_it() -> Outcome {
         .borrow()
         .iter()
         .filter_map(|e| match e {
-            Event::Place { moved, order, .. } => Some((*moved, *order)),
+            Event::Place {
+                load, moved, count, ..
+            } => Some((*moved, (load.number, *count))),
             _ => None,
         })
         .collect();
@@ -1327,6 +1340,238 @@ fn two_views_share_one_process_without_a_crash() -> Outcome {
     Ok(())
 }
 
+/// The reader's place-keeping fed by a real view, as the reader's window
+/// feeds it: every load asked for, and every event in the order it came.
+struct Shell {
+    keeper: place::Keeper,
+    fed: usize,
+    /// Every place the keeper said to show.
+    shown: Vec<place::Place>,
+    /// Everything the keeper was told, in order.
+    told: Vec<place::Input>,
+}
+
+impl Shell {
+    fn new() -> Shell {
+        Shell {
+            keeper: place::Keeper::default(),
+            fed: 0,
+            shown: Vec::new(),
+            told: Vec::new(),
+        }
+    }
+
+    fn load(&mut self, stage: &Stage, chapter: u32, landing: Landing) -> u32 {
+        let number = stage.view.load(chapter, landing);
+        self.step(place::Input::Asked { number });
+        number
+    }
+
+    fn step(&mut self, input: place::Input) {
+        self.told.push(input);
+        for effect in self.keeper.step(input) {
+            if let place::Effect::Show(place) = effect {
+                self.shown.push(place);
+            }
+        }
+    }
+
+    /// Give the keeper every event that has arrived since the last call.
+    fn take(&mut self, stage: &Stage) {
+        let events: Vec<Event> = stage.events.borrow()[self.fed..].to_vec();
+        for event in &events {
+            self.feed(event);
+        }
+    }
+
+    fn feed(&mut self, event: &Event) {
+        self.fed += 1;
+        let record = |load: &view::Load| place::Load {
+            number: load.number,
+            chapter: load.chapter,
+            length: load.length,
+        };
+        match event {
+            Event::Ready { load } => self.step(place::Input::Ready { load: record(load) }),
+            Event::Place {
+                load,
+                offset,
+                page,
+                pages,
+                count,
+                moved,
+            } => self.step(place::Input::Report(place::Report {
+                load: record(load),
+                offset: *offset,
+                page: *page,
+                pages: *pages,
+                count: *count,
+                moved: *moved,
+            })),
+            Event::Failed(_) => self.step(place::Input::Failed),
+            _ => {}
+        }
+    }
+
+    /// Wait until load `number` has told a place, and take what arrived.
+    fn landed(&mut self, stage: &Stage, number: u32) -> Outcome {
+        stage.wait(
+            "a load's place",
+            |e| matches!(e, Event::Place { load, .. } if load.number == number),
+        )?;
+        self.take(stage);
+        Ok(())
+    }
+}
+
+/// Have the page say it is at a place, as load `number`.
+fn say(stage: &Stage, number: u32, offset: u32, page: u32, count: u32, moved: bool) -> Outcome {
+    stage.app(&format!(
+        "window.webkit.messageHandlers.reader.postMessage({{kind: 'place', load: {number}, offset: {offset}, page: {page}, pages: 99, move: {count}, moved: {moved}}}); return 1"
+    ))?;
+    stage.wait("the place the page said", |e| {
+        matches!(e, Event::Place { load, count: c, moved: m, .. } if load.number == number && *c == count && *m == moved)
+    })?;
+    Ok(())
+}
+
+/// Turn in A, choose B, which cannot be read, choose C, and only then does
+/// a move made in A answer. The answer is told with A's own record, two
+/// loads later. It is the place held until C lands, and it is never shown.
+fn an_answer_two_chapters_late_is_held_and_not_shown() -> Outcome {
+    let source = Rc::new(Chapters {
+        markup: HashMap::from([(0, long_chapter()), (2, "<p>Shorter.</p>".to_owned())]),
+        ..Chapters::default()
+    });
+    let stage = Stage::new(source, |_| {})?;
+    let mut shell = Shell::new();
+    let a = shell.load(&stage, 0, Landing::Start);
+    shell.landed(&stage, a)?;
+    // A real turn, answered after B was asked for.
+    stage.view.turn(1, false, |_| {});
+    shell.load(&stage, 1, Landing::Start);
+    stage.wait("the turn's place", |e| {
+        matches!(e, Event::Place { load, page: 1, count: 2, moved: true, .. } if load.number == a && load.chapter == 0)
+    })?;
+    stage.wait("B failing", |e| matches!(e, Event::Failed(_)))?;
+    shell.take(&stage);
+    let turn = shell.keeper.held();
+    check!(
+        turn.map(|p| (p.chapter, p.page)) == Some((0, 1)),
+        "after the turn {turn:?} is held"
+    );
+    check!(
+        shell.keeper.displayed().is_none(),
+        "{:?} is displayed while nothing shows",
+        shell.keeper.displayed()
+    );
+    // C is chosen, and then another move A made is answered: two loads late.
+    let c = shell.load(&stage, 2, Landing::Start);
+    say(&stage, a, 4321, 3, 3, true)?;
+    shell.landed(&stage, c)?;
+    // Go through what the keeper was told once more, one step at a time,
+    // to see the place held after each.
+    let mut again = place::Keeper::default();
+    let mut moves: Vec<((u32, u32), (u32, u32))> = Vec::new();
+    let mut asked = None;
+    let mut held_the_late_answer = false;
+    for input in &shell.told {
+        match input {
+            place::Input::Asked { number } => asked = Some(*number),
+            place::Input::Report(r) if r.moved => {
+                moves.push(((r.load.number, r.count), (r.load.chapter, r.offset)));
+            }
+            _ => {}
+        }
+        if let place::Input::Report(r) = input
+            && r.load.number == a
+            && r.count == 3
+        {
+            check!(
+                r.load.chapter == 0 && r.load.length > 4321 && asked == Some(c),
+                "the late answer came with the record {:?} while load {asked:?} was showing",
+                r.load
+            );
+        }
+        again.step(*input);
+        let held = again.held().map(|p| (p.chapter, p.offset));
+        let newest = moves.iter().max_by_key(|(order, _)| *order).map(|m| m.1);
+        check!(
+            held == newest,
+            "after {input:?}, {held:?} is held and the newest move is {newest:?}"
+        );
+        held_the_late_answer |= held == Some((0, 4321));
+        check!(
+            again
+                .displayed()
+                .is_none_or(|(_, load)| Some(load) == asked),
+            "after {input:?}, {:?} is displayed while load {asked:?} shows",
+            again.displayed()
+        );
+    }
+    check!(
+        held_the_late_answer,
+        "the late answer was never the place held: {:?}",
+        shell.told
+    );
+    check!(
+        shell.keeper.held().map(|p| p.chapter) == Some(2),
+        "C landed last, and {:?} is held",
+        shell.keeper.held()
+    );
+    check!(
+        shell.keeper.displayed().map(|(p, load)| (p.chapter, load)) == Some((2, c)),
+        "{:?} is displayed",
+        shell.keeper.displayed()
+    );
+    check!(
+        !shell.shown.iter().any(|p| p.offset == 4321),
+        "the late answer was shown: {:?}",
+        shell.shown
+    );
+    Ok(())
+}
+
+/// A chapter loaded a second time shows only what its second load says. A
+/// place from the first load, of the same chapter number, is told with the
+/// first load's record and is neither shown nor held.
+fn a_chapter_loaded_again_shows_only_its_new_load() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    let mut shell = Shell::new();
+    let first = shell.load(&stage, 0, Landing::Start);
+    shell.landed(&stage, first)?;
+    let second = shell.load(&stage, 0, Landing::Offset(9000));
+    shell.landed(&stage, second)?;
+    let Some((landing, _)) = shell.keeper.displayed() else {
+        return Err("nothing is displayed after the second load landed".into());
+    };
+    check!(landing.offset > 0, "the second load landed at {landing:?}");
+    // A late move and a late reflow from the first load.
+    say(&stage, first, 77, 1, 40, true)?;
+    say(&stage, first, 77, 2, 40, false)?;
+    shell.take(&stage);
+    check!(
+        shell.keeper.displayed() == Some((landing, second)),
+        "the first load's place is displayed: {:?}",
+        shell.keeper.displayed()
+    );
+    check!(
+        shell.keeper.held() == Some(landing),
+        "the first load's place is held: {:?}",
+        shell.keeper.held()
+    );
+    // The second load still moves what is shown and held.
+    check!(stage.turn(-1)?, "the second load did not turn");
+    shell.take(&stage);
+    let now = shell.keeper.displayed().map(|(p, load)| (p.page, load));
+    check!(
+        now == Some((landing.page - 1, second)),
+        "after a turn {now:?} is displayed, from page {}",
+        landing.page
+    );
+    Ok(())
+}
+
 fn main() {
     let mut arguments = Arguments::from_args();
     // GTK belongs to one thread.
@@ -1432,6 +1677,14 @@ const TESTS: &[Test] = &[
     (
         "a_turn_answered_after_a_chapter_change_is_still_told",
         a_turn_answered_after_a_chapter_change_is_still_told,
+    ),
+    (
+        "an_answer_two_chapters_late_is_held_and_not_shown",
+        an_answer_two_chapters_late_is_held_and_not_shown,
+    ),
+    (
+        "a_chapter_loaded_again_shows_only_its_new_load",
+        a_chapter_loaded_again_shows_only_its_new_load,
     ),
     (
         "a_late_error_does_not_fail_a_newer_load",

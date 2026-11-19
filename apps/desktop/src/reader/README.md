@@ -3,9 +3,11 @@
 `view.rs` draws one chapter in a WebKitGTK 6.0 web view and keeps the book's
 content inside it. `reader.js` and `reader.css` are the app's own script and
 style sheet for the page. `progress.rs` works out how far through the book a
-place is. `place.rs` holds the place to save and the one rule for replacing
-it. The window, the keys and saving the place are in
-[`../reader.rs`](../reader.rs). The design is
+place is. `place.rs` is the reader's place-keeping: one function over an
+explicit state that takes what happened and answers what to do, with no
+WebKit and no GTK in it. The window and the keys are in
+[`../reader.rs`](../reader.rs), which tells that function every event and
+does what it answers. The design is
 [Reading an EPUB in the app](../../../../docs/design/epub-reading.md), and what
 a reader sees is in [the desktop spec](../../../../specs/desktop-mvp.md#read-and-export).
 
@@ -51,8 +53,11 @@ so [the view tests](../../tests/view.rs) include it directly.
   its pages from reaching pages of other schemes. That is an extra, and not
   what blocks requests: the three layers above do that.
 - **Events are checked, not trusted.** A message from the page does something
-  only if it has a known kind, the current load's number and values in range:
-  a page inside the page count and an offset inside the chapter's length.
+  only if it has a known kind and values in range. A place must name a load
+  that became ready, and hold a page inside the page count and an offset
+  inside the length of the chapter that load showed; it is then told with
+  that load's record, whichever load is showing. A jump, an outside link and
+  a tap act on what is showing, so they must name the load asked for last.
   `Event::External` carries an `http`, `https` or `mailto` address and has
   opened nothing. Ask the reader first.
 - **A place survives reflow.** `Event::Place` gives the UTF-16 offset of the
@@ -69,14 +74,26 @@ so [the view tests](../../tests/view.rs) include it directly.
 - **A move and its place arrive together.** A turn that moved has sent
   `Event::Place` before its `done` is called, because the page's answer to
   the turn is the place. A landing and a settled scroll send it as their own
-  message. Each has `moved: true` and an `order`, the load's number and then
-  the move's count in that load, which grows with every move. A place is
-  sent for the chapter the move was made in, even when the next chapter has
-  been asked for since, so a caller must not assume it is for the chapter
-  showing. A reflow sends `Event::Place` with `moved: false`, new page
-  numbers, and the offset and order of the last move. A caller that keeps
-  the moved place with the greatest order always has the place to save, and
-  never needs to ask; `place.rs` does exactly that.
+  message. Each has `moved: true`, the `Load` record of the load it was made
+  in (its number, its chapter and that chapter's length) and a `count`, the
+  page's count of its moves in that load. `View::load` returns the number,
+  which grows with every load, so the load's number and then the count put
+  every move in the order it was made. The record is the place's own: the
+  view keeps the record of every load that became ready, so a place arrives
+  with the right chapter however many chapters have been asked for since. A
+  caller must not assume a place is for the load showing. A reflow sends
+  `Event::Place` with `moved: false`, new page numbers, and the offset and
+  count of the last move.
+- **`place.rs` turns those events into what to do.** `Keeper::step` takes
+  an `Input` (a load asked for, a load ready, a report, a chapter failing,
+  the save timer firing, leaving) and answers `Effect`s: show a place, blank the status,
+  start or stop the save timer, submit a place to the library, wait for the
+  library, end the page. It holds the place of the most recently made move
+  that has arrived, shows a place only for the load being shown, submits
+  saves in the order their places were made, and after a leave answers
+  nothing. `reader.rs` performs the effects in the order given, and saves
+  through one function, `submit`, which has the save in the library's queue
+  before it returns.
   `Landing::Start` is the first page whatever is on it.
 - **A chapter cannot run for ever.** A load that takes longer than
   `Config::watchdog` (15 seconds) ends the web process. So does each call
@@ -117,8 +134,18 @@ program failing on any core dump.
 
 ```sh
 apps/desktop/tests/private-session.sh cargo nextest run -p ebook-manager --test view
-cargo test -p ebook-manager progress
+cargo test -p ebook-manager --bin ebook-manager reader::
 ```
+
+The second line needs no display. It runs `place.rs` through 20,000 seeded
+random sequences of loads, moves, reflows, timer firings and leaves, with
+answers from any earlier load arriving late and in any order, and compares
+each step with a reference that remembers everything. A second test puts
+back, one at a time, four faults that reviews found in the code `place.rs`
+replaced, and requires the random test to catch each. A failure prints its
+seed. Two view tests, `an_answer_two_chapters_late_is_held_and_not_shown`
+and `a_chapter_loaded_again_shows_only_its_new_load`, feed the same
+function from a real page.
 
 The view tests serve hostile chapters to a real web view and count
 connections to a local listener. Each is named for the statement of the

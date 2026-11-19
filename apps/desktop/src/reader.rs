@@ -227,7 +227,7 @@ fn page_colour() -> [&'static str; 3] {
     }
 }
 
-use place::{Held, Place};
+use place::{Effect, Input, Keeper, Place};
 
 struct Reading {
     book: Arc<ebook_reader::Book>,
@@ -242,21 +242,14 @@ struct Reading {
     previous: gtk::Button,
     next: gtk::Button,
     status: gtk::Label,
-    /// The chapter asked for, until it is showing.
-    loading: Cell<Option<u32>>,
-    /// The place showing, for turning. Empty while a chapter loads.
-    place: Cell<Option<Place>>,
-    /// The place to save: the place of the newest move the page has
-    /// reported. A chapter that is still loading, or fails, does not lose
-    /// it, and a reflow does not change it.
-    confirmed: RefCell<Held>,
-    /// A chapter has been asked for and has not yet said it is ready, so a
-    /// place that arrives is an earlier chapter's and is not shown.
-    awaiting: Cell<bool>,
-    /// The reader has left: its place is saved and its page is ended.
-    gone: Cell<bool>,
+    /// The place to save, the place showing and whether the reader has
+    /// left. Everything that happens goes through `step`, and this file
+    /// only does what the keeper answers. See `place.rs`.
+    keeper: RefCell<Keeper>,
     /// The timer that saves the place once turning settles.
     pending_save: Cell<Option<glib::SourceId>>,
+    /// The answer to the save a leave submitted, until the leave reads it.
+    submitted: RefCell<Option<Saving>>,
     /// The window's own colours, replaced when the appearance changes.
     colours: gtk::CssProvider,
 }
@@ -343,12 +336,9 @@ impl Reading {
             previous: previous.clone(),
             next: next.clone(),
             status,
-            loading: Cell::new(None),
-            place: Cell::new(None),
-            confirmed: RefCell::default(),
-            awaiting: Cell::new(false),
-            gone: Cell::new(false),
+            keeper: RefCell::default(),
             pending_save: Cell::new(None),
+            submitted: RefCell::new(None),
             colours,
         });
         reading.colour();
@@ -453,15 +443,15 @@ impl Reading {
         }
     }
 
-    fn show(&self, chapter: u32, landing: Landing) {
-        self.loading.set(Some(chapter));
-        self.awaiting.set(true);
-        self.place.set(None);
+    fn show(self: &Rc<Self>, chapter: u32, landing: Landing) {
+        if self.keeper.borrow().gone() {
+            return;
+        }
         self.previous.set_sensitive(chapter > 0);
         self.next
             .set_sensitive((chapter as usize) + 1 < self.book.chapters().len());
-        self.status.set_text("Loading chapter…");
-        self.view.load(chapter, landing);
+        let number = self.view.load(chapter, landing);
+        let _ = self.step(Input::Asked { number });
         // A chapter opens in the page colour, with no flash of another.
         let [page, ink, secondary] = page_colour();
         self.view
@@ -471,58 +461,43 @@ impl Reading {
     fn event(self: &Rc<Self>, event: Event) {
         // A reader that has left has saved its place and ended its page.
         // Nothing that arrives after that changes anything.
-        if self.gone.get() {
+        if self.keeper.borrow().gone() {
             return;
         }
         match event {
-            Event::Ready { chapter, length } => {
-                self.awaiting.set(false);
-                if self.loading.get() == Some(chapter) {
-                    self.view.widget().grab_focus();
-                }
+            Event::Ready { load } => {
+                self.view.widget().grab_focus();
                 // The page and the helper count the same text. If they ever
                 // differ, places still work, since the page makes and reads
                 // its own, but search results would land off. Say so.
-                let counted = self.facts.borrow().get(&chapter).map(|f| f.length);
-                if counted.is_some_and(|c| c != length) {
+                let counted = self.facts.borrow().get(&load.chapter).map(|f| f.length);
+                if counted.is_some_and(|c| c != load.length) {
                     glib::g_warning!(
                         "ebook-manager",
-                        "chapter {chapter}: the page counts {length} units of text, the helper {}",
+                        "chapter {}: the page counts {} units of text, the helper {}",
+                        load.chapter,
+                        load.length,
                         counted.unwrap_or_default()
                     );
                 }
+                let _ = self.step(Input::Ready { load: record(load) });
             }
             Event::Place {
-                chapter,
+                load,
                 offset,
                 page,
                 pages,
+                count,
                 moved,
-                order,
             } => {
-                let place = Place {
-                    chapter,
+                let _ = self.step(Input::Report(place::Report {
+                    load: record(load),
                     offset,
                     page,
                     pages,
-                };
-                // What is saved: the place of the newest move, for the
-                // chapter it was made in, whatever is showing or loading
-                // now. A reflow is not a move, so it saves nothing and
-                // leaves the save's timer alone.
-                let newest = self.confirmed.borrow_mut().take(place, moved, order);
-                if newest {
-                    self.queue_save();
-                }
-                // What is shown: the chapter on screen, once it is ready.
-                let arrived = self.loading.get() == Some(chapter);
-                let showing = self.place.get().is_some_and(|p| p.chapter == chapter);
-                if self.awaiting.get() || !(arrived || showing) {
-                    return;
-                }
-                self.loading.set(None);
-                self.place.set(Some(place));
-                self.describe();
+                    count,
+                    moved,
+                }));
             }
             Event::Jump { chapter, anchor } => {
                 if (chapter as usize) < self.book.chapters().len() {
@@ -535,18 +510,50 @@ impl Reading {
             // The controls stay visible for now, so the middle does nothing.
             Event::Tap(Zone::Middle) => {}
             Event::Failed(why) => {
-                self.loading.set(None);
+                let _ = self.step(Input::Failed);
                 self.status.set_text(&why);
             }
         }
     }
 
+    /// Tell the keeper what happened and do what it answers, in the order
+    /// it answers. The error, if any, is the library's for a save a leave
+    /// made.
+    fn step(self: &Rc<Self>, input: Input) -> Result<()> {
+        // The keeper is let go before anything is done, so an effect that
+        // leads back here finds it free.
+        let effects = self.keeper.borrow_mut().step(input);
+        let mut result = Ok(());
+        for effect in effects {
+            match effect {
+                Effect::Show(place) => self.describe(place),
+                Effect::Blank => self.status.set_text("Loading chapter…"),
+                Effect::StartTimer => self.start_timer(),
+                Effect::StopTimer => {
+                    if let Some(timer) = self.pending_save.take() {
+                        timer.remove();
+                    }
+                }
+                Effect::Submit(place) => {
+                    let saving = submit(&self.store, &self.model.id, self.position(place));
+                    if input == Input::Leave {
+                        self.submitted.replace(Some(saving));
+                    } else {
+                        self.report_later(saving);
+                    }
+                }
+                Effect::AwaitLibrary => {
+                    result = await_library(&self.store, self.submitted.take());
+                }
+                Effect::EndPage => self.view.shut(),
+            }
+        }
+        result
+    }
+
     /// The line under the page: the chapter, the page, and a note when some
     /// of the chapter could not be shown.
-    fn describe(&self) {
-        let Some(place) = self.place.get() else {
-            return;
-        };
+    fn describe(&self, place: Place) {
         let partial = self
             .facts
             .borrow()
@@ -639,14 +646,15 @@ impl Reading {
     }
 
     fn right_to_left(&self) -> bool {
-        let chapter = self.place.get().map(|p| p.chapter);
+        let chapter = self.keeper.borrow().displayed().map(|(p, _)| p.chapter);
         chapter.is_some_and(|c| self.facts.borrow().get(&c).is_some_and(|f| f.right_to_left))
     }
 
     /// Turns one page, moving to the neighbouring chapter at either end of
     /// this one: forward to its start, back to its last page.
     fn turn(self: &Rc<Self>, by: i32) {
-        let Some(place) = self.place.get() else {
+        // A turn is made from the place showing, in the load showing it.
+        let Some((place, load)) = self.keeper.borrow().displayed() else {
             return;
         };
         // The answer must not keep the reader alive after its window closes.
@@ -655,17 +663,14 @@ impl Reading {
             let Some(reading) = weak.upgrade() else {
                 return;
             };
-            // A page ended while a turn was unanswered says it did not
-            // move. That is not the chapter's edge.
-            if reading.gone.get() {
-                return;
-            }
-            if moved
-                || reading
-                    .place
-                    .get()
-                    .is_none_or(|p| p.chapter != place.chapter)
-            {
+            // A turn that moved has already told its place. One that did
+            // not is the chapter's edge only if the same load is still
+            // showing: a page ended while a turn was unanswered also says
+            // it did not move, and so does one the reader has since left.
+            let keeper = reading.keeper.borrow();
+            let same = keeper.showing() == Some(load) && !keeper.gone();
+            drop(keeper);
+            if moved || !same {
                 return;
             }
             let chapters = reading.book.chapters().len() as u32;
@@ -694,23 +699,22 @@ impl Reading {
     /// The place as the library stores it, with when it was read and how
     /// far through the book it is. This is the one function that knows the
     /// record's shape.
-    fn position(&self) -> Option<ReadingPosition> {
-        let place = self.confirmed.borrow().get()?;
+    fn position(&self, place: Place) -> ReadingPosition {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .and_then(|d| i64::try_from(d.as_secs()).ok());
-        Some(ReadingPosition {
+        ReadingPosition {
             version_id: self.model.version_id.clone(),
             chapter: place.chapter,
             offset: place.offset,
             last_read: now,
             fraction: Some(self.fraction(place)),
-        })
+        }
     }
 
-    /// Save the place once turning settles.
-    fn queue_save(self: &Rc<Self>) {
+    /// Start the timer that saves once turning settles, or start it again.
+    fn start_timer(self: &Rc<Self>) {
         if let Some(timer) = self.pending_save.take() {
             timer.remove();
         }
@@ -718,11 +722,25 @@ impl Reading {
         let timer =
             glib::timeout_add_local_once(std::time::Duration::from_millis(350), move || {
                 if let Some(r) = weak.upgrade() {
+                    // This timer has fired and is gone, so it is forgotten.
                     r.pending_save.take();
-                    r.persist();
+                    let _ = r.step(Input::Timer);
                 }
             });
         self.pending_save.set(Some(timer));
+    }
+
+    /// Tell the reader if a save made while reading failed. The save is
+    /// already with the library: this only waits for its answer.
+    fn report_later(&self, saving: Saving) {
+        let window = self.window.clone();
+        glib::spawn_future_local(async move {
+            if let Err(e) = saving.await
+                && let Some(w) = window.upgrade()
+            {
+                position_error(&w, &e);
+            }
+        });
     }
 
     /// Leave the reader. Every way of leaving does this one thing, whether
@@ -732,59 +750,125 @@ impl Reading {
     /// process may end as soon as this returns, and end the page's process
     /// before anything can leave it to shut itself down. Leaving twice does
     /// nothing the second time.
-    fn leave(&self) -> Result<()> {
-        if self.gone.replace(true) {
-            return Ok(());
+    fn leave(self: &Rc<Self>) -> Result<()> {
+        self.step(Input::Leave)
+    }
+}
+
+/// A save the library has been handed, and will answer.
+type Saving = std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>>>>;
+
+fn record(load: view::Load) -> place::Load {
+    place::Load {
+        number: load.number,
+        chapter: load.chapter,
+        length: load.length,
+    }
+}
+
+/// Ask a future once, with nothing to wake.
+fn poll_once<T>(
+    future: std::pin::Pin<&mut (impl std::future::Future<Output = T> + ?Sized)>,
+) -> std::task::Poll<T> {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    future.poll(&mut context)
+}
+
+/// Hand a place to the library. This is the one way a place is saved, for
+/// the timer and for leaving alike.
+fn submit(store: &store::Store, id: &str, position: ReadingPosition) -> Saving {
+    let store = store.clone();
+    let id = id.to_owned();
+    queue(async move { store.save_position(id, position).await })
+}
+
+/// Put a job in the library's queue now. The store queues a job when its
+/// future is first asked, not when it is made, so this asks once. The
+/// library's thread takes its queue in order, so jobs are done in the order
+/// this is called. What comes back only waits for the library's answer.
+fn queue(job: impl std::future::Future<Output = Result<()>> + 'static) -> Saving {
+    let mut saving: Saving = Box::pin(job);
+    if let std::task::Poll::Ready(answer) = poll_once(saving.as_mut()) {
+        return Box::pin(std::future::ready(answer));
+    }
+    saving
+}
+
+/// Wait until the library has written everything submitted so far, or two
+/// seconds have passed, and give the answer to `last` if there is one. The
+/// process may end as soon as a leave returns, so a leave waits here.
+///
+/// This can run inside a signal handler, where the main loop cannot be
+/// waited on. The library answers from its own thread, so asking again
+/// until it has answered is enough. With no save of its own to wait for, a
+/// leave queues a job that does nothing: when that is answered, every save
+/// queued before it has been written.
+fn await_library(store: &store::Store, last: Option<Saving>) -> Result<()> {
+    let mut last = last.unwrap_or_else(|| {
+        let store = store.clone();
+        Box::pin(async move { store.run(|_| Ok(())).await })
+    });
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if let std::task::Poll::Ready(result) = poll_once(last.as_mut()) {
+            return result;
         }
-        let saved = self.flush();
-        self.view.shut();
-        saved
+        if std::time::Instant::now() >= limit {
+            anyhow::bail!("The library did not answer in time");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn job(store: &store::Store, log: &Arc<Mutex<Vec<u32>>>, n: u32) -> Saving {
+        let (store, log) = (store.clone(), log.clone());
+        Box::pin(async move {
+            store
+                .run(move |_| {
+                    log.lock().unwrap().push(n);
+                    Ok(())
+                })
+                .await
+        })
     }
 
-    /// Write the last confirmed place now, and wait until the library has
-    /// it or two seconds have passed. The library's thread takes its jobs in
-    /// order, so every save made before this one is written too. Saving a
-    /// place that is already the saved one writes nothing.
-    fn flush(&self) -> Result<()> {
-        if let Some(timer) = self.pending_save.take() {
-            timer.remove();
-        }
-        let Some(position) = self.position() else {
-            return Ok(());
-        };
-        let save = self.store.save_position(self.model.id.clone(), position);
-        let mut save = std::pin::pin!(save);
-        // This can run inside a signal handler, where the main loop cannot
-        // be waited on. The save is answered by the library's own thread, so
-        // asking again until it has answered is enough.
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        let limit = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            if let std::task::Poll::Ready(result) =
-                std::future::Future::poll(save.as_mut(), &mut context)
-            {
-                return result;
-            }
-            if std::time::Instant::now() >= limit {
-                anyhow::bail!("The library did not answer in time");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
+    /// A save made by the timer is in the library's queue before the timer
+    /// returns, so a leave that follows it at once is written after it,
+    /// though nothing ever waits for the timer's save.
+    #[test]
+    fn a_queued_save_is_written_before_a_later_one_without_being_waited_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(dir.path().to_owned());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let timed = queue(job(&store, &log, 1));
+        let leaving = queue(job(&store, &log, 2));
+        await_library(&store, Some(leaving)).unwrap();
+        assert_eq!(*log.lock().unwrap(), [1, 2]);
+        drop(timed);
+        // With no save of its own, a leave still waits for what was queued.
+        let _unwaited = queue(job(&store, &log, 3));
+        await_library(&store, None).unwrap();
+        assert_eq!(*log.lock().unwrap(), [1, 2, 3]);
     }
 
-    fn persist(&self) {
-        let Some(position) = self.position() else {
-            return;
-        };
-        let id = self.model.id.clone();
-        let store = self.store.clone();
-        let window = self.window.clone();
-        glib::spawn_future_local(async move {
-            if let Err(e) = store.save_position(id, position).await
-                && let Some(w) = window.upgrade()
-            {
-                position_error(&w, &e);
-            }
-        });
+    /// The fault this replaced: a save that is made and only later asked
+    /// lands after one made later. The test above would see it.
+    #[test]
+    fn a_save_that_is_not_queued_at_once_can_land_late() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(dir.path().to_owned());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut late = job(&store, &log, 1);
+        let leaving = queue(job(&store, &log, 2));
+        await_library(&store, Some(leaving)).unwrap();
+        assert_eq!(*log.lock().unwrap(), [2]);
+        let _ = poll_once(late.as_mut());
+        await_library(&store, None).unwrap();
+        assert_eq!(*log.lock().unwrap(), [2, 1]);
     }
 }

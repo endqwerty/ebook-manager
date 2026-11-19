@@ -645,7 +645,41 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   only grows, and the page counts its moves within a load. A move's order is
   that pair, load number and then count, and the shell takes a place only if
   its order is after the held one's. So a late answer never replaces a place
-  reported by a later load. `reader/place.rs` is this rule and nothing else.
+  reported by a later load.
+- **Every answer carries its own load's record.** The view keeps the number,
+  chapter and text length of every load that became ready. A turn's answer
+  is given the record of the load that was turned, and a place message the
+  record of the load it names. Nothing is decided by which load is current,
+  by the one before it, or by a chapter's number, so an answer that arrives
+  any number of chapters late is still taken for its own chapter, and a
+  chapter loaded twice is two loads.
+- **What is shown belongs to the load being shown.** The shell shows a place
+  only when its load is the one asked for last and that load is ready, and
+  never an older report of that load over a newer one. A turn at a chapter's
+  edge moves to the next chapter only if the load it was made in is still
+  the one showing. A chapter that fails shows nothing, so nothing turns
+  from it, and the place held stays.
+- **One function keeps the place.** `reader/place.rs` is a function over an
+  explicit state, with no WebKit and no GTK in it. It is told that a load
+  was asked for, that one is ready, what a page reported, that the chapter
+  showing failed, that the save timer fired, and that the reader is leaving. It answers what to do: show
+  a place, start or stop the timer, submit a place, wait for the library,
+  end the page. `reader.rs` does those things in the order given and
+  decides nothing about places itself. Saves are submitted in the order
+  their places were made, by one function that both the timer and leaving
+  use. The store queues a job when its future is first asked, so that
+  function asks once before it returns: a timed save is in the library's
+  queue ahead of any leave that follows it.
+
+  This was chosen over fixing cases in the window's code after three rounds
+  of review each found another order of events that broke it. What would
+  show it wrong: a sequence of inputs after which the place held is not the
+  most recently made move that has arrived, something is shown for a load
+  that is not showing, or a save is submitted out of order or after
+  leaving. A seeded test runs 20,000 random sequences against a reference
+  that remembers every report, with answers from any earlier load arriving
+  late and in any order, and a second test requires it to catch four known
+  faults put back one at a time.
 - **A reflow is not a move.** A new window size or a setting changes the
   page numbers shown under the page. Its report says it is not a move and
   repeats the last move's offset and order, and the shell changes only what
