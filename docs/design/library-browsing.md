@@ -522,12 +522,23 @@ flowchart LR
   GTK's column headers take no keyboard focus, so the table gives it to
   them: Up from the first row reaches a header, the arrows move along them,
   Return and Control+Return sort, and the Menu key opens the header's menu.
+  Show, hide, move and width commands update the live columns while GTK
+  keeps the header and its menu alive. Width commands step by 24 within
+  the same saved-width limits as a drag.
   A list row's separator is the app's own line in the platform's border
   colour, because the platform's runs under the cover. The view switch uses
   `view-dual-symbolic` for the table until an icon is drawn for it.
+  Bindings set in type use a flat colour in List and Table because the type
+  would be unreadable at those cover sizes.
+  The three cover sizes are in the main menu because the GNOME view switch
+  is a row of toggle buttons with no menu of its own.
+  List rows omit the trailing Send to device and Remove swipe actions
+  because this shell has no touch target yet.
 - **A sort the reader asks for** starts at the book they were on, if one is
-  selected or focused, and otherwise at the top. Keeping the first book on
-  screen is for changes the reader did not ask for.
+  selected or focused, and otherwise at the top. Switching layouts keeps
+  selection and book focus and places the previous top book in the first
+  visible row. In the grid that row can also contain earlier books. The
+  scroll position stays within the end of the catalogue.
 - **Shelf** is a custom scrollable widget. It asks for the `ShelfStrip` once
   per view, packs rows for its width (a new row when the next spine does not
   fit, and at each group start), and stores each row's first rank and y
@@ -552,7 +563,8 @@ flowchart LR
   Edit window gains sort title, author sort names, series and position.
 - **Remembered choices**: the view, the sort for each view, the cover size and
   the table's columns, order and widths are saved in `settings.json` in the
-  app's config folder.
+  app's config folder. Each view's sort and each column are read
+  independently. The file is written only when the choices change.
 - A text scale of 1.5 or more shows List in place of Grid or Shelf without
   changing the saved choice.
 
@@ -613,8 +625,9 @@ driver's own look takes, which was up to 0.07 seconds. Locally the median is
 0.26 seconds, with a range of 0.25 to 0.30, so the limit is about eight times
 the measurement. A launch is bounded by GTK starting, 0.1 seconds, and by the
 catalogue putting the books in order on one thread, 0.06 seconds. The rest
-builds and draws the first rows. The check then searches, jumps to the last
-row, and imports 400 generated EPUBs. During that import the count on screen
+builds and draws the first rows. The check switches between each pair of
+views after scrolling, searches, jumps to the last row, and imports 400
+generated EPUBs. During that import the count on screen
 must change no more often than once a second, and the books on screen and the
 selected one must be the same after three refreshes.
 

@@ -18,14 +18,14 @@ The app keeps its library in `$XDG_DATA_HOME/ebook-manager` (by default `~/.loca
 | `thumbs.rs` | The thumbnail cache in `cache/thumbs`, its loader thread and the survey thread. | A file is shown only if it is the kind of PNG the app writes, with a header, image data and an end and no other chunk, and its pixels hash to the digest it is named by, and what is shown is made from those pixels. A missing or wrong one is made again from any book that has that cover, and only a thumbnail whose digest matches the record is installed. |
 | `views/` | `grid.rs`, `list.rs` and `table.rs`, and in `mod.rs` the cell every view's rows are built on. | One view is on screen at a time, built over the same model. The table never sorts rows: its headers report which was activated and the window changes the model's sort. |
 | `window/controls.rs` | The view switch, the Sort menu, the sort editor, cover sizes and the table's column actions. | Each control is an action whose state is the remembered choice. |
-| `settings.rs` | The remembered choices in `settings.json` under the config folder. | A file that is missing, damaged or partly unknown gives defaults for what cannot be read. |
+| `settings.rs` | The remembered choices in `settings.json` under the config folder. | A missing or damaged file gives defaults. Each view's sort falls back independently and each unknown column is skipped. Saving changed choices can discard unknown top-level fields. Closing with unchanged choices leaves the file intact. |
 | `edit.rs`, `imports.rs`, `reader.rs` | The Edit window, the import report and the reader. | |
 
 The serif roles use the system's serif family. No serif is bundled yet.
 
 ## Exercise the desktop
 
-From the repository root containing the workspace Cargo.toml, build and run the smoke driver in a private graphical session. It requires Xvfb, Openbox, D-Bus, xdotool, ImageMagick, Tesseract with English data, Python with PyGObject, and AT-SPI 2. The driver creates a temporary home directory, generates all its books, drives the window and the reader from the keyboard, restarts the process and compares the exported bytes. It then imports a gallery of generated covers, shows it as a list and a table, sorts by every field and by three keys through the sort editor and the table's headers, hides and moves columns, changes the cover size, and checks that all of it is as left after a restart. It checks what is drawn in light, dark and More contrast appearance. Its D-Bus session starts no services and it clears the desktop's identity variables, so the host's portals and file-system daemons never start inside it. Those would crash when the private bus closes. Its two arguments are the desktop binary and a directory for screenshots.
+From the repository root containing the workspace Cargo.toml, build and run the smoke driver in a private graphical session. It requires Xvfb, Openbox, D-Bus, xdotool, ImageMagick, Tesseract with English data, Python with PyGObject, and AT-SPI 2. The driver creates a temporary home directory, generates all its books, drives the window and the reader from the keyboard, restarts the process and compares the exported bytes. It then imports a gallery of generated covers, shows it as a list and a table, sorts by every field and by three keys through the sort editor and the table's headers, hides, moves and resizes columns, changes the cover size, and checks that all of it is as left after a restart. It checks what is drawn in light, dark and More contrast appearance. Its D-Bus session starts no services and it clears the desktop's identity variables, so the host's portals and file-system daemons never start inside it. Those would crash when the private bus closes. Its two arguments are the desktop binary and a directory for screenshots. Both drivers check app stderr across every start. The sole exception is GDK's duplicate frame timing warning on X11, also reproduced on `main` by resizing the reader with its chapter drop-down open.
 
 ```sh
 cargo build --release --workspace --bins
@@ -33,7 +33,7 @@ python3 apps/desktop/tests/smoke.py \
   target/release/ebook-manager /tmp/ebook-desktop-smoke
 ```
 
-The scale check starts the app against 100,000 generated books. It measures the time to the first readable titles over five starts, searches, jumps to the last row, and imports 400 generated EPUBs while checking that the list refreshes at most once a second and keeps its place.
+The scale check starts the app against 100,000 generated books. It measures the time to the first readable titles over five starts, checks the scroll position when switching between views, searches, jumps to the last row, and imports 400 generated EPUBs while checking that the list refreshes at most once a second and keeps its place.
 
 ```sh
 cargo build --release -p ebook-library --features fixture --bin fixture
