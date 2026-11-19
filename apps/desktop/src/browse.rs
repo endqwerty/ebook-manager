@@ -567,7 +567,14 @@ impl BookListModel {
                     self.changed(false);
                 }
                 Effect::Empty => {
-                    let before = self.imp().state.borrow_mut().clear();
+                    // With an error shown there are no books, so there is
+                    // no selection either: a command must not reach a book
+                    // the reader can no longer see.
+                    let before = {
+                        let mut state = self.imp().state.borrow_mut();
+                        state.selected.clear();
+                        state.clear()
+                    };
                     if before > 0 {
                         self.items_changed(0, before, 0);
                     }

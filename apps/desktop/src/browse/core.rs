@@ -457,6 +457,13 @@ impl Core {
                     self.open(background, effects);
                     return;
                 }
+                // The view could not be read between opening and placing,
+                // so its books cannot be shown. That is an error to show,
+                // with Try Again, and not a view to publish.
+                if matches!(ranks, Err(Why::Unreadable)) {
+                    self.fail("The library could not be read.".into(), effects);
+                    return;
+                }
                 let phase = std::mem::replace(
                     &mut self.phase,
                     Phase::Error {
@@ -937,6 +944,32 @@ mod tests {
             core.step(Event::Want(5), &here)[..],
             [Effect::Gone]
         ));
+    }
+
+    #[test]
+    fn a_view_that_cannot_be_read_when_placed_is_an_error_and_not_shown() {
+        let folder = tempfile::tempdir().unwrap();
+        let app = folder.path().join("app");
+        fixture::generate(&app, BOOKS).unwrap();
+        let library = ebook_library::Library::open(&app).unwrap();
+        let view = library
+            .browse_reader()
+            .unwrap()
+            .open(&Default::default(), &Cancel::default())
+            .unwrap();
+        let (mut core, _) = Core::new(Query::default());
+        let here = || Anchors::default();
+        core.step(Event::Reply(Reply::Opened { serial: 1, view }), &here);
+        let effects = core.step(
+            Event::Reply(Reply::NotLocated {
+                tag: 1,
+                why: Why::Unreadable,
+            }),
+            &here,
+        );
+        assert!(matches!(core.phase, Phase::Error { .. }));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Empty)));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Swap { .. })));
     }
 
     #[test]
