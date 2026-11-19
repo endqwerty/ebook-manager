@@ -116,11 +116,19 @@ pub enum Event {
         chapter: u32,
         length: u32,
     },
+    /// Where the page is. `moved` is false for a reflow, which changes the
+    /// page numbers and not the place: its offset is the one the last move
+    /// reported. `order` is the load's number and then the move's count in
+    /// that load, so it grows with every move the view has made, across
+    /// chapters. A place can arrive for a chapter that is no longer the one
+    /// showing, when the page answered after the next chapter was asked for.
     Place {
         chapter: u32,
         offset: u32,
         page: u32,
         pages: u32,
+        moved: bool,
+        order: (u32, u32),
     },
     /// A link to a place in the book was chosen.
     Jump {
@@ -149,6 +157,10 @@ struct Inner {
     token: String,
     config: Config,
     load: RefCell<Option<Load>>,
+    /// The chapter that was showing before the one loading now: its load's
+    /// number, its chapter and its length. A move it made can still be
+    /// answered after the next chapter was asked for.
+    earlier: Cell<Option<(u32, u32, u32)>>,
     counter: Cell<u32>,
     /// The one address `decide-policy` will let navigate, until it does.
     allowed: RefCell<Option<String>>,
@@ -405,6 +417,7 @@ impl View {
             token,
             config,
             load: RefCell::new(None),
+            earlier: Cell::new(None),
             counter: Cell::new(0),
             allowed: RefCell::new(None),
             style: RefCell::new(Vec::new()),
@@ -510,6 +523,11 @@ impl View {
     pub fn load(&self, chapter: u32, landing: Landing) {
         let number = self.0.counter.get().wrapping_add(1);
         self.0.counter.set(number);
+        if let Some(showing) = self.0.load.borrow().as_ref().filter(|l| l.ready) {
+            self.0
+                .earlier
+                .set(Some((showing.number, showing.chapter, showing.length)));
+        }
         self.0.load.replace(Some(Load {
             number,
             chapter,
@@ -528,36 +546,35 @@ impl View {
     /// with the new place before `done` is called: the page's answer to the
     /// turn carries it, so the two cannot arrive apart.
     pub fn turn(&self, by: i32, animate: bool, done: impl FnOnce(bool) + 'static) {
-        let Some(number) = self
-            .0
-            .load
-            .borrow()
-            .as_ref()
-            .filter(|l| l.ready)
-            .map(|l| l.number)
-        else {
+        if !self.0.load.borrow().as_ref().is_some_and(|l| l.ready) {
             return done(false);
-        };
+        }
         let arguments = glib::VariantDict::new(None);
         arguments.insert("by", by);
         // A boolean is not accepted as an argument, so it goes as a number.
         arguments.insert("smooth", i32::from(animate));
+        let number = self.0.counter.get();
         let weak = Rc::downgrade(&self.0);
         self.call(
             "return __reader.turn(by, smooth === 1)",
             arguments,
             move |value| {
                 // The answer is "" at a chapter's edge, or the new place as
-                // "offset,page,pages". It is checked like any message.
+                // "offset,page,pages,move". It is checked like any message.
                 let place = value.filter(|v| v.is_string()).and_then(|v| {
                     let text = v.to_str();
                     let mut parts = text.split(',').map(|p| p.parse::<u32>().ok());
-                    let place = (parts.next()??, parts.next()??, parts.next()??);
+                    let place = (
+                        parts.next()??,
+                        parts.next()??,
+                        parts.next()??,
+                        parts.next()??,
+                    );
                     parts.next().is_none().then_some(place)
                 });
                 let moved = match (place, weak.upgrade()) {
-                    (Some((offset, page, pages)), Some(inner)) => {
-                        View(inner).place(number, offset, page, pages)
+                    (Some((offset, page, pages, count)), Some(inner)) => {
+                        View(inner).place(number, offset, page, pages, count, true)
                     }
                     _ => false,
                 };
@@ -566,26 +583,45 @@ impl View {
         );
     }
 
-    /// Tell the shell a place the page reported for load `number`, if it is
-    /// the chapter showing and the place is inside it.
-    fn place(&self, number: u32, offset: u32, page: u32, pages: u32) -> bool {
-        let chapter = match &*self.0.load.borrow() {
-            Some(load)
-                if load.ready
-                    && load.number == number
-                    && pages > 0
-                    && page < pages
-                    && offset <= load.length =>
-            {
-                load.chapter
-            }
-            _ => return false,
+    /// Tell the shell a place the page reported for load `number`. The place
+    /// is taken for the chapter that load showed, whether that chapter is
+    /// still showing or the next one has been asked for since, and only if
+    /// it is inside that chapter.
+    fn place(
+        &self,
+        number: u32,
+        offset: u32,
+        page: u32,
+        pages: u32,
+        count: u32,
+        moved: bool,
+    ) -> bool {
+        let showing = self
+            .0
+            .load
+            .borrow()
+            .as_ref()
+            .filter(|l| l.ready && l.number == number)
+            .map(|l| (l.chapter, l.length));
+        let earlier = self
+            .0
+            .earlier
+            .get()
+            .filter(|(n, _, _)| *n == number)
+            .map(|(_, chapter, length)| (chapter, length));
+        let Some((chapter, length)) = showing.or(earlier) else {
+            return false;
         };
+        if pages == 0 || page >= pages || offset > length {
+            return false;
+        }
         (self.0.on_event)(Event::Place {
             chapter,
             offset,
             page,
             pages,
+            moved,
+            order: (number, count),
         });
         true
     }
@@ -686,16 +722,33 @@ impl View {
             let s = v.to_str().to_string();
             (s.len() <= MAX_ADDRESS).then_some(s)
         };
-        let (chapter, current, ready, length) = match &*self.0.load.borrow() {
-            Some(load) => (load.chapter, load.number, load.ready, load.length),
+        let (chapter, current, ready) = match &*self.0.load.borrow() {
+            Some(load) => (load.chapter, load.number, load.ready),
             None => return,
         };
-        if number("load") != Some(current) {
-            return;
-        }
         let Some(kind) = text("kind") else {
             return;
         };
+        // A place is taken for the load that reported it, this one or the
+        // one before. Everything else is for the chapter showing now.
+        if kind == "place" {
+            let moved = value
+                .object_get_property("moved")
+                .is_some_and(|m| m.is_boolean() && m.to_boolean());
+            if let (Some(load), Some(offset), Some(page), Some(pages), Some(count)) = (
+                number("load"),
+                number("offset"),
+                number("page"),
+                number("pages"),
+                number("move"),
+            ) {
+                self.place(load, offset, page, pages, count, moved);
+            }
+            return;
+        }
+        if number("load") != Some(current) {
+            return;
+        }
         match kind.as_str() {
             "ready" if !ready => {
                 disarm(&self.0.watchdog);
@@ -737,15 +790,6 @@ impl View {
                     Landing::End => "__reader.assign(properties); return __reader.go({end: true})",
                 };
                 self.call(body, arguments, |_| {});
-            }
-            "place" if ready => {
-                let (Some(offset), Some(page), Some(pages)) =
-                    (number("offset"), number("page"), number("pages"))
-                else {
-                    return;
-                };
-                let _ = (chapter, length);
-                self.place(current, offset, page, pages);
             }
             "jump" if ready => {
                 if let Some((chapter, anchor)) = text("href").as_deref().and_then(parse_jump) {

@@ -144,14 +144,21 @@
 	// The offset reported is always the held place's: the one a turn or a
 	// jump chose. A reflow changes the page count and the page number, and
 	// not the place to save, so a resize saves nothing new.
+	//
+	// `moves` counts the moves made in this chapter. With the load's number
+	// it orders every place the shell is told, so a late answer can never
+	// replace a later place. A report that is not a move repeats the count
+	// of the move it follows.
+	let moves = 0;
 	const settle_place = (chosen) => {
 		if (chosen) {
+			moves += 1;
 			const offset = place();
 			const last = page() === pages() - 1;
 			const edge = !textless ? null : last && chosen === "end" ? "end" : page() === 0 ? "start" : last ? "end" : null;
 			held = { offset, edge, textless, page: page(), pages: pages() };
 		}
-		return { offset: held.offset, page: page(), pages: pages() };
+		return { offset: held.offset, page: page(), pages: pages(), move: moves, moved: !!chosen };
 	};
 	const report = (chosen) => {
 		if (!ready || !landed) return;
@@ -209,7 +216,7 @@
 			if (!ready || !landed || next < 0 || next >= pages()) return "";
 			show(next, smooth);
 			const now = settle_place(true);
-			return [now.offset, now.page, now.pages].join(",");
+			return [now.offset, now.page, now.pages, now.move].join(",");
 		},
 		// Set custom properties with no reflow handling, before a landing.
 		assign(properties) {

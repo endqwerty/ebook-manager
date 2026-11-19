@@ -677,10 +677,13 @@ def run(binary, evidence, root):
             )
             click("Back to library")
             time.sleep(0.3)
-        # A turn made in the instant before leaving is the place saved.
+        # A turn that has reached the reader is the place saved on leaving,
+        # with no wait for the save's own timer. The line under the page
+        # shows the turn once the reader has it.
         click("Read")
         find("Page 4 of", contains=True)
         xd("key", "Right")
+        find("Page 5 of", contains=True)
         click("Back to library")
         time.sleep(0.5)
         click("Read")
@@ -703,9 +706,16 @@ def run(binary, evidence, root):
         find("Page 6 of", contains=True)
         # A window can also be destroyed without being asked. Then the app
         # ends, and the turn that had reached the reader is where it reopens.
+        pages = web_processes(proc.pid)
+        assert pages, "no web process to watch"
         xd("windowclose", library)
         proc.wait(timeout=10)
-        assert not web_processes(proc.pid)
+        # The page's process is looked for by its own number: once the app
+        # has gone it is nobody's descendant.
+        deadline = time.monotonic() + 10
+        while any(Path(f"/proc/{pid}").exists() for pid in pages):
+            assert time.monotonic() < deadline, "a web process outlived the app"
+            time.sleep(0.2)
         proc = subprocess.Popen([binary], env=env)
         find("Mira Vale")
         click("Read")

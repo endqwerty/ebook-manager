@@ -424,23 +424,23 @@ fn the_bridge_accepts_only_its_own_world_and_valid_messages() -> Outcome {
     let load = "Number(new URLSearchParams(location.search).get('l'))";
     send("{kind: 'place', load: 9999, offset: 1, page: 0, pages: 1}")?;
     send(&format!(
-        "{{kind: 'place', load: {load}, offset: -1, page: 0, pages: 1}}"
+        "{{kind: 'place', load: {load}, offset: -1, page: 0, pages: 1, move: 1, moved: true}}"
     ))?;
     send(&format!(
-        "{{kind: 'place', load: {load}, offset: 1.5, page: 0, pages: 1}}"
+        "{{kind: 'place', load: {load}, offset: 1.5, page: 0, pages: 1, move: 1, moved: true}}"
     ))?;
     send(&format!(
-        "{{kind: 'place', load: {load}, offset: 1, page: 5, pages: 2}}"
+        "{{kind: 'place', load: {load}, offset: 1, page: 5, pages: 2, move: 1, moved: true}}"
     ))?;
     send(&format!(
-        "{{kind: 'place', load: {load}, offset: 1e12, page: 0, pages: 1}}"
+        "{{kind: 'place', load: {load}, offset: 1e12, page: 0, pages: 1, move: 1, moved: true}}"
     ))?;
     // Past the end of the chapter's text, which is 14 units long.
     send(&format!(
-        "{{kind: 'place', load: {load}, offset: 15, page: 0, pages: 1}}"
+        "{{kind: 'place', load: {load}, offset: 15, page: 0, pages: 1, move: 1, moved: true}}"
     ))?;
     send(&format!(
-        "{{kind: 'place', load: {load}, offset: '1', page: 0, pages: 1}}"
+        "{{kind: 'place', load: {load}, offset: '1', page: 0, pages: 1, move: 1, moved: true}}"
     ))?;
     send(&format!(
         "{{kind: 'jump', load: {load}, href: 'https://example.org/'}}"
@@ -469,7 +469,7 @@ fn the_bridge_accepts_only_its_own_world_and_valid_messages() -> Outcome {
         stage.events.borrow()
     );
     send(&format!(
-        "{{kind: 'place', load: {load}, offset: 3, page: 0, pages: 1}}"
+        "{{kind: 'place', load: {load}, offset: 3, page: 0, pages: 1, move: 7, moved: true}}"
     ))?;
     send(&format!(
         "{{kind: 'jump', load: {load}, href: '/c/4#a%20b'}}"
@@ -486,7 +486,9 @@ fn the_bridge_accepts_only_its_own_world_and_valid_messages() -> Outcome {
                     chapter: 0,
                     offset: 3,
                     page: 0,
-                    pages: 1
+                    pages: 1,
+                    moved: true,
+                    order: (1, 7),
                 },
                 Event::Jump {
                     chapter: 4,
@@ -1023,6 +1025,52 @@ fn a_style_set_during_a_load_applies() -> Outcome {
     Ok(())
 }
 
+/// A turn made in one chapter and answered after the next was asked for is
+/// still told to the shell, as that chapter's place, before the next
+/// chapter's own place and in an order that says which is newer.
+fn a_turn_answered_after_a_chapter_change_is_still_told() -> Outcome {
+    let source = Rc::new(Chapters {
+        markup: HashMap::from([(0, long_chapter()), (1, "<p>Short.</p>".to_owned())]),
+        ..Chapters::default()
+    });
+    let stage = Stage::new(source, |_| {})?;
+    stage.open(0, Landing::Start)?;
+    stage.events.borrow_mut().clear();
+    // The turn is asked for, and the next chapter in the same breath, so
+    // the turn's answer can only arrive after the load has moved on.
+    stage.view.turn(1, false, |_| {});
+    stage.view.load(1, Landing::Start);
+    stage.wait("the next chapter's place", |e| {
+        matches!(e, Event::Place { chapter: 1, .. })
+    })?;
+    let places: Vec<(u32, u32, bool, (u32, u32))> = stage
+        .events
+        .borrow()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Place {
+                chapter,
+                page,
+                moved,
+                order,
+                ..
+            } => Some((*chapter, *page, *moved, *order)),
+            _ => None,
+        })
+        .collect();
+    let turn = places.iter().find(|p| p.0 == 0);
+    let landing = places.iter().find(|p| p.0 == 1);
+    let (Some(turn), Some(landing)) = (turn, landing) else {
+        return Err(format!("a place is missing: {places:?}").into());
+    };
+    check!(turn.1 == 1 && turn.2, "the turn's place is {turn:?}");
+    check!(
+        landing.2 && landing.3 > turn.3,
+        "the landing {landing:?} is not after the turn {turn:?}"
+    );
+    Ok(())
+}
+
 /// Every move tells the shell its place in the step that reports the move,
 /// and a reflow changes the page and not the place to save.
 fn a_move_carries_its_place_and_a_reflow_does_not_move_it() -> Outcome {
@@ -1089,6 +1137,20 @@ fn a_move_carries_its_place_and_a_reflow_does_not_move_it() -> Outcome {
     check!(
         places.iter().all(|p| p.0 == held),
         "a reflow changed the place to save from {held}: {places:?}"
+    );
+    let reports: Vec<(bool, (u32, u32))> = stage
+        .events
+        .borrow()
+        .iter()
+        .filter_map(|e| match e {
+            Event::Place { moved, order, .. } => Some((*moved, *order)),
+            _ => None,
+        })
+        .collect();
+    check!(reports.len() >= 2, "the reflows reported {reports:?}");
+    check!(
+        reports.iter().all(|r| !r.0 && r.1 == reports[0].1),
+        "a reflow was reported as a move: {reports:?}"
     );
     let last = places.last().copied().unwrap_or((held, page, pages));
     check!(
@@ -1366,6 +1428,10 @@ const TESTS: &[Test] = &[
     (
         "a_move_carries_its_place_and_a_reflow_does_not_move_it",
         a_move_carries_its_place_and_a_reflow_does_not_move_it,
+    ),
+    (
+        "a_turn_answered_after_a_chapter_change_is_still_told",
+        a_turn_answered_after_a_chapter_change_is_still_told,
     ),
     (
         "a_late_error_does_not_fail_a_newer_load",

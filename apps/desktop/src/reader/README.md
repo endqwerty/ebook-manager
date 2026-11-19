@@ -3,7 +3,8 @@
 `view.rs` draws one chapter in a WebKitGTK 6.0 web view and keeps the book's
 content inside it. `reader.js` and `reader.css` are the app's own script and
 style sheet for the page. `progress.rs` works out how far through the book a
-place is. The window, the keys and saving the place are in
+place is. `place.rs` holds the place to save and the one rule for replacing
+it. The window, the keys and saving the place are in
 [`../reader.rs`](../reader.rs). The design is
 [Reading an EPUB in the app](../../../../docs/design/epub-reading.md), and what
 a reader sees is in [the desktop spec](../../../../specs/desktop-mvp.md#read-and-export).
@@ -68,10 +69,14 @@ so [the view tests](../../tests/view.rs) include it directly.
 - **A move and its place arrive together.** A turn that moved has sent
   `Event::Place` before its `done` is called, because the page's answer to
   the turn is the place. A landing and a settled scroll send it as their own
-  message. A reflow sends `Event::Place` with new page numbers and the same
-  offset as before, so a caller that saves the offset saves nothing new on a
-  resize. A caller that keeps the last `Event::Place` therefore always has
-  the place of the last move that reached it, and never needs to ask.
+  message. Each has `moved: true` and an `order`, the load's number and then
+  the move's count in that load, which grows with every move. A place is
+  sent for the chapter the move was made in, even when the next chapter has
+  been asked for since, so a caller must not assume it is for the chapter
+  showing. A reflow sends `Event::Place` with `moved: false`, new page
+  numbers, and the offset and order of the last move. A caller that keeps
+  the moved place with the greatest order always has the place to save, and
+  never needs to ask; `place.rs` does exactly that.
   `Landing::Start` is the first page whatever is on it.
 - **A chapter cannot run for ever.** A load that takes longer than
   `Config::watchdog` (15 seconds) ends the web process. So does each call

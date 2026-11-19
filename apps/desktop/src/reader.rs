@@ -2,6 +2,7 @@
 //! keys, and saving the place. What keeps book content inside the view is in
 //! `reader/view.rs`. See docs/design/epub-reading.md.
 
+mod place;
 mod progress;
 mod view;
 
@@ -226,14 +227,7 @@ fn page_colour() -> [&'static str; 3] {
     }
 }
 
-/// Where the reader is: the chapter showing and the last place it reported.
-#[derive(Clone, Copy)]
-struct Place {
-    chapter: u32,
-    offset: u32,
-    page: u32,
-    pages: u32,
-}
+use place::{Held, Place};
 
 struct Reading {
     book: Arc<ebook_reader::Book>,
@@ -252,9 +246,13 @@ struct Reading {
     loading: Cell<Option<u32>>,
     /// The place showing, for turning. Empty while a chapter loads.
     place: Cell<Option<Place>>,
-    /// The last place a chapter reported, for saving. A chapter that is
-    /// still loading, or fails, does not lose it.
-    confirmed: Cell<Option<Place>>,
+    /// The place to save: the place of the newest move the page has
+    /// reported. A chapter that is still loading, or fails, does not lose
+    /// it, and a reflow does not change it.
+    confirmed: RefCell<Held>,
+    /// A chapter has been asked for and has not yet said it is ready, so a
+    /// place that arrives is an earlier chapter's and is not shown.
+    awaiting: Cell<bool>,
     /// The reader has left: its place is saved and its page is ended.
     gone: Cell<bool>,
     /// The timer that saves the place once turning settles.
@@ -347,7 +345,8 @@ impl Reading {
             status,
             loading: Cell::new(None),
             place: Cell::new(None),
-            confirmed: Cell::new(None),
+            confirmed: RefCell::default(),
+            awaiting: Cell::new(false),
             gone: Cell::new(false),
             pending_save: Cell::new(None),
             colours,
@@ -456,6 +455,7 @@ impl Reading {
 
     fn show(&self, chapter: u32, landing: Landing) {
         self.loading.set(Some(chapter));
+        self.awaiting.set(true);
         self.place.set(None);
         self.previous.set_sensitive(chapter > 0);
         self.next
@@ -476,6 +476,7 @@ impl Reading {
         }
         match event {
             Event::Ready { chapter, length } => {
+                self.awaiting.set(false);
                 if self.loading.get() == Some(chapter) {
                     self.view.widget().grab_focus();
                 }
@@ -496,22 +497,32 @@ impl Reading {
                 offset,
                 page,
                 pages,
+                moved,
+                order,
             } => {
-                let arrived = self.loading.get() == Some(chapter);
-                if !arrived && self.place.get().is_none_or(|p| p.chapter != chapter) {
-                    return;
-                }
-                self.loading.set(None);
                 let place = Place {
                     chapter,
                     offset,
                     page,
                     pages,
                 };
+                // What is saved: the place of the newest move, for the
+                // chapter it was made in, whatever is showing or loading
+                // now. A reflow is not a move, so it saves nothing and
+                // leaves the save's timer alone.
+                let newest = self.confirmed.borrow_mut().take(place, moved, order);
+                if newest {
+                    self.queue_save();
+                }
+                // What is shown: the chapter on screen, once it is ready.
+                let arrived = self.loading.get() == Some(chapter);
+                let showing = self.place.get().is_some_and(|p| p.chapter == chapter);
+                if self.awaiting.get() || !(arrived || showing) {
+                    return;
+                }
+                self.loading.set(None);
                 self.place.set(Some(place));
-                self.confirmed.set(Some(place));
                 self.describe();
-                self.queue_save();
             }
             Event::Jump { chapter, anchor } => {
                 if (chapter as usize) < self.book.chapters().len() {
@@ -684,7 +695,7 @@ impl Reading {
     /// far through the book it is. This is the one function that knows the
     /// record's shape.
     fn position(&self) -> Option<ReadingPosition> {
-        let place = self.confirmed.get()?;
+        let place = self.confirmed.borrow().get()?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()

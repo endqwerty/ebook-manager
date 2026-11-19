@@ -636,10 +636,21 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   in the step that handles the message. The moves are: a turn, whose answer
   is the new place; a chapter landing where it was asked to, at its start,
   an offset, an anchor or its end, which is how a jump from a link or the
-  chapter list arrives; and, in scrolling, a scroll that has settled. A
-  reflow from a new window size or a setting is not a move. It reports new
-  page numbers for the line under the page and the same place to save, so a
-  resize saves nothing new.
+  chapter list arrives; and, in scrolling, a scroll that has settled.
+- **A move's place is taken for the chapter it was made in**, whatever is
+  showing or loading when it arrives. A turn answered after the next chapter
+  was asked for is still that chapter's place, and is what is saved until
+  the next chapter reports its own.
+- **Newer means made later.** Every chapter the view loads has a number that
+  only grows, and the page counts its moves within a load. A move's order is
+  that pair, load number and then count, and the shell takes a place only if
+  its order is after the held one's. So a late answer never replaces a place
+  reported by a later load. `reader/place.rs` is this rule and nothing else.
+- **A reflow is not a move.** A new window size or a setting changes the
+  page numbers shown under the page. Its report says it is not a move and
+  repeats the last move's offset and order, and the shell changes only what
+  it shows: not the place held, not the fraction read, not the save's timer.
+  So a resize writes nothing to the library.
 - **Leaving** is one thing, whoever asks: save the place the shell holds,
   wait up to two seconds for the library to have it, and end the page's
   process. The reader's own close does it, and so do its window going off
