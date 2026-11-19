@@ -405,7 +405,15 @@ fn memory_and_time_limits_stop_the_helper() {
         .open(&heavy)
         .and_then(|b| b.read_chapter(0))
         .unwrap_err();
-    assert!(matches!(err, ReaderError::HelperFailed { .. }), "{err:?}");
+    // The helper exits on its own rather than aborting, so the desktop's
+    // crash reporter does not see a crash for a book that is merely too big.
+    match &err {
+        ReaderError::HelperFailed { detail } => {
+            assert!(detail.starts_with("exit status: 4;"), "{detail}");
+            assert!(detail.contains("out of memory"), "{detail}");
+        }
+        other => panic!("{other:?}"),
+    }
     assert!(starved.inspect(&path).is_ok());
 
     // A stand-in sandbox that answers the probe and then never replies.

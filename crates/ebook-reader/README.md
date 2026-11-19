@@ -60,6 +60,9 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   reaches the caller. `Link::External` is text; ask the user before opening it.
 - **Stateless reads.** `Book` holds no process and no open file. A helper that
   crashes or times out costs one call; the next call starts a new helper.
+  Running out of memory is not a crash: the helper exits with status 4 and
+  `helper: out of memory` on stderr, which the call returns as
+  `ReaderError::HelperFailed`.
 - **Stable input.** The file must not change while a `Book` is in use. A changed
   size or modification time gives `ReaderError::SourceChanged`.
 - **Errors are sentences.** `ReaderError`'s `Display` text can be shown to a

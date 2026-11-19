@@ -198,6 +198,25 @@ type, shadows and motion. Its three companion pages cover
 for your screen before designing or building it in any shell. If a screen needs to break one of its rules, change the page in the same
 pull request and say why.
 
+## Tests on the shared desktop: no crash reports
+
+Agents run builds and tests on the same Linux desktop that Daniel uses. The
+desktop records every process that a signal ends (an abort, a segfault, a kill
+by a resource limit) and shows a crash notice. A test that makes such a process
+die on purpose sends him one notice per run, from every agent that runs it.
+
+- A process that a test makes fail on purpose must end with an exit code and a
+  message, not a signal. The reader helper exits with status 4 when it runs out
+  of memory ([helper.rs](crates/ebook-reader/src/bin/helper.rs)). Design any new
+  limit the same way: catch the failure, or ignore the signal (for example
+  `SIGXFSZ`, so a write past the file-size limit returns an error), and exit.
+- When a change adds or alters a failure test, count `coredumpctl list
+  --no-pager -q` lines before and after one run. A new record is a bug in the
+  test or the code, so fix it before pushing.
+- An exploratory probe that may crash, such as a native call from a script or
+  a headless browser, is fine once when the crash is what you're studying.
+  Don't put it in a loop or a test, and name the crash in your reply.
+
 ## Tests and CI: Mainworthy
 
 Every push to `main` and every pull request runs [check.yml](.github/workflows/check.yml)
