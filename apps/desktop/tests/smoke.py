@@ -179,6 +179,9 @@ def walk(node):
 
 
 def find(name="", role="", *, contains=False, parent=None):
+    if role == "button":
+        # AT-SPI renamed "push button" to "button" without changing its role.
+        role = Atspi.role_get_name(Atspi.Role.PUSH_BUTTON)
     deadline = time.monotonic() + 15
     last_error = None
     while time.monotonic() < deadline:
@@ -203,6 +206,11 @@ def find(name="", role="", *, contains=False, parent=None):
 def click(name, parent=None):
     obj = find(name, "button", parent=parent)
     assert obj.do_action(0), name
+
+
+def accessible_text(node):
+    # Older GTK clamps negative end offsets to zero for editable fields.
+    return Atspi.Text.get_text(node, 0, Atspi.Text.get_character_count(node))
 
 
 def xd(*args):
@@ -513,13 +521,15 @@ def run(binary, evidence, root):
         time.sleep(0.5)
         field = find("Search library", "entry")
         assert field.get_state_set().contains(Atspi.StateType.SHOWING)
-        assert Atspi.Text.get_text(field, 0, -1) == "é", Atspi.Text.get_text(field, 0, -1)
+        text = accessible_text(field)
+        assert text == "é", text
         key("Escape")
         # Backspace cancels a dead key that is waiting for its letter.
         xd("key", "--delay", "100", "dead_acute", "BackSpace", "e")
         time.sleep(0.5)
         field = find("Search library", "entry")
-        assert Atspi.Text.get_text(field, 0, -1) == "e", Atspi.Text.get_text(field, 0, -1)
+        text = accessible_text(field)
+        assert text == "e", text
         key("Escape")
         select_book("mira")
         find("The Lantern Atlas")
@@ -558,7 +568,7 @@ def run(binary, evidence, root):
             ("Position in series", "1.5"),
         ):
             field = find(name, "text", parent=edit)
-            assert Atspi.Text.get_text(field, 0, -1) == value, name
+            assert accessible_text(field) == value, name
         key("Escape")
         gone("Edit book")
         print("PASS search by typing, edit and filing from the keyboard", flush=True)
@@ -579,7 +589,7 @@ def run(binary, evidence, root):
         click("Next")
         find("Chapter 2 of 2", contains=True)
         view = find("", "text")
-        assert "Northern shore" in Atspi.Text.get_text(view, 0, -1)
+        assert "Northern shore" in accessible_text(view)
         capture("The Lantern Atlas · Revised", evidence / "reader.png")
         wid = subprocess.check_output(
             [
@@ -608,7 +618,7 @@ def run(binary, evidence, root):
             select_book("lantern")
             key("Return")
             find("Chapter 2 of 2", contains=True)
-            assert "Northern shore" in Atspi.Text.get_text(find("", "text"), 0, -1)
+            assert "Northern shore" in accessible_text(find("", "text"))
             capture("The Lantern Atlas · Revised", evidence / "resumed.png")
             after = markers(evidence / "resumed.png")
             assert after and abs(after[0] - before[0]) <= 1, (before, after)
