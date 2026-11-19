@@ -25,3 +25,7 @@ fixture = []
 [[bin]]
 name = "scale"
 required-features = ["fixture"]
+
+[[bin]]
+name = "fixture"
+required-features = ["fixture"]
