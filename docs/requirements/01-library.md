@@ -71,6 +71,11 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   shows a count or snippet from a book or note the user may not see.
 - `LIB-26` (expected) A home screen with Continue reading, Recently added and the
   user's pinned collections.
+- `LIB-29` (expected) A shelf view that shows books by their spines, standing in
+  rows. Every spine is one height, its thickness follows the book's length, its
+  colour comes from the cover, and a selected book tips out from the top. It is
+  drawn as [the shelf design](../design/interface-views.md#shelf) says and stays
+  smooth at 100,000 books.
 - `LIB-27` (core) Bulk edit with a preview of every change and undo.
 - `LIB-28` (core) Every action is reachable from the keyboard. This is a common
   complaint about existing tools.
@@ -183,6 +188,8 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   they are pinned; reading lists with unmatched entries and remap rules.
 - Tag tree. Custom field definitions and values.
 - Per-library settings. View settings per collection.
+- Per book, for the shelf view: a spine colour taken from the cover at import, and
+  the book's length in words where it is known.
 - Import log per file, the review queue, duplicate candidates and "not a duplicate"
   decisions.
 - A change journal, backups made, and the versions of the database and sidecar
