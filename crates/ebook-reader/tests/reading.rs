@@ -4,7 +4,9 @@
 mod common;
 
 use common::*;
-use ebook_reader::{BlockKind, ChapterWarning, Identifier, Link, Position, Target};
+use ebook_reader::{
+    BlockKind, ChapterWarning, Identifier, Link, Position, SeriesMembership, Target,
+};
 
 fn texts(chapter: &ebook_reader::Chapter) -> Vec<String> {
     chapter.blocks.iter().map(|b| b.text()).collect()
@@ -494,4 +496,107 @@ fn pictures_in_the_reading_order_are_placeholders() {
         book.read_chapter(2),
         Err(ebook_reader::ReaderError::InvalidBook { .. })
     ));
+}
+
+fn series(name: &str, position: Option<&str>) -> SeriesMembership {
+    SeriesMembership {
+        name: name.into(),
+        position: position.map(Into::into),
+    }
+}
+
+/// M5: EPUB 3 series collections, in package order, with their positions.
+/// Collections of another type are not series.
+#[test]
+fn epub3_series_come_in_order_with_positions() {
+    let bytes = package(Parts {
+        metadata: r##"
+<meta property="belongs-to-collection" id="s1">The Tide Cycle</meta>
+<meta refines="#s1" property="collection-type">series</meta>
+<meta refines="#s1" property="group-position">2.5</meta>
+<meta property="belongs-to-collection" id="set">Boxed Edition</meta>
+<meta refines="#set" property="collection-type">set</meta>
+<meta property="belongs-to-collection" id="s2">Harbour  Stories</meta>
+<meta refines="#s2" property="collection-type">series</meta>
+<meta property="belongs-to-collection" id="s3">Lamps</meta>
+<meta refines="#s3" property="collection-type">series</meta>
+<meta refines="#s3" property="group-position">TPB1</meta>"##,
+        chapters: &["<p>x</p>"],
+        ..Parts::default()
+    });
+    let dir = Scratch::new();
+    let m = reader().inspect(&dir.file("b.epub", &bytes)).unwrap();
+    assert_eq!(
+        m.series,
+        [
+            series("The Tide Cycle", Some("2.5")),
+            series("Harbour Stories", None),
+            series("Lamps", Some("TPB1")),
+        ]
+    );
+}
+
+/// M5: the EPUB 2 series names, with a whole-number index written as a
+/// decimal shown as the whole number.
+#[test]
+fn epub2_series_is_read_from_its_meta_names() {
+    let dir = Scratch::new();
+    let read = |index: &str| {
+        let metadata = format!(
+            r#"<meta name="calibre:series" content="Old Roads"/><meta name="calibre:series_index" content="{index}"/>"#
+        );
+        let bytes = package(Parts {
+            version: "2.0",
+            metadata: &metadata,
+            chapters: &["<p>x</p>"],
+            ..Parts::default()
+        });
+        reader()
+            .inspect(&dir.file("b.epub", &bytes))
+            .unwrap()
+            .series
+    };
+    assert_eq!(read("3.0"), [series("Old Roads", Some("3"))]);
+    assert_eq!(read("1.5"), [series("Old Roads", Some("1.5"))]);
+    assert_eq!(read(""), [series("Old Roads", None)]);
+    assert!(reader()
+        .inspect(&dir.file("none.epub", &epub2()))
+        .unwrap()
+        .series
+        .is_empty());
+}
+
+/// M6: the publication date as written, and the page direction.
+#[test]
+fn publication_date_and_page_direction_are_returned() {
+    let dir = Scratch::new();
+    let epub2_dates = package(Parts {
+        version: "2.0",
+        metadata: r#"<dc:date opf:event="modification">2020-01-01</dc:date><dc:date opf:event="publication">1931-05</dc:date>"#,
+        chapters: &["<p>x</p>"],
+        ..Parts::default()
+    });
+    let m = reader().inspect(&dir.file("a.epub", &epub2_dates)).unwrap();
+    assert_eq!(m.published.as_deref(), Some("1931-05"));
+    assert!(!m.right_to_left);
+
+    let rtl = package(Parts {
+        metadata: "<dc:date> 2019-04-02 </dc:date>",
+        spine_attrs: r#" page-progression-direction="rtl""#,
+        chapters: &["<p>x</p>"],
+        ..Parts::default()
+    });
+    let m = reader().inspect(&dir.file("b.epub", &rtl)).unwrap();
+    assert_eq!(m.published.as_deref(), Some("2019-04-02"));
+    assert!(m.right_to_left);
+    assert!(
+        reader()
+            .open(&dir.file("c.epub", &rtl))
+            .unwrap()
+            .metadata()
+            .right_to_left
+    );
+
+    let undated = reader().inspect(&dir.file("d.epub", &epub3())).unwrap();
+    assert_eq!(undated.published, None);
 }

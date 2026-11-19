@@ -63,6 +63,22 @@ pub struct Metadata {
     /// The book declares encrypted content other than obfuscated fonts.
     /// [`crate::Reader::open`] refuses such a book.
     pub protected: bool,
+    /// The series the book declares itself part of, in package order. The
+    /// first is the primary series.
+    pub series: Vec<SeriesMembership>,
+    /// The publication date exactly as the file writes it, for example
+    /// `"2019"` or `"2019-04-02"`. Not checked to be a date.
+    pub published: Option<String>,
+    /// The book's pages turn from right to left.
+    pub right_to_left: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeriesMembership {
+    pub name: String,
+    /// The book's place in the series as text, such as `"2"`, `"1.5"` or
+    /// `"TPB1"`. `None` when the book gives none.
+    pub position: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

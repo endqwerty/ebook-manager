@@ -19,5 +19,5 @@ pub use error::{ReaderError, Unsupported};
 pub use host::{Book, Reader, ReaderConfig, HELPER_ENV, HELPER_NAME};
 pub use model::{
     Author, Block, BlockKind, Chapter, ChapterInfo, ChapterWarning, Identifier, Limits, Link,
-    Metadata, ParsePositionError, Position, Span, Target, TocEntry,
+    Metadata, ParsePositionError, Position, SeriesMembership, Span, Target, TocEntry,
 };

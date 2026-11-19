@@ -537,6 +537,15 @@ fn scrub_metadata(m: &mut Metadata) {
         }
     }
     m.languages.iter_mut().for_each(scrub);
+    for s in &mut m.series {
+        scrub(&mut s.name);
+        if let Some(p) = &mut s.position {
+            scrub(p);
+        }
+    }
+    if let Some(p) = &mut m.published {
+        scrub(p);
+    }
     if let Some(v) = &mut m.epub_version {
         scrub(v);
     }

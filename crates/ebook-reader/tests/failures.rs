@@ -647,7 +647,7 @@ fn inconsistent_replies_are_not_passed_on() {
             ..config()
         }
     };
-    let meta = r#"{"title":null,"authors":[],"identifiers":[],"languages":[],"epub_version":null,"protected":false}"#;
+    let meta = r#"{"title":null,"authors":[],"identifiers":[],"languages":[],"epub_version":null,"protected":false,"series":[],"published":null,"right_to_left":false}"#;
 
     let empty = fake(
         "empty",

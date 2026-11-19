@@ -64,6 +64,19 @@ and media-overlay books, and every platform other than native Linux packages.
   reported as protected. Its metadata is still returned so it can be imported
   and shown as unreadable.
 
+- **M5** Series come from EPUB 3 `belongs-to-collection` entries whose
+  `collection-type` is `series`, in package order, each with its
+  `group-position` as text when given. Collections of another type are left
+  out. An EPUB 2 book's `calibre:series` and `calibre:series_index` `meta`
+  names add a series when its name is not already listed; an index written
+  as a whole number with a zero fraction, such as `3.0`, is given as `3`.
+  The first series is the primary one.
+- **M6** The publication date is the `dc:date` text as written, with
+  whitespace collapsed: the one marked with the publication event when an
+  EPUB 2 book marks several, else the first with no event. A date marked with
+  another event is never used. A book whose spine says
+  `page-progression-direction="rtl"` is flagged as right to left.
+
 ## Reading
 
 - **R1** A book's chapters are its reading-order items in package order.

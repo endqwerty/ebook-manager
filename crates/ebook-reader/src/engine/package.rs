@@ -3,7 +3,7 @@
 use super::archive::Archive;
 use super::xml::{parse_tree_checked, Element};
 use super::{clean_inline, encoding, paths, truncate_chars};
-use crate::model::{Author, Identifier, Limits, Metadata};
+use crate::model::{Author, Identifier, Limits, Metadata, SeriesMembership};
 use crate::wire::{WireError, WireErrorKind};
 use std::collections::HashMap;
 
@@ -308,7 +308,101 @@ fn read_metadata(package: &Element) -> Metadata {
         .filter(|l| !l.is_empty())
         .take(MAX_LIST)
         .collect();
+
+    out.published = published(&fields);
+    out.series = series(&fields, &refined);
+    out.right_to_left = package
+        .child("spine")
+        .and_then(|s| s.attr("page-progression-direction"))
+        .is_some_and(|d| d.trim().eq_ignore_ascii_case("rtl"));
     out
+}
+
+/// EPUB 3 has one `dc:date`, the publication date. EPUB 2 may have several,
+/// told apart by `opf:event`; prefer the publication one and never take a
+/// date marked as another event.
+fn published(fields: &[&Element]) -> Option<String> {
+    let dates: Vec<(Option<String>, String)> = fields
+        .iter()
+        .filter(|e| e.name == "date")
+        .map(|e| {
+            let event = e.attr_local("event").map(|v| v.trim().to_ascii_lowercase());
+            (event, field(e))
+        })
+        .filter(|(_, d)| !d.is_empty())
+        .collect();
+    let pick = |want: Option<&str>| {
+        dates
+            .iter()
+            .find(|(event, _)| event.as_deref() == want)
+            .map(|(_, d)| d.clone())
+    };
+    pick(Some("publication")).or_else(|| pick(None))
+}
+
+/// EPUB 3 collections refined as series, in package order, then the EPUB 2
+/// `calibre:series` and `calibre:series_index` names when they add a series
+/// not already listed.
+fn series(
+    fields: &[&Element],
+    refined: &dyn Fn(&Element, &str) -> Option<String>,
+) -> Vec<SeriesMembership> {
+    let position = |text: Option<String>| text.filter(|p| !p.is_empty());
+    let mut out: Vec<SeriesMembership> = fields
+        .iter()
+        .filter(|e| {
+            e.name == "meta"
+                && e.attr("refines").is_none()
+                && e.attr("property").map(str::trim) == Some("belongs-to-collection")
+                && refined(e, "collection-type").is_some_and(|t| t.eq_ignore_ascii_case("series"))
+        })
+        .filter_map(|e| {
+            let name = field(e);
+            (!name.is_empty()).then(|| SeriesMembership {
+                position: position(refined(e, "group-position")),
+                name,
+            })
+        })
+        .take(MAX_LIST)
+        .collect();
+
+    let named = |name: &str| {
+        fields
+            .iter()
+            .find(|e| e.name == "meta" && e.attr("name").map(str::trim) == Some(name))
+            .and_then(|e| e.attr("content"))
+            .map(|v| {
+                let mut v = clean_inline(v);
+                truncate_chars(&mut v, MAX_TEXT);
+                v
+            })
+    };
+    if let Some(name) = named("calibre:series").filter(|n| !n.is_empty()) {
+        if out.len() < MAX_LIST && !out.iter().any(|s| s.name == name) {
+            let index = position(named("calibre:series_index")).map(whole_number);
+            out.push(SeriesMembership {
+                name,
+                position: index,
+            });
+        }
+    }
+    out
+}
+
+/// The EPUB 2 series index is written as a decimal number, so book 2 is
+/// often `2.0`. Drop a fraction that is all zeros; keep any other text.
+fn whole_number(text: String) -> String {
+    match text.split_once('.') {
+        Some((whole, fraction))
+            if !whole.is_empty()
+                && whole.bytes().all(|b| b.is_ascii_digit())
+                && !fraction.is_empty()
+                && fraction.bytes().all(|b| b == b'0') =>
+        {
+            whole.to_owned()
+        }
+        _ => text,
+    }
 }
 
 /// `urn:isbn:978...` and `isbn:978...` carry their scheme in the value.

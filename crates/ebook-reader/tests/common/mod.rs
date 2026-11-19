@@ -297,3 +297,65 @@ pub fn write(scratch: &Scratch, name: &str, bytes: &[u8]) -> PathBuf {
 pub fn exists(path: &Path) -> bool {
     path.exists()
 }
+
+/// The parts of a generated EPUB that the survey and metadata tests vary.
+/// Chapters become `OEBPS/c<i>.xhtml`, linear unless listed in `nonlinear`.
+#[derive(Default)]
+pub struct Parts<'a> {
+    pub version: &'a str,
+    pub metadata: &'a str,
+    pub manifest: &'a str,
+    pub spine_attrs: &'a str,
+    pub spine_extra: &'a str,
+    pub chapters: &'a [&'a str],
+    pub nonlinear: &'a [usize],
+    pub files: &'a [(&'a str, &'a [u8])],
+}
+
+pub fn package(p: Parts) -> Vec<u8> {
+    let mut manifest = String::from(p.manifest);
+    let mut spine = String::new();
+    for i in 0..p.chapters.len() {
+        manifest.push_str(&format!(
+            r#"<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>"#
+        ));
+        let linear = if p.nonlinear.contains(&i) {
+            r#" linear="no""#
+        } else {
+            ""
+        };
+        spine.push_str(&format!(r#"<itemref idref="c{i}"{linear}/>"#));
+    }
+    spine.push_str(p.spine_extra);
+    let version = if p.version.is_empty() {
+        "3.0"
+    } else {
+        p.version
+    };
+    let opf = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+<dc:identifier id="id">parts-1</dc:identifier><dc:title>Parts</dc:title><dc:language>en</dc:language>
+{}
+</metadata>
+<manifest>{manifest}</manifest><spine{}>{spine}</spine></package>"#,
+        p.metadata, p.spine_attrs
+    );
+    let docs: Vec<(String, String)> = p
+        .chapters
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (format!("OEBPS/c{i}.xhtml"), xhtml("c", b)))
+        .collect();
+    let mut files: Vec<(&str, &[u8])> = vec![
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+    ];
+    for (name, doc) in &docs {
+        files.push((name, doc.as_bytes()));
+    }
+    files.extend_from_slice(p.files);
+    zip(&files)
+}
