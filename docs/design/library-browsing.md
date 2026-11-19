@@ -341,14 +341,17 @@ the helper's sandbox.
   the width and height as big-endian 32-bit numbers followed by the pixels.
   The library stores the digest and colours in the book record. The shell
   reads thumbnails straight from that folder on a loader thread and never
-  through the library's writer.
+  through the library's writer. It shows a file only if it is a regular
+  file and not a link, a PNG no larger than a thumbnail, and its pixels hash
+  to the digest it is named by. Any other counts as missing.
 - A book whose cover is missing, fails to decode or would need enlarging by
   more than three times is still imported, with no cover facts. The shell
   draws its binding set in type.
 - The thumbnail folder is a cache. When a book has a digest and no file, the
   shell shows the average colour and asks for the thumbnail again from the
   managed EPUB in the background. It installs the result only if its digest
-  equals the one in the record.
+  equals the one in the record. Two books can share a cover, and each that
+  asked for it is tried before the cover is given up for the session.
 - The word count and cover facts come from one helper request, the survey.
   The two results are independent: a cover that cannot be used leaves the
   word count, and an unknown word count leaves the cover. The count is
@@ -441,9 +444,19 @@ flowchart LR
   screen if it is still there, else the first book that was on screen, else
   the top. A view replaced because the catalogue changed, and not by the
   reader, keeps the first book on screen where it was and does not scroll to
-  the focused one. A selected row whose page never loaded has no ID to find
-  it by and leaves the selection. With no book focused, the one found again
-  is the first selected.
+  the focused one. With no book focused, the one found again is the first
+  selected. Where the reader is, is read when the new view has opened and
+  is about to be shown, and read again when its books have been found: if
+  the reader scrolled or selected meanwhile they are found again, three
+  times at most. The model notes each selected book's ID when its row is in
+  memory, so a selection outlives the page cache. A selected row whose page
+  never loaded has no ID to find it by and leaves the selection.
+- **When a view cannot be read.** Every page request ends in rows or in the
+  error state, which says why and offers Try Again. A failed refresh leaves
+  the open view readable. A place whose view was replaced or lost before
+  its row arrived reports that it is gone, and a command waiting on it says
+  so. When the catalogue file is replaced the read thread asks for a new
+  reader.
 - **When the catalogue changes** (an import, an edit, a saved position), the
   write thread tells the window after each job. The model asks the read
   thread whether the catalogue changed and, if so, reopens the same query
@@ -475,8 +488,9 @@ flowchart LR
   with a perspective transform and moves nothing else.
 - **Actions** are `GAction`s on the window with accelerators, also offered in
   the context menu on a book and the Menu key: Read (Return, double click),
-  Edit, Send to device, and the view, sort and search commands. An action
-  takes the book's ID and fetches the full record with `Library::book`. The
+  Edit, Send to device, and the view, sort and search commands. Every key,
+  Return included, acts on the selection, and a book's menu on that book. An
+  action takes the book's ID and fetches the full record with `Library::book`. The
   Edit window gains sort title, author sort names, series and position.
 - **Remembered choices**: the view, the sort for each view, the cover size and
   the table's columns, order and widths are saved in `settings.json` in the
@@ -611,7 +625,10 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 17. When the reader switches between Grid, List, Table and Shelf, sorts, types
     a search, and opens, edits and exports a book using only the keyboard,
     then each works, and the view and sort are as left after a restart.
-    `apps/desktop/tests/smoke.py`.
+    `apps/desktop/tests/smoke.py`. The first pull request of the window
+    proves the Grid half: typing a search, and opening, editing and
+    exporting a book from the keyboard. Switching views, sorting and what
+    is kept across a restart are proved with the second.
 18. When the shelf is resized, then the first fully visible book stays at the
     top, and when a book is selected then only that spine changes.
     `apps/desktop/tests/smoke.py`, and a unit test of the row packing.

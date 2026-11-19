@@ -6,16 +6,16 @@ The GTK4 application uses GTK 4.12 or later and libadwaita 1.5 or later. Install
 
 ## How it is put together
 
-The app keeps its library in `$XDG_DATA_HOME/ebook-manager` (by default `~/.local/share/ebook-manager`). Three threads share the work, and the window waits on none of them.
+The app keeps its library in `$XDG_DATA_HOME/ebook-manager` (by default `~/.local/share/ebook-manager`). Besides the GTK thread there are four: the write thread, the read thread, the thumbnail loader and the survey thread. The window waits on none of them.
 
 | File | What it owns | What callers can rely on |
 |---|---|---|
 | `main.rs` | The application and the helpers the windows share. | |
 | `window.rs` | The library window: header bar, search, screen title, actions and keys. | Every command is a `GAction` on the window. A command on a book takes the book's ID. |
 | `store.rs` | The write thread, the one owner of the `Library`. | `run` and `call` queue a job and return its result. After every job the window is told, and asks the catalogue whether anything changed. |
-| `browse.rs` | The read thread, which owns a `BrowseReader`, and `BookListModel`, the list model, selection model and section model every view shares. | `item(rank)` returns at once and its book arrives with its page of 128. A new search or catalogue change replaces the view with one removal and one addition, and selected books are found again by ID. A selected row that never loaded is dropped then. |
+| `browse.rs` | The read thread, which owns a `BrowseReader`, and `BookListModel`, the list model, selection model and section model every view shares. | `item(rank)` returns at once and its book arrives with its page of 128. A new search or catalogue change replaces the view with one removal and one addition. Selected books are known by ID from when their rows load and are found again in the new view, and where the reader is, is read when the new view is about to be shown. A selected row that never loaded is dropped then. Every page request ends in rows or in the error state, and a place whose view went before its row came reports that it is gone. When the catalogue file is replaced the read thread opens a new reader. |
 | `cover.rs` | The `Cover` widget. | It draws the cover table in [the interface design](../../docs/design/interface.md#covers) from a row of the model, and asks `thumbs.rs` for the image. |
-| `thumbs.rs` | The thumbnail cache in `cache/thumbs`, its loader thread and the survey thread. | A missing thumbnail is made again from the managed EPUB. Only a thumbnail whose digest matches the book's record is installed. |
+| `thumbs.rs` | The thumbnail cache in `cache/thumbs`, its loader thread and the survey thread. | A file is shown only if it is a PNG of thumbnail size whose pixels hash to the digest it is named by. A missing or wrong one is made again from any book that has that cover, and only a thumbnail whose digest matches the record is installed. |
 | `views/` | `grid.rs`, and the cell every view's rows are built on. | |
 | `edit.rs`, `imports.rs`, `reader.rs` | The Edit window, the import report and the reader. | |
 

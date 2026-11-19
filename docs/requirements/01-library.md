@@ -173,7 +173,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
 - `LIB-71` (core) The grid scrolls smoothly at any size, with covers drawn from
   cached thumbnails. The Linux grid creates rows only for what is on screen and draws covers from cached thumbnails. Its frame rate has not been measured.
 - `LIB-72` (core) No long job blocks the window: import, conversion, metadata fetch,
-  indexing, device transfer. On Linux, import and the survey of covers run off the window's thread, and during an import the list refreshes at most once a second and keeps its place. The other jobs do not exist yet.
+  indexing, device transfer. On Linux, import, the survey of covers and sending to a device run off the window's thread, and during an import the list refreshes at most once a second and keeps its place. Conversion, metadata fetch and indexing do not exist yet.
 
 ## What the app must store
 

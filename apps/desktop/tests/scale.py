@@ -33,33 +33,44 @@ def application():
     return None
 
 
-def first_title():
-    """The name of the first book the window shows, or None while it shows none."""
+FIRST = 5
+
+
+def first_titles():
+    """The titles of the first books on screen, in order. Empty while fewer
+    than `FIRST` are shown: a title in the accessibility tree that is not
+    showing has not been drawn."""
     try:
         app = application()
         if app is None:
-            return None
+            return []
+        titles = []
         for node in walk(app):
-            if node.get_role_name() == "label" and (node.get_name() or "").startswith(
-                "Book "
+            if (
+                node.get_role_name() == "label"
+                and (node.get_name() or "").startswith("Book ")
+                and node.get_state_set().contains(Atspi.StateType.SHOWING)
             ):
-                return node.get_name()
+                titles.append(node.get_name())
+                if len(titles) == FIRST:
+                    return titles
     except GLib.Error:
         pass
-    return None
+    return []
 
 
 def launch(binary, env):
     """Starts the app and returns it with two times from the start of the
-    process: when the last look that saw no titles began, and when the look
-    that read them ended. The titles became readable between the two."""
+    process: when the last look that found too few titles began, and when
+    the look that read the first titles on screen ended. The titles were
+    drawn between the two."""
     started = time.monotonic()
     proc = subprocess.Popen([binary], env=env)
     while True:
         looked = time.monotonic()
-        title = first_title()
-        if title:
-            return proc, looked - started, time.monotonic() - started, title
+        titles = first_titles()
+        if titles:
+            return proc, looked - started, time.monotonic() - started, titles
         assert looked - started < 30, "no titles after 30 seconds"
         time.sleep(POLL)
 
@@ -132,15 +143,16 @@ def run(binary, fixture, root):
     stop(proc)
     before, seen = [], []
     for _ in range(STARTS):
-        proc, unseen, read, title = launch(binary, env)
-        # Title order: `Book 0` files before every other number.
-        assert title == "Book 0 A distant atlas", title
-        before.append(unseen)
-        seen.append(read)
+        proc, look_began, titles_read, titles = launch(binary, env)
+        # Title order: `Book 0` files before every other number, and 25 of
+        # the generated books have that title.
+        assert titles == ["Book 0 A distant atlas"] * FIRST, titles
+        before.append(look_began)
+        seen.append(titles_read)
         stop(proc)
     interval = max(b - a for a, b in zip(before, seen))
     print(
-        f"launch to first titles, {STARTS} starts, seconds: "
+        f"launch to the first {FIRST} titles shown and read, {STARTS} starts, seconds: "
         f"median {statistics.median(seen):.3f} "
         f"[{min(seen):.3f}–{max(seen):.3f}], "
         f"the driver's look takes up to {interval:.3f}",

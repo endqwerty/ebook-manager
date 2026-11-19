@@ -172,13 +172,13 @@ pub fn open(parent: &impl IsA<gtk::Window>, store: &store::Store, book: Book) {
     field(
         &form,
         "Sort title",
-        "Where the book is filed by title. Leave empty to file by the title.",
+        "Where the book is filed by title. Leave it empty and the library works it out from the title, without a leading article.",
         &sort_title,
     );
     field(
         &form,
         "Author sort names",
-        "One on each line, in the order of the authors, such as “Melville, Herman”. An empty line files by the name as written.",
+        "One on each line, in the order of the authors. Leave a line empty and the library works it out from the name, as “Melville, Herman”.",
         &author_sorts,
     );
     field(&form, "Series", "", &series);
@@ -365,6 +365,21 @@ mod tests {
                 author_sorts: None,
                 series: Some(vec![("Sea".into(), Some("2".into()))]),
             })
+        );
+    }
+
+    #[test]
+    fn a_cleared_sort_name_is_left_for_the_library_to_work_out() {
+        let book = book();
+        let mut form = form_for(&book);
+        form.author_sorts.clear();
+        // Not the file's "Melville, Herman" again, and not the name as
+        // written: no sort name at all, which the library derives.
+        assert_eq!(
+            changes(&book, &form)
+                .filing
+                .and_then(|filing| filing.author_sorts),
+            Some(vec![None, None])
         );
     }
 

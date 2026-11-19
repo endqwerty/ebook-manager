@@ -10,13 +10,13 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 - Every cover is a 2:3 frame of the same size. A book with a cover image shows it with an edge line, a shade on the side it is bound and a shadow. A book without one shows a binding set in type: its title and author on one of eight colours chosen from the book's ID. While a cover's image is being read its frame is the cover's average colour. Under More contrast the shade and shadows go and an outline is drawn around the cover. The app follows the system's light or dark appearance.
 - A partly read book has a line under its cover, as long as the part read. A finished book has a check mark after its author. A screen reader hears both in words with the title and author.
 - The number of columns follows the window's width and the system's text size. Covers grow to share a row, up to a quarter over the medium width of 128.
-- With no books the window says so and offers Add. When a search matches nothing it names the text searched for and offers Clear Search.
-- A book the reader was on stays selected, focused and in place when the books shown are replaced by a search or by a change to the library. During an import the list is refreshed at most once a second.
+- With no books the window says so and offers Add. When a search matches nothing it names the text searched for and offers Clear Search. When the library cannot be read it says why and offers Try Again.
+- A book the reader was on stays selected, focused and in place when the books shown are replaced by a search or by a change to the library. Where the reader is, is read when the new books are about to be shown, so scrolling or selecting while they load is kept. During an import the list is refreshed at most once a second.
 - Closing the window first closes the windows opened from it, so each saves what it holds.
 
 ## Search
 
-- Typing anywhere in the window opens the search with the typed text. The books shown are those whose title, an author or a series name contains every word, whatever its case or accents.
+- Typing anywhere in the window but in a text field opens the search with the typed text, and no key typed while it opens is lost. The books shown are those whose title, an author or a series name contains every word, whatever its case or accents.
 - Down moves from the search field to the books it found and selects the first. Typing with a book focused goes on to the search field. Escape closes the search from anywhere in the window.
 
 ## Commands and keys
@@ -32,7 +32,8 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 | Refresh library | F5, Ctrl+R, or the main menu |
 | Close | Ctrl+W, Ctrl+Q |
 
-- Read and Edit act on the one selected book, and Send to device on every selected book. A book's menu acts on that book and leaves the selection alone.
+- Every key acts on the selection, Return included: when the focused book is not the selected one, Return reads the selected one. Read and Edit need exactly one selected book, and Send to device takes any number. A book's menu acts on that book and leaves the selection alone.
+- A command on a book whose row was still loading when the list was replaced says so and does nothing.
 - Refresh library checks every journal file against the catalogue and finishes any change that was saved but not published.
 
 ## Import
@@ -40,12 +41,12 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 - The file picker accepts multiple EPUBs. Folder import finds EPUBs recursively, follows links to EPUB files, skips directory links, and reports unreadable directories. Staging, inspection and catalogue writes run off the GTK thread. The report lists the result beside each filename and lets the reader stop after the current book.
 - Exact duplicates keep a single entry. If the library identifies a possible revision, the reader can skip it, keep it separately or select a matching book to replace. A failed or skipped file leaves the remaining queue available.
 - Import keeps what the file says about each author's sort name, its series and position, its date, its first language and its page direction. It counts the book's words and reads its cover in the reader's sandbox. A cover that cannot be used leaves the book with a binding set in type.
-- Cover thumbnails are PNG files in `cache/thumbs` under the app's data folder, named by the digest in the book's record. The folder is a cache. A thumbnail that is missing when its cover is shown is made again from the managed EPUB in the background, and so are the covers of books imported before covers were read.
+- Cover thumbnails are PNG files in `cache/thumbs` under the app's data folder, named by the digest in the book's record. The folder is a cache. A file there is shown only if it is a regular file, a PNG no larger than a thumbnail, whose pixels hash to the digest it is named by. One that is missing or fails that check is made again in the background from the managed EPUB of any book that has that cover, and so are the covers of books imported before covers were read.
 
 ## Edit
 
 - The Edit window holds the title, the authors one to a line, the sort title, each author's sort name, and the series with the book's position in it. A position is text, such as `2`, `1.5` or `TPB1`.
-- A sort title, sort name or series left as the file gives it follows the file. An empty sort title files the book by its title, and an empty sort name files that author by the name as written. A book in more than one series keeps the others when the first is edited.
+- A sort title, sort name or series left as the file gives it follows the file. An empty sort title or sort name is worked out by the library: the title without its leading article, and the author's name with its last word first, as `Melville, Herman`. A book in more than one series keeps the others when the first is edited.
 - Edits survive restart and leave the EPUB unchanged. Tab moves between the fields, Return in a one-line field saves and Escape cancels.
 
 ## Read and export
@@ -59,5 +60,5 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 
 ## Large libraries
 
-- The window asks for books in pages of 128 and creates rows only for what is on screen, so its speed does not depend on the number of books.
+- The window asks for books in pages of 128 and creates rows only for what is on screen, so scrolling and drawing cost the same in a library of any size. Opening a view still puts every book in order, and a search reads every book's text. At 100,000 books those take about 0.06 and 0.03 seconds, off the window's thread.
 - With 100,000 generated books the first titles can be read through the accessibility tree a quarter of a second after the process starts, against a limit of 2 seconds. A search is answered as the reader types, and Ctrl+End shows the last rows. `scale.py` checks all three and the import behaviour above.
