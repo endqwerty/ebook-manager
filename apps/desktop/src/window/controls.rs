@@ -18,6 +18,7 @@ pub struct Controls {
     switch: gtk::Box,
     /// The views as a menu, on a narrow window.
     switch_menu: gtk::MenuButton,
+    sort_menu: gtk::MenuButton,
     editor: RefCell<Option<Editor>>,
 }
 
@@ -102,8 +103,14 @@ impl Controls {
         Self {
             switch,
             switch_menu,
+            sort_menu: sort,
             editor: RefCell::new(None),
         }
+    }
+
+    pub(super) fn close_menus(&self) {
+        self.sort_menu.popdown();
+        self.switch_menu.popdown();
     }
 }
 
@@ -133,11 +140,9 @@ impl Library {
         // model can ask it where the reader is.
         if rebuild {
             self.rebuild.set(true);
-        }
-        if query != self.model.query() {
+            self.model.change_layout(query);
+        } else if query != self.model.query() {
             self.model.set_query(query);
-        } else if rebuild {
-            self.model.reopen();
         }
         self.fit();
         self.show_sort();
@@ -203,7 +208,7 @@ impl Library {
     }
 
     /// The window crossed the width under which the table is not offered.
-    fn set_narrow(self: &Rc<Self>, narrow: bool) {
+    pub(super) fn set_narrow(self: &Rc<Self>, narrow: bool) {
         if self.narrow.replace(narrow) == narrow {
             return;
         }
@@ -417,20 +422,6 @@ impl Library {
             });
             self.window.add_action(&action);
         }
-        let weak = Rc::downgrade(self);
-        self.window.connect_realize(move |window| {
-            if let Some(surface) = window.surface() {
-                let weak = weak.clone();
-                surface.connect_layout(move |_, width, _| {
-                    let weak = weak.clone();
-                    glib::idle_add_local_once(move || {
-                        if let Some(library) = weak.upgrade() {
-                            library.set_narrow(width < 640);
-                        }
-                    });
-                });
-            }
-        });
         self.show_choices();
     }
 }

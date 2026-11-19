@@ -49,13 +49,20 @@ pub struct Anchors {
     pub focused: bool,
 }
 
+/// Why the open needs to place the reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    Command,
+    Refresh,
+    Layout,
+}
+
 /// Where the reader was, and where those books are in the view now shown.
 pub struct Placed {
     pub anchors: Anchors,
     pub current: Option<u32>,
     pub top: Option<u32>,
-    /// The catalogue changed under the reader, who asked for nothing.
-    pub background: bool,
+    pub reason: Placement,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -72,6 +79,8 @@ pub enum Status {
 pub struct Hooks {
     /// Where the reader is at this moment.
     pub anchors: Box<dyn Fn() -> Anchors>,
+    /// Close menus anchored to the old books before GTK removes them.
+    pub before_replace: Box<dyn Fn()>,
     /// The status or the selection changed, or, when true, the books shown
     /// were replaced.
     pub changed: Box<dyn Fn(bool)>,
@@ -567,6 +576,7 @@ impl BookListModel {
                     self.changed(false);
                 }
                 Effect::Empty => {
+                    self.before_replace();
                     // With an error shown there are no books, so there is
                     // no selection either: a command must not reach a book
                     // the reader can no longer see.
@@ -588,6 +598,7 @@ impl BookListModel {
     /// selection is by ID and needs nothing found: each row says whether
     /// its book is selected as it arrives.
     fn swap(&self, view: OpenView, background: bool) {
+        self.before_replace();
         let before = {
             let mut state = self.imp().state.borrow_mut();
             // The interval runs from when a refresh is shown.
@@ -618,6 +629,12 @@ impl BookListModel {
         }
     }
 
+    fn before_replace(&self) {
+        if let Some(hooks) = self.hooks() {
+            (hooks.before_replace)();
+        }
+    }
+
     /// Shows another search or sort. The open in flight, if any, is dropped.
     pub fn set_query(&self, query: Query) {
         if self.imp().core.borrow().is_some() {
@@ -638,10 +655,9 @@ impl BookListModel {
         self.run(Event::Retry);
     }
 
-    /// Opens the same search and sort again, for a view that has been built
-    /// anew and has to be put where the last one was.
-    pub fn reopen(&self) {
-        self.run(Event::Reopen);
+    /// Opens the query for the new layout, even if its sort is unchanged.
+    pub fn change_layout(&self, query: Query) {
+        self.run(Event::Layout(query));
     }
 
     /// The write thread finished a job, which may have changed a book. The

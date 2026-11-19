@@ -20,13 +20,13 @@ use std::{
     rc::Rc,
 };
 
-type OpenMenu = dyn Fn(&BookCell, f64, f64);
+type OpenMenu = dyn Fn(&BookCell);
 
 /// What every view is built with.
 #[derive(Clone)]
 pub struct Shared {
     pub thumbs: Thumbs,
-    /// Opens the context menu for a cell, at a point in the cell.
+    /// Opens the context menu for a cell.
     pub menu: Rc<OpenMenu>,
     pub cover_size: CoverSize,
     /// The first sort key, which the list shows when no line of a row does.
@@ -230,10 +230,10 @@ impl BookCell {
         let secondary = gtk::GestureClick::builder().button(3).build();
         let menu = shared.menu.clone();
         let weak = cell.downgrade();
-        secondary.connect_pressed(move |gesture, _, x, y| {
+        secondary.connect_pressed(move |gesture, _, _, _| {
             if let Some(cell) = weak.upgrade() {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                menu(&cell, x, y);
+                menu(&cell);
             }
         });
         cell.add_controller(secondary);

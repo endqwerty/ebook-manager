@@ -15,7 +15,10 @@ use std::{cell::Cell, rc::Rc};
 const COVER: i32 = 20;
 
 /// What the reader does to the table that the window has to know of.
+type HeaderMenu = dyn Fn(&gtk::Widget, &gio::Menu);
+
 pub struct Events {
+    pub menu: Box<HeaderMenu>,
     /// A header was activated: its field, and whether Control was held,
     /// which adds the field as the next sort key.
     pub sort: Box<dyn Fn(SortField, bool)>,
@@ -116,6 +119,12 @@ fn columns_of(table: &gtk::ColumnView) -> Vec<gtk::ColumnViewColumn> {
         .collect()
 }
 
+fn header_field(table: &gtk::ColumnView, title: &gtk::Widget) -> Option<SortField> {
+    // GTK keeps the header and column sibling orders in sync.
+    let place = std::iter::successors(title.prev_sibling(), gtk::Widget::prev_sibling).count();
+    columns_of(table).get(place).and_then(field_of)
+}
+
 /// The table and what it remembers of the sort it shows.
 pub struct Table {
     pub view: gtk::ColumnView,
@@ -129,7 +138,6 @@ struct State {
     showing: Cell<bool>,
     /// The first sort key shown.
     first: Cell<Option<SortField>>,
-    keyboard_menu: glib::WeakRef<gtk::PopoverMenu>,
 }
 
 pub fn build(
@@ -161,7 +169,6 @@ pub fn build(
         column.set_resizable(true);
         column.set_expand(field == SortField::Title && saved.width.is_none());
         column.set_fixed_width(saved.width.unwrap_or(-1));
-        column.set_header_menu(Some(&header_menu(field)));
         // A sorter makes the header one that can be activated. It never
         // orders anything: the model's rows come sorted from the catalogue.
         column.set_sorter(Some(&gtk::CustomSorter::new(|_, _| gtk::Ordering::Equal)));
@@ -248,25 +255,18 @@ pub fn build(
     while let Some(title) = header {
         title.set_focusable(true);
         let keys = gtk::EventControllerKey::new();
-        let (weak, events, state) = (view.downgrade(), events.clone(), table.state.clone());
+        let (weak, on_key) = (view.downgrade(), events.clone());
         keys.connect_key_pressed(move |keys, key, _, modifiers| {
             use gtk::gdk::{Key, ModifierType};
             let (Some(view), Some(title)) = (weak.upgrade(), keys.widget()) else {
                 return glib::Propagation::Proceed;
             };
-            // A header's place among the headers is its column's place.
-            let mut place = 0;
-            let mut before = title.prev_sibling();
-            while let Some(widget) = before {
-                place += 1;
-                before = widget.prev_sibling();
-            }
-            let Some(field) = columns_of(&view).get(place).and_then(field_of) else {
+            let Some(field) = header_field(&view, &title) else {
                 return glib::Propagation::Proceed;
             };
             match key {
                 Key::Return | Key::KP_Enter | Key::space => {
-                    (events.sort)(field, modifiers.contains(ModifierType::CONTROL_MASK));
+                    (on_key.sort)(field, modifiers.contains(ModifierType::CONTROL_MASK));
                     glib::Propagation::Stop
                 }
                 Key::Left | Key::Right => {
@@ -298,24 +298,26 @@ pub fn build(
                 Key::Menu | Key::F10
                     if key == Key::Menu || modifiers.contains(ModifierType::SHIFT_MASK) =>
                 {
-                    let menu = gtk::PopoverMenu::from_model(Some(&header_menu(field)));
-                    menu.set_parent(&title);
-                    state.keyboard_menu.set(Some(&menu));
-                    menu.connect_closed(|menu| {
-                        // After the chosen item's action has run.
-                        let menu = menu.clone();
-                        glib::idle_add_local_once(move || {
-                            if menu.parent().is_some() {
-                                menu.unparent();
-                            }
-                        });
-                    });
-                    menu.popup();
+                    (on_key.menu)(&title, &header_menu(field));
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
             }
         });
+        let secondary = gtk::GestureClick::builder()
+            .button(gtk::gdk::BUTTON_SECONDARY)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        let (weak, on_click) = (view.downgrade(), events.clone());
+        secondary.connect_pressed(move |gesture, _, _, _| {
+            if let (Some(view), Some(title)) = (weak.upgrade(), gesture.widget())
+                && let Some(field) = header_field(&view, &title)
+            {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                (on_click.menu)(&title, &header_menu(field));
+            }
+        });
+        title.add_controller(secondary);
         title.add_controller(keys);
         header = title.next_sibling();
     }
@@ -357,18 +359,6 @@ pub fn build(
         glib::idle_add_local_once(move || layout());
     });
     table
-}
-
-impl Drop for Table {
-    fn drop(&mut self) {
-        // The window can replace the table while a keyboard menu is open.
-        if let Some(menu) = self.state.keyboard_menu.upgrade()
-            && menu.parent().is_some()
-        {
-            menu.popdown();
-            menu.unparent();
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
