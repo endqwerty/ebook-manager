@@ -72,15 +72,16 @@ pub fn facts(survey: &Survey) -> SurveyFacts {
 /// rename, so a reader of the folder never sees half a file.
 pub fn write(folder: &Path, digest: &str, cover: Pixels) -> Result<()> {
     std::fs::create_dir_all(folder)?;
-    let texture = gdk::MemoryTexture::new(
-        cover.width as i32,
-        cover.height as i32,
-        gdk::MemoryFormat::R8g8b8,
-        &glib::Bytes::from(cover.rgb),
-        cover.width as usize * 3,
-    );
     let mut staged = tempfile::NamedTempFile::new_in(folder)?;
-    staged.write_all(&texture.save_to_png_bytes())?;
+    // A header, the image data and an end, and nothing else: `load` reads
+    // no other kind of file.
+    let mut encoder = png::Encoder::new(&mut staged, cover.width, cover.height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(cover.rgb)?;
+    writer.finish()?;
+    staged.flush()?;
     staged.persist(file(folder, digest))?;
     Ok(())
 }
@@ -89,32 +90,48 @@ pub fn write(folder: &Path, digest: &str, cover: Pixels) -> Result<()> {
 /// PNG that compresses badly.
 const LARGEST_FILE: u64 = 512 * 1024;
 
-/// The width and height a PNG's header gives, if it is the one kind of
-/// file `write` makes: eight bits a channel, red, green and blue with no
-/// alpha and no palette, not interlaced, and no larger than a thumbnail.
-/// Read from the first bytes, before anything is decoded.
-fn header(png: &[u8]) -> Option<(u32, u32)> {
-    let rest = png.strip_prefix(b"\x89PNG\r\n\x1a\n")?;
-    // The first chunk: a length of 13, `IHDR`, then the 13 bytes.
-    let chunk = rest.get(..8 + 13)?;
-    if chunk[..8] != *b"\0\0\0\x0dIHDR" {
-        return None;
+/// The width and height of a PNG, if it is the one kind of file `write`
+/// makes: eight bits a channel of red, green and blue with no alpha, not
+/// interlaced, no larger than a thumbnail, and made of a header, image
+/// data and an end and nothing else. A palette or a transparency chunk
+/// would change what the pixels decode to, so any other chunk is refused.
+/// Read from the bytes, before anything is decoded.
+fn plain_png(png: &[u8]) -> Option<(u32, u32)> {
+    let number = |bytes: &[u8]| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let mut rest = png.strip_prefix(b"\x89PNG\r\n\x1a\n")?;
+    let mut size = None;
+    let mut data = false;
+    loop {
+        // A chunk: its length, its name, that many bytes, and a check.
+        let length = number(rest.get(..4)?) as usize;
+        let name = rest.get(4..8)?;
+        let body = rest.get(8..8usize.checked_add(length)?)?;
+        rest = rest.get(12 + length..)?;
+        match (name, size, data) {
+            (b"IHDR", None, false) if length == 13 => {
+                let (width, height) = (number(&body[..4]), number(&body[4..8]));
+                // Bit depth, colour type, compression, filter, interlace.
+                let plain = body[8..] == [8, 2, 0, 0, 0];
+                let fits = (1..=Thumbnail::MAX_WIDTH).contains(&width)
+                    && (1..=Thumbnail::MAX_HEIGHT).contains(&height);
+                if !(plain && fits) {
+                    return None;
+                }
+                size = Some((width, height));
+            }
+            (b"IDAT", Some(_), _) => data = true,
+            // The end, with image data before it and nothing after.
+            (b"IEND", Some(size), true) if length == 0 && rest.is_empty() => return Some(size),
+            _ => return None,
+        }
     }
-    let number =
-        |at: usize| u32::from_be_bytes([chunk[at], chunk[at + 1], chunk[at + 2], chunk[at + 3]]);
-    let (width, height) = (number(8), number(12));
-    // Bit depth, colour type, compression, filter, interlace.
-    let plain = chunk[16..21] == [8, 2, 0, 0, 0];
-    let fits = (1..=Thumbnail::MAX_WIDTH).contains(&width)
-        && (1..=Thumbnail::MAX_HEIGHT).contains(&height);
-    (plain && fits).then_some((width, height))
 }
 
 /// Reads the thumbnail with this digest, if the file there is one. The
 /// folder is only a cache, so the file is checked before it is shown: a
 /// regular file and not a link, no larger than a thumbnail file can be, a
-/// PNG of the one kind this app writes, whose pixels hash to the digest it
-/// is named by. The texture is made from those hashed pixels. Anything
+/// PNG of the one kind this app writes and holding nothing else, whose
+/// pixels hash to the digest it is named by. The texture is made from those hashed pixels. Anything
 /// else counts as missing, and the thumbnail is made again.
 pub fn load(folder: &Path, wanted: &str) -> Option<gdk::Texture> {
     use std::{io::Read, os::unix::fs::OpenOptionsExt};
@@ -133,21 +150,17 @@ pub fn load(folder: &Path, wanted: &str) -> Option<gdk::Texture> {
     if bytes.len() as u64 > LARGEST_FILE {
         return None;
     }
-    let (width, height) = header(&bytes)?;
-    let decoded = gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)).ok()?;
-    if (decoded.width() as u32, decoded.height() as u32) != (width, height) {
+    let (width, height) = plain_png(&bytes)?;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::IDENTITY);
+    let mut reader = decoder.read_info().ok()?;
+    let across = width as usize * 3;
+    let mut rgb = vec![0; across * height as usize];
+    let frame = reader.next_frame(&mut rgb).ok()?;
+    let as_read = (frame.width, frame.height, frame.color_type, frame.bit_depth);
+    if as_read != (width, height, png::ColorType::Rgb, png::BitDepth::Eight) {
         return None;
     }
-    let mut download = gdk::TextureDownloader::new(&decoded);
-    download.set_format(gdk::MemoryFormat::R8g8b8);
-    let (rows, stride) = download.download_bytes();
-    let across = width as usize * 3;
-    let rgb: Vec<u8> = rows
-        .chunks(stride)
-        .take(height as usize)
-        .flat_map(|row| &row[..across])
-        .copied()
-        .collect();
     let cover = Pixels {
         width,
         height,
@@ -452,6 +465,10 @@ mod tests {
         (4, 2, (0..24).map(|n| n * 10).collect())
     }
 
+    fn name_of(cover: &(u32, u32, Vec<u8>)) -> String {
+        digest(pixels(cover))
+    }
+
     fn pixels(cover: &(u32, u32, Vec<u8>)) -> Pixels<'_> {
         Pixels {
             width: cover.0,
@@ -501,15 +518,40 @@ mod tests {
         let name = digest(pixels(&cover));
         write(folder.path(), &name, pixels(&cover)).unwrap();
         let written = std::fs::read(file(folder.path(), &name)).unwrap();
-        assert_eq!(header(&written), Some((4, 2)));
+        assert_eq!(plain_png(&written), Some((4, 2)));
         // Byte 24 is the bit depth, 25 the colour type, 28 the interlace.
         for (at, value) in [(24, 16), (25, 6), (25, 3), (25, 0), (28, 1)] {
             let mut other = written.clone();
             other[at] = value;
-            assert_eq!(header(&other), None, "byte {at} set to {value}");
+            assert_eq!(plain_png(&other), None, "byte {at} set to {value}");
         }
-        assert_eq!(header(&written[..20]), None, "cut short");
-        assert_eq!(header(b"GIF89a"), None);
+        assert_eq!(plain_png(&written[..20]), None, "cut short");
+        assert_eq!(plain_png(&written[..written.len() - 1]), None, "no end");
+        assert_eq!(plain_png(b"GIF89a"), None);
+        // A chunk the app never writes, after the header: a transparent
+        // colour, then a palette. Either changes what the pixels decode to.
+        for name in [b"tRNS", b"PLTE", b"tEXt"] {
+            let mut other = written[..33].to_vec();
+            other.extend([0, 0, 0, 6]);
+            other.extend(name);
+            other.extend([0; 6 + 4]);
+            other.extend(&written[33..]);
+            assert_eq!(
+                plain_png(&other),
+                None,
+                "a {} chunk",
+                String::from_utf8_lossy(name)
+            );
+            std::fs::write(file(folder.path(), &name_of(&cover)), &other).unwrap();
+            assert!(load(folder.path(), &name_of(&cover)).is_none());
+        }
+        // Bytes after the end, and a second header.
+        let mut longer = written.clone();
+        longer.push(0);
+        assert_eq!(plain_png(&longer), None, "bytes after the end");
+        let mut twice = written[..33].to_vec();
+        twice.extend(&written[8..]);
+        assert_eq!(plain_png(&twice), None, "two headers");
         // A picture with an alpha channel whose colours are the cover's.
         // Shown as it is, the window would show through it.
         let clear: Vec<u8> = cover
