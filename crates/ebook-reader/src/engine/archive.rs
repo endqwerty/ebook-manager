@@ -8,7 +8,9 @@ use std::fs::File;
 use std::io::Read;
 use zip::{CompressionMethod, ZipArchive};
 
-const RATIO_FLOOR: u64 = 1024 * 1024;
+/// Below this much output the ratio is not judged: short, repetitive
+/// documents are ordinary, and the size limits already bound them.
+const RATIO_FLOOR: u64 = 4 * 1024 * 1024;
 
 pub struct Archive {
     zip: ZipArchive<File>,
@@ -27,6 +29,11 @@ impl Archive {
             .len();
         if len > limits.max_file_bytes {
             return Err(WireError::limit("file size"));
+        }
+        // Read the entry count from the end record first, so an archive that
+        // lists millions of entries is refused before its directory is parsed.
+        if declared_entries(&file, len).is_some_and(|n| n > u64::from(limits.max_archive_entries)) {
+            return Err(WireError::limit("number of files in the book"));
         }
         let zip = ZipArchive::new(file)
             .map_err(|_| WireError::new(WireErrorKind::NotEpub, "not a ZIP container"))?;
@@ -123,11 +130,11 @@ impl Archive {
             .map_err(|e| WireError::invalid(format!("unreadable entry: {e}")))?;
         let mut out = Vec::new();
         // The declared size is the book's claim. Stop on actual output.
-        entry
-            .take(cap.saturating_add(1))
-            .read_to_end(&mut out)
-            .map_err(|e| WireError::invalid(format!("damaged entry {}: {e}", short(name))))?;
+        let read = entry.take(cap.saturating_add(1)).read_to_end(&mut out);
+        // Unpacked bytes count against the run whether or not the read ended well.
         let size = out.len() as u64;
+        self.unpacked = self.unpacked.saturating_add(size.min(cap));
+        read.map_err(|e| WireError::invalid(format!("damaged entry {}: {e}", short(name))))?;
         if size > cap {
             let what = if over_budget {
                 "total unpacked size".to_owned()
@@ -136,10 +143,9 @@ impl Archive {
             };
             return Err(WireError::limit(what));
         }
-        self.unpacked += size;
-        // A megabyte or more of output from almost no input is the shape of a
+        // Megabytes of output from almost no input is the shape of a
         // decompression bomb, whatever sizes the archive declares.
-        if size > RATIO_FLOOR && size / packed.max(1) > self.max_ratio {
+        if size > RATIO_FLOOR && size > packed.max(1).saturating_mul(self.max_ratio) {
             return Err(WireError::limit(format!(
                 "compression ratio of {}",
                 short(name)
@@ -147,6 +153,41 @@ impl Archive {
         }
         Ok(out)
     }
+}
+
+/// The entry count the archive's end record declares, read without parsing
+/// the directory. `None` when no end record is found; the ZIP reader then
+/// gives the verdict.
+fn declared_entries(mut file: &File, len: u64) -> Option<u64> {
+    use std::io::{Seek, SeekFrom};
+    const END: &[u8] = b"PK\x05\x06";
+    // The end record is 22 bytes plus a comment of at most 65,535.
+    let tail_len = len.min(22 + 65_535);
+    let tail_at = len - tail_len;
+    file.seek(SeekFrom::Start(tail_at)).ok()?;
+    let mut tail = vec![0u8; tail_len as usize];
+    file.read_exact(&mut tail).ok()?;
+    let at = (0..tail.len().checked_sub(21)?)
+        .rev()
+        .find(|&i| &tail[i..i + 4] == END)?;
+    let short_count = u64::from(u16::from_le_bytes([tail[at + 10], tail[at + 11]]));
+    let mut count = short_count;
+    if short_count == 0xFFFF && at >= 20 && &tail[at - 20..at - 16] == b"PK\x06\x07" {
+        // ZIP64: the locator before the end record points at the real count.
+        let mut offset = [0u8; 8];
+        offset.copy_from_slice(&tail[at - 12..at - 4]);
+        let mut record = [0u8; 56];
+        file.seek(SeekFrom::Start(u64::from_le_bytes(offset)))
+            .ok()?;
+        file.read_exact(&mut record).ok()?;
+        if &record[..4] == b"PK\x06\x06" {
+            let mut total = [0u8; 8];
+            total.copy_from_slice(&record[32..40]);
+            count = u64::from_le_bytes(total);
+        }
+    }
+    file.seek(SeekFrom::Start(0)).ok()?;
+    Some(count)
 }
 
 fn short(name: &str) -> String {

@@ -2,7 +2,7 @@
 
 use super::archive::Archive;
 use super::package::Package;
-use super::xml::{parse_tree, Element};
+use super::xml::{parse_tree_checked, Element};
 use super::{encoding, paths, truncate_chars};
 use crate::model::{Limits, Target, TocEntry};
 use crate::wire::{WireError, WireErrorKind};
@@ -59,8 +59,21 @@ pub fn load(
     let max = limits.max_toc_entries as usize;
     let mut read = |path: &str| -> Result<Option<Element>, WireError> {
         match archive.read(path, limits.max_package_bytes) {
-            Ok(bytes) => Ok(encoding::decode(&bytes).ok().map(|text| parse_tree(&text))),
-            Err(e) if matches!(e.kind, WireErrorKind::Limit | WireErrorKind::Protected) => Err(e),
+            Ok(bytes) => match encoding::decode(&bytes).ok() {
+                Some(text) => match parse_tree_checked(&text) {
+                    (tree, true) => Ok(Some(tree)),
+                    (_, false) => Err(WireError::limit("number of elements in the contents")),
+                },
+                None => Ok(None),
+            },
+            Err(e)
+                if matches!(
+                    e.kind,
+                    WireErrorKind::Limit | WireErrorKind::Protected | WireErrorKind::Compression
+                ) =>
+            {
+                Err(e)
+            }
             Err(_) => Ok(None),
         }
     };
@@ -82,7 +95,7 @@ pub fn load(
             if let Some(list) = find_toc_nav(&tree).and_then(|nav| nav.find("ol")) {
                 nav_list(list, 0, &mut b);
             }
-            if !b.out.is_empty() {
+            if b.over || !b.out.is_empty() {
                 return finish(b);
             }
         }

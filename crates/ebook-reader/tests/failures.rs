@@ -360,6 +360,14 @@ fn oversized_books_hit_limits_not_memory() {
         Err(ReaderError::LimitExceeded { .. })
     ));
 
+    let mut cfg = config();
+    cfg.limits.max_toc_entries = 0;
+    let none = Reader::new(cfg).unwrap();
+    assert!(matches!(
+        none.open(&dir.file("toc0.epub", &epub3())),
+        Err(ReaderError::LimitExceeded { .. })
+    ));
+
     // Contents longer than the limit are an error, not a shorter list.
     let mut cfg = config();
     cfg.limits.max_toc_entries = 2;
@@ -683,15 +691,21 @@ fn inconsistent_replies_are_not_passed_on() {
 #[test]
 fn compression_ratio_and_total_unpacked_size_are_bounded() {
     let dir = Scratch::new();
-    // 2 MiB of one repeated short line: far under the 16 MiB chapter limit,
+    // 6 MiB of one repeated short line: under the 16 MiB chapter limit,
     // far over a 200:1 ratio.
-    let body = format!("<p>{}</p>", "a ".repeat(1024 * 1024));
+    let body = format!("<p>{}</p>", "a ".repeat(3 * 1024 * 1024));
     let squeezed = dir.file("ratio.epub", &simple(&[&body], &[]));
     let book = reader().open(&squeezed).unwrap();
     match book.read_chapter(0) {
         Err(ReaderError::LimitExceeded { what }) => assert!(what.contains("ratio"), "{what}"),
         other => panic!("expected a ratio refusal, got {other:?}"),
     }
+
+    // A megabyte of repeated lines, such as a log or a table, is ordinary.
+    let log = "<p>2026-01-01 status: nominal</p>\n".repeat(30_000);
+    let plain = dir.file("log.epub", &simple(&[&log], &[]));
+    let chapter = reader().open(&plain).unwrap().read_chapter(0).unwrap();
+    assert_eq!(chapter.blocks.len(), 30_000);
 
     let mut cfg = config();
     cfg.limits.max_unpacked_bytes = 1500;
@@ -700,4 +714,38 @@ fn compression_ratio_and_total_unpacked_size_are_bounded() {
         Err(ReaderError::LimitExceeded { what }) => assert!(what.contains("total"), "{what}"),
         other => panic!("expected a total-size refusal, got {other:?}"),
     }
+}
+
+/// F7: an application that already runs under a lower memory ceiling than the
+/// reader's own still gets a working reader, held to that lower ceiling.
+#[test]
+fn a_lower_inherited_memory_ceiling_is_kept() {
+    let dir = Scratch::new();
+    let book = dir.file("b.epub", &epub3());
+    let script = "#!/bin/sh\nulimit -v 400000\nexec /usr/bin/bwrap \"$@\"\n";
+    let wrapped = dir.file("capped-bwrap", script.as_bytes());
+    Command::new("/bin/chmod")
+        .arg("+x")
+        .arg(&wrapped)
+        .status()
+        .unwrap();
+    let cfg = ReaderConfig {
+        bwrap_path: Some(wrapped),
+        ..config()
+    };
+    let mut title = None;
+    let trouble = settle(
+        || match Reader::new(cfg.clone()).and_then(|r| r.open(&book)) {
+            Ok(b) => {
+                title = b.metadata().title.clone();
+                String::new()
+            }
+            Err(e) => format!("{e:?}"),
+        },
+    );
+    assert_eq!(
+        title.as_deref(),
+        Some("The Lighthouse at Low Tide"),
+        "{trouble}"
+    );
 }

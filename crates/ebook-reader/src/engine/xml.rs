@@ -149,12 +149,20 @@ const MAX_NODES: usize = 400_000;
 /// Build a small tree for package and navigation documents.
 /// The returned root is a holder whose children are the top-level nodes.
 pub fn parse_tree(src: &str) -> Element {
+    parse_tree_checked(src).0
+}
+
+/// As [`parse_tree`], and whether the whole document fitted. `false` means
+/// the tree stops early and anything counted from it would be short.
+pub fn parse_tree_checked(src: &str) -> (Element, bool) {
+    let mut whole = true;
     let mut stack: Vec<Element> = vec![Element::default()];
     let mut overflow = 0usize;
     let mut nodes = 0usize;
     tokenize(src, false, |tok| {
         nodes += 1;
         if nodes > MAX_NODES {
+            whole = false;
             return false;
         }
         match tok {
@@ -193,7 +201,7 @@ pub fn parse_tree(src: &str) -> Element {
     while stack.len() > 1 {
         close_top(&mut stack);
     }
-    stack.pop().unwrap_or_default()
+    (stack.pop().unwrap_or_default(), whole)
 }
 
 fn close_top(stack: &mut Vec<Element>) {

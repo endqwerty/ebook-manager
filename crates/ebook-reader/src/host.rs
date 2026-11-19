@@ -20,7 +20,7 @@ pub const HELPER_NAME: &str = "ebook-reader-helper";
 pub const HELPER_ENV: &str = "EBOOK_READER_HELPER";
 
 /// Deepest contents nesting the helper produces, counted from 0.
-const MAX_TOC_DEPTH: u32 = 33;
+const MAX_TOC_DEPTH: u32 = 32;
 const BWRAP_PLACES: [&str; 2] = ["/usr/bin/bwrap", "/bin/bwrap"];
 /// Read-only system library directories the helper's loader may need.
 const LIBRARY_DIRS: [&str; 4] = ["/usr/lib", "/usr/lib64", "/lib", "/lib64"];
