@@ -89,35 +89,56 @@ pub fn write(folder: &Path, digest: &str, cover: Pixels) -> Result<()> {
 /// PNG that compresses badly.
 const LARGEST_FILE: u64 = 512 * 1024;
 
+/// The width and height a PNG's header gives, if it is the one kind of
+/// file `write` makes: eight bits a channel, red, green and blue with no
+/// alpha and no palette, not interlaced, and no larger than a thumbnail.
+/// Read from the first bytes, before anything is decoded.
+fn header(png: &[u8]) -> Option<(u32, u32)> {
+    let rest = png.strip_prefix(b"\x89PNG\r\n\x1a\n")?;
+    // The first chunk: a length of 13, `IHDR`, then the 13 bytes.
+    let chunk = rest.get(..8 + 13)?;
+    if chunk[..8] != *b"\0\0\0\x0dIHDR" {
+        return None;
+    }
+    let number =
+        |at: usize| u32::from_be_bytes([chunk[at], chunk[at + 1], chunk[at + 2], chunk[at + 3]]);
+    let (width, height) = (number(8), number(12));
+    // Bit depth, colour type, compression, filter, interlace.
+    let plain = chunk[16..21] == [8, 2, 0, 0, 0];
+    let fits = (1..=Thumbnail::MAX_WIDTH).contains(&width)
+        && (1..=Thumbnail::MAX_HEIGHT).contains(&height);
+    (plain && fits).then_some((width, height))
+}
+
 /// Reads the thumbnail with this digest, if the file there is one. The
 /// folder is only a cache, so the file is checked before it is shown: a
-/// regular file and not a link, a PNG no larger than a thumbnail, whose
-/// pixels hash to the digest it is named by. Anything else counts as
-/// missing, and the thumbnail is made again.
+/// regular file and not a link, no larger than a thumbnail file can be, a
+/// PNG of the one kind this app writes, whose pixels hash to the digest it
+/// is named by. The texture is made from those hashed pixels. Anything
+/// else counts as missing, and the thumbnail is made again.
 pub fn load(folder: &Path, wanted: &str) -> Option<gdk::Texture> {
     use std::{io::Read, os::unix::fs::OpenOptionsExt};
-    let mut found = std::fs::OpenOptions::new()
+    let found = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(file(folder, wanted))
         .ok()?;
-    let kind = found.metadata().ok()?;
-    if !kind.is_file() || kind.len() > LARGEST_FILE {
+    if !found.metadata().ok()?.is_file() {
         return None;
     }
+    // One byte past the limit shows a file that is too large, however
+    // large it has grown since it was opened.
     let mut bytes = vec![];
-    found.read_to_end(&mut bytes).ok()?;
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+    found.take(LARGEST_FILE + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > LARGEST_FILE {
         return None;
     }
-    let texture = gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)).ok()?;
-    let (width, height) = (texture.width() as u32, texture.height() as u32);
-    if !(1..=Thumbnail::MAX_WIDTH).contains(&width)
-        || !(1..=Thumbnail::MAX_HEIGHT).contains(&height)
-    {
+    let (width, height) = header(&bytes)?;
+    let decoded = gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)).ok()?;
+    if (decoded.width() as u32, decoded.height() as u32) != (width, height) {
         return None;
     }
-    let mut download = gdk::TextureDownloader::new(&texture);
+    let mut download = gdk::TextureDownloader::new(&decoded);
     download.set_format(gdk::MemoryFormat::R8g8b8);
     let (rows, stride) = download.download_bytes();
     let across = width as usize * 3;
@@ -132,7 +153,47 @@ pub fn load(folder: &Path, wanted: &str) -> Option<gdk::Texture> {
         height,
         rgb: &rgb,
     };
-    (digest(cover) == wanted).then_some(texture)
+    if digest(cover) != wanted {
+        return None;
+    }
+    // What is shown is what was hashed: opaque pixels, whatever else the
+    // file carried.
+    Some(
+        gdk::MemoryTexture::new(
+            width as i32,
+            height as i32,
+            gdk::MemoryFormat::R8g8b8,
+            &glib::Bytes::from_owned(rgb),
+            across,
+        )
+        .upcast(),
+    )
+}
+
+/// Which books have been tried as the source of each cover that had to be
+/// made again.
+#[derive(Default)]
+struct Repairs(HashMap<String, HashSet<String>>);
+
+impl Repairs {
+    /// The books among those asking for a cover that have not been tried,
+    /// now counted as tried. `None` when every one of them has been.
+    fn next(&mut self, cover: &str, asking: &[String]) -> Option<Vec<String>> {
+        let tried = self.0.entry(cover.to_owned()).or_default();
+        let fresh: Vec<String> = asking
+            .iter()
+            .filter(|book| tried.insert((*book).clone()))
+            .cloned()
+            .collect();
+        (!fresh.is_empty()).then_some(fresh)
+    }
+    fn tried(&self, cover: &str, book: &str) -> bool {
+        self.0.get(cover).is_some_and(|tried| tried.contains(book))
+    }
+    /// The cover has loaded, so its books are sources again if it goes.
+    fn forget(&mut self, cover: &str) {
+        self.0.remove(cover);
+    }
 }
 
 /// Makes the thumbnail with this digest again from the first of `books`
@@ -255,9 +316,7 @@ struct Shared {
     /// Who wants each digest that has not arrived: every book that asked,
     /// any of which can supply it, and what to call.
     waiting: RefCell<HashMap<String, Wanted>>,
-    remade: RefCell<HashSet<String>>,
-    /// Digests that could not be loaded or made again in this run.
-    hopeless: RefCell<HashSet<String>>,
+    repairs: RefCell<Repairs>,
 }
 
 /// Cover images for the GTK thread. Files are read on a loader thread, and
@@ -293,8 +352,7 @@ impl Thumbs {
             textures: RefCell::default(),
             order: RefCell::default(),
             waiting: RefCell::default(),
-            remade: RefCell::default(),
-            hopeless: RefCell::default(),
+            repairs: RefCell::default(),
         }));
         let weak = Rc::downgrade(&thumbs.0);
         glib::spawn_future_local(async move {
@@ -319,11 +377,13 @@ impl Thumbs {
     /// `book` is a book whose cover it is, in case the file has to be made.
     /// Two books can share a cover, and each that asks is remembered.
     pub fn want(&self, digest: &str, book: &str, arrived: impl Fn(&gdk::Texture) + 'static) {
-        if self.0.hopeless.borrow().contains(digest) {
-            return;
-        }
         let mut waiting = self.0.waiting.borrow_mut();
         let first = !waiting.contains_key(digest);
+        // This book's file has been tried for this cover and did not give
+        // it. Another book that has the cover still can.
+        if first && self.0.repairs.borrow().tried(digest, book) {
+            return;
+        }
         let wanted = waiting.entry(digest.to_owned()).or_default();
         if !wanted.0.iter().any(|asked| asked == book) {
             wanted.0.push(book.to_owned());
@@ -338,6 +398,7 @@ impl Thumbs {
         let shared = &self.0;
         match event {
             Event::Loaded(digest, Some(texture)) => {
+                shared.repairs.borrow_mut().forget(&digest);
                 shared
                     .textures
                     .borrow_mut()
@@ -355,29 +416,30 @@ impl Thumbs {
                     arrived(&texture);
                 }
             }
-            Event::Loaded(digest, None) => {
-                let books = shared
+            // The file is missing or is not the thumbnail, or the books
+            // tried could not supply it. Each book that has asked, up to
+            // this moment, is tried before the cover is given up.
+            Event::Loaded(digest, None) | Event::Remade(digest, false) => {
+                let asking = shared
                     .waiting
                     .borrow()
                     .get(&digest)
-                    .map(|(books, _)| books.clone());
-                match books {
-                    Some(books) if shared.remade.borrow_mut().insert(digest.clone()) => {
+                    .map(|(books, _)| books.clone())
+                    .unwrap_or_default();
+                let fresh = shared.repairs.borrow_mut().next(&digest, &asking);
+                match fresh {
+                    Some(books) => {
                         let _ = shared.jobs.send(Job::Remake(books, digest));
                     }
-                    _ => self.give_up(digest),
+                    None => {
+                        shared.waiting.borrow_mut().remove(&digest);
+                    }
                 }
             }
             Event::Remade(digest, true) => {
                 let _ = shared.loads.send(digest);
             }
-            Event::Remade(digest, false) => self.give_up(digest),
         }
-    }
-
-    fn give_up(&self, digest: String) {
-        self.0.waiting.borrow_mut().remove(&digest);
-        self.0.hopeless.borrow_mut().insert(digest);
     }
 }
 
@@ -430,6 +492,71 @@ mod tests {
             .unwrap();
         assert!(load(folder.path(), &name).is_none(), "a link");
         assert!(load(elsewhere.path(), &name).is_some());
+    }
+
+    #[test]
+    fn only_the_kind_of_png_this_app_writes_is_read() {
+        let folder = tempfile::tempdir().unwrap();
+        let cover = cover();
+        let name = digest(pixels(&cover));
+        write(folder.path(), &name, pixels(&cover)).unwrap();
+        let written = std::fs::read(file(folder.path(), &name)).unwrap();
+        assert_eq!(header(&written), Some((4, 2)));
+        // Byte 24 is the bit depth, 25 the colour type, 28 the interlace.
+        for (at, value) in [(24, 16), (25, 6), (25, 3), (25, 0), (28, 1)] {
+            let mut other = written.clone();
+            other[at] = value;
+            assert_eq!(header(&other), None, "byte {at} set to {value}");
+        }
+        assert_eq!(header(&written[..20]), None, "cut short");
+        assert_eq!(header(b"GIF89a"), None);
+        // A picture with an alpha channel whose colours are the cover's.
+        // Shown as it is, the window would show through it.
+        let clear: Vec<u8> = cover
+            .2
+            .chunks(3)
+            .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 0])
+            .collect();
+        let texture = gdk::MemoryTexture::new(
+            4,
+            2,
+            gdk::MemoryFormat::R8g8b8a8,
+            &glib::Bytes::from_owned(clear),
+            16,
+        );
+        std::fs::write(file(folder.path(), &name), texture.save_to_png_bytes()).unwrap();
+        assert!(load(folder.path(), &name).is_none(), "alpha");
+    }
+
+    #[test]
+    fn a_file_past_the_size_limit_is_not_read_to_its_end() {
+        let folder = tempfile::tempdir().unwrap();
+        let cover = cover();
+        let name = digest(pixels(&cover));
+        write(folder.path(), &name, pixels(&cover)).unwrap();
+        // The right picture, with more after it than a thumbnail can be.
+        let mut bytes = std::fs::read(file(folder.path(), &name)).unwrap();
+        bytes.resize(LARGEST_FILE as usize + 1, 0);
+        std::fs::write(file(folder.path(), &name), bytes).unwrap();
+        assert!(load(folder.path(), &name).is_none());
+    }
+
+    #[test]
+    fn a_book_that_asks_after_a_repair_began_is_tried_before_giving_up() {
+        let mut repairs = Repairs::default();
+        let first = ["one".to_owned()];
+        assert_eq!(repairs.next("cover", &first), Some(first.to_vec()));
+        // That book's file could not be read. Meanwhile another book with
+        // the same cover came into view.
+        let both = ["one".to_owned(), "two".to_owned()];
+        assert_eq!(repairs.next("cover", &both), Some(vec!["two".to_owned()]));
+        // Both have failed: the cover is given up, for those two books.
+        assert_eq!(repairs.next("cover", &both), None);
+        assert!(repairs.tried("cover", "two") && !repairs.tried("cover", "three"));
+        assert!(!repairs.tried("other", "one"));
+        // Once the cover loads, its books can be asked again if it goes.
+        repairs.forget("cover");
+        assert_eq!(repairs.next("cover", &first), Some(first.to_vec()));
     }
 
     #[test]
