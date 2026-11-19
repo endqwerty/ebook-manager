@@ -777,12 +777,25 @@ def run(binary, evidence, root):
         assert web_processes(proc.pid), "the page was ended though nothing closed"
         xd("key", "Right")
         find("Page 6 of", contains=True)
-        # A window can also be destroyed without being asked. Then the app
-        # ends, and the turn that had reached the reader is where it reopens.
+        # A window can also be destroyed without being asked, as when a
+        # window manager ends. From GTK 4.24 the app then ends. Before that
+        # GTK tells the library window nothing while the reader is modal:
+        # the reader goes on working, and the app ends when it is closed.
+        # Either way no process is left, and the turn that had reached the
+        # reader is where the book reopens.
         pages = web_processes(proc.pid)
         assert pages, "no web process to watch"
         xd("windowclose", library)
-        proc.wait(timeout=10)
+        try:
+            proc.wait(timeout=10)
+            destroyed = "the app ended"
+        except subprocess.TimeoutExpired:
+            assert web_processes(proc.pid), "the page was ended and the app was not"
+            find("Page 6 of", contains=True)
+            click("Back to library")
+            proc.wait(timeout=10)
+            destroyed = "the reader went on, and the app ended when it was closed"
+        assert proc.returncode == 0, proc.returncode
         # The page's process is looked for by its own number: once the app
         # has gone it is nobody's descendant.
         deadline = time.monotonic() + 10
@@ -797,7 +810,7 @@ def run(binary, evidence, root):
         click("Back to library")
         time.sleep(0.3)
         print(
-            "PASS the library cannot be closed under the reader, and when its window is destroyed the last turn is where the book reopens",
+            f"PASS the library cannot be closed under the reader, and when its window is destroyed {destroyed} and the last turn is where the book reopens",
             flush=True,
         )
         # Closing the reader lets its view go, and the view's web process

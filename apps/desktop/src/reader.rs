@@ -412,6 +412,16 @@ impl Reading {
             {
                 position_error(&parent, &e);
             }
+            // The window the reader was opened from may have been destroyed
+            // from outside, as when a window manager ends. GTK before 4.24
+            // tells that window nothing while this one is modal, so it
+            // would stay, unseen, and the app would run on with no window.
+            // It goes with the reader, and the app ends with its last window.
+            if let Some(parent) = w.transient_for()
+                && parent.surface().is_none_or(|s| s.is_destroyed())
+            {
+                glib::idle_add_local_once(move || parent.destroy());
+            }
             glib::Propagation::Proceed
         });
         reading
