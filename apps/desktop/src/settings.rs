@@ -291,6 +291,11 @@ impl Default for Settings {
     }
 }
 
+impl Column {
+    pub const MIN_WIDTH: i32 = 16;
+    pub const MAX_WIDTH: i32 = 4096;
+}
+
 impl Settings {
     pub fn sort(&self, view: ViewKind) -> &Sort {
         match view {
@@ -325,7 +330,9 @@ impl Settings {
         }
         for column in &mut columns {
             column.visible |= column.field == SortField::Title;
-            column.width = column.width.filter(|width| (16..=4096).contains(width));
+            column.width = column
+                .width
+                .filter(|width| (Column::MIN_WIDTH..=Column::MAX_WIDTH).contains(width));
         }
         self.columns = columns;
         self
@@ -341,17 +348,29 @@ impl Settings {
             return Self::default();
         };
         let defaults = Self::default();
-        let part = |name: &str| parts.get(name).cloned();
-        fn read<T: serde::de::DeserializeOwned>(value: Option<serde_json::Value>, or: T) -> T {
-            value
-                .and_then(|value| serde_json::from_value(value).ok())
-                .unwrap_or(or)
+        fn read<T: serde::de::DeserializeOwned>(value: Option<&serde_json::Value>) -> Option<T> {
+            T::deserialize(value?).ok()
         }
+        let part = |name: &str| parts.get(name);
+        let sort =
+            |view: &str| read(part("sort").and_then(|sort| sort.get(view))).unwrap_or_default();
         Self {
-            view: read(part("view"), defaults.view),
-            sort: read(part("sort"), defaults.sort),
-            cover_size: read(part("cover_size"), defaults.cover_size),
-            columns: read(part("columns"), defaults.columns),
+            view: read(part("view")).unwrap_or(defaults.view),
+            sort: Sorts {
+                grid: sort("grid"),
+                list: sort("list"),
+                table: sort("table"),
+            },
+            cover_size: read(part("cover_size")).unwrap_or(defaults.cover_size),
+            columns: part("columns")
+                .and_then(|value| value.as_array())
+                .map(|columns| {
+                    columns
+                        .iter()
+                        .filter_map(|column| read(Some(column)))
+                        .collect()
+                })
+                .unwrap_or(defaults.columns),
         }
         .mend()
     }
@@ -434,8 +453,10 @@ mod tests {
         std::fs::write(
             &path,
             r#"{"view": "shelf", "cover_size": "large",
-                "sort": {"list": [{"field": "added", "descending": true}]},
-                "columns": [{"field": "author", "width": 9}, {"field": "author"},
+                "sort": {"grid": [{"field": "added", "descending": true}],
+                         "list": [{"field": "future"}],
+                         "table": [{"field": "progress"}]},
+                "columns": [{"field": "future"}, {"field": "author", "width": 9}, {"field": "author"},
                             {"field": "title", "visible": false}]}"#,
         )
         .unwrap();
@@ -443,10 +464,14 @@ mod tests {
         assert_eq!(settings.view, ViewKind::Grid);
         assert_eq!(settings.cover_size, CoverSize::Large);
         assert_eq!(
-            settings.sort(ViewKind::List).keys(),
+            settings.sort(ViewKind::Grid).keys(),
             [key(SortField::Added, true)]
         );
-        assert_eq!(settings.sort(ViewKind::Grid), &Sort::default());
+        assert_eq!(settings.sort(ViewKind::List), &Sort::default());
+        assert_eq!(
+            settings.sort(ViewKind::Table).keys(),
+            [key(SortField::Progress, false)]
+        );
         // One column a field, in the saved order, Title always shown, an
         // unusable width dropped, and the fields not named added hidden.
         assert_eq!(
