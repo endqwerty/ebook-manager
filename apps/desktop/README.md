@@ -1,10 +1,26 @@
 # Ebook Manager for Linux
 
-Run `ebook-manager` to open your shelf. Choose **Add files** or **Add folder** to import DRM-free EPUBs. Use **Read** to open the reader, where Left and Right turn pages and F11 fills the screen, **Edit** to correct a shelf entry, and **Export** to copy its EPUB to a folder. On an Xteink X4 Pro running the CrossPoint fork, switch to USB Drive mode and choose a folder on the mounted SD card.
+Run `ebook-manager` to open your library. Choose **Add** to import DRM-free EPUBs from files or a folder. Type to search. Select a book and press Return to read it, F2 to edit how it is named and filed, or Ctrl+D to copy its EPUB to a folder. In the reader, Left and Right turn pages and F11 fills the screen. On an Xteink X4 Pro running the CrossPoint fork, switch to USB Drive mode and choose a folder on the mounted SD card. [Desktop behaviour](../../specs/desktop-mvp.md) lists every command and key.
 
 The GTK4 application uses GTK 4.12 or later, libadwaita 1.5 or later and WebKitGTK 6.0 (2.44 or later), which draws the book's pages. Install the GTK, libadwaita and WebKitGTK 6.0 development packages and bubblewrap. Imports and reading require a working bubblewrap sandbox. From the repository root, run `make install` to build the optimized desktop binary and helper together and install them in `~/.local/bin`, with the launcher in `~/.local/share/applications`. The helper must be discoverable by the reader crate, normally next to the desktop binary. The installer writes the absolute executable path into the application menu entry.
 
-`main.rs` opens the shelf. A single background worker owns the library in `$XDG_DATA_HOME/ebook-manager` (by default `~/.local/share/ebook-manager`). Imports parse a stable temporary copy through the reader helper before submitting it to that worker. Opening a chapter uses the same helper. [`reader.rs`](src/reader.rs) owns the reader's window and [`reader/view.rs`](src/reader/README.md) owns the web view and everything that keeps book content inside it. Metadata edits and reading positions belong to the library. Export copies managed EPUB bytes to the directory chosen in the file picker.
+## How it is put together
+
+The app keeps its library in `$XDG_DATA_HOME/ebook-manager` (by default `~/.local/share/ebook-manager`). Besides the GTK thread there are four: the write thread, the read thread, the thumbnail loader and the survey thread. The window waits on none of them.
+
+| File | What it owns | What callers can rely on |
+|---|---|---|
+| `main.rs` | The application and the helpers the windows share. | |
+| `window.rs` | The library window: header bar, search, screen title, actions and keys. | Every command is a `GAction` on the window. A command on a book takes the book's ID. |
+| `store.rs` | The write thread, the one owner of the `Library`. | `run` and `call` queue a job and return its result. After every job the window is told, and asks the catalogue whether anything changed. |
+| `browse.rs` | The read thread, which owns a `BrowseReader`, and `BookListModel`, the list model, selection model and section model every view shares. | `item(rank)` returns at once and its book arrives with its page of 128. A new search or catalogue change replaces the view with one removal and one addition. The selection is a set of book IDs, so a new view needs nothing found to show it, and a place selected before its row loads is held by rank until it does. `browse/core.rs` is the model's state as one enum and its handling of every event as one function with no GTK in it. The GObject performs the effects that function returns. `browse/worker.rs` is the read thread, which answers every request with what was asked or a refusal, and says `Unchanged` only of the view the model names as shown. A view on screen that can no longer be read is opened again, a place whose row will not come reports that it is gone, a failed open shows the error and no older books, and Try Again starts a new read thread if the last stopped. When the catalogue file is replaced the read thread opens a new reader. |
+| `cover.rs` | The `Cover` widget. | It draws the cover table in [the interface design](../../docs/design/interface.md#covers) from a row of the model, and asks `thumbs.rs` for the image. |
+| `thumbs.rs` | The thumbnail cache in `cache/thumbs`, its loader thread and the survey thread. | A file is shown only if it is the kind of PNG the app writes, with a header, image data and an end and no other chunk, and its pixels hash to the digest it is named by, and what is shown is made from those pixels. A missing or wrong one is made again from any book that has that cover, and only a thumbnail whose digest matches the record is installed. |
+| `views/` | `grid.rs`, and the cell every view's rows are built on. | |
+| `edit.rs`, `imports.rs` | The Edit window and the import report. | |
+| `reader.rs` | The reader's window. [`src/reader/README.md`](src/reader/README.md) covers its parts: the web view and everything that keeps book content inside it. | |
+
+The serif roles use the system's serif family. No serif is bundled yet.
 
 ## Exercise the desktop
 
@@ -26,7 +42,7 @@ Where `coredumpctl` exists, that test program fails if any core dump was recorde
 
 The smoke driver can also end the app one way with a reader open and report what was left: `--ending term`, `int`, `kill`, `abrt` or `display` after the two usual arguments. It is a check made by hand, once per way, when the way the reader ends has changed. It is never run in CI or in a loop, because an ending that crashes something leaves a record the desktop shows its user, and `abrt` always leaves the app's own.
 
-See [desktop behaviour](../../specs/desktop-mvp.md) for the acceptance cases.
+The scale check starts the app against 100,000 generated books. It measures the time to the first readable titles over five starts, searches, jumps to the last row, and imports 400 generated EPUBs while checking that the list refreshes at most once a second and keeps its place.
 
 ```sh
 cargo build --release -p ebook-library --features fixture --bin fixture

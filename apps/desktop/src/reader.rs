@@ -37,13 +37,7 @@ fn reading_font(w: &gtk::Window) -> String {
         .map_or_else(|| "serif".to_owned(), |face| format!("'{face}', serif"))
 }
 
-/// Only these first lines depend on who opens the reader. The window that
-/// replaces the shelf changes them and nothing below.
-pub fn open(s: &Shelf, b: &Rc<Book>) {
-    open_in(&s.window, &s.store, b)
-}
-
-fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
+pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
     let w = gtk::Window::builder()
         .title(&b.title)
         .transient_for(parent)
@@ -843,7 +837,7 @@ mod tests {
     #[test]
     fn a_queued_save_is_written_before_a_later_one_without_being_waited_for() {
         let dir = tempfile::tempdir().unwrap();
-        let store = store::Store::open(dir.path().to_owned());
+        let store = store::Store::open(dir.path().to_owned(), || {});
         let log = Arc::new(Mutex::new(Vec::new()));
         let timed = queue(job(&store, &log, 1));
         let leaving = queue(job(&store, &log, 2));
@@ -861,7 +855,7 @@ mod tests {
     #[test]
     fn a_save_that_is_not_queued_at_once_can_land_late() {
         let dir = tempfile::tempdir().unwrap();
-        let store = store::Store::open(dir.path().to_owned());
+        let store = store::Store::open(dir.path().to_owned(), || {});
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut late = job(&store, &log, 1);
         let leaving = queue(job(&store, &log, 2));

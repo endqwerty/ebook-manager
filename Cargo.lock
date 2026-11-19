@@ -349,6 +349,8 @@ dependencies = [
  "libadwaita",
  "libc",
  "libtest-mimic",
+ "png",
+ "sha2",
  "tempfile",
  "webkit6",
  "zip",

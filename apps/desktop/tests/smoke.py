@@ -219,6 +219,19 @@ def xd(*args):
     subprocess.run(["xdotool", *map(str, args)], check=True)
 
 
+def send_key(name):
+    # Some XKB maps make xdotool add Alt when looking up F2 or F11.
+    # Use the physical keycode from our private X server's keymap.
+    if name in ("F2", "F11"):
+        keymap = subprocess.check_output(
+            ["xkbcomp", "-xkb", os.environ["DISPLAY"], "-"], text=True
+        )
+        match = re.search(rf"<FK{int(name[1:]):02d}>\s*=\s*([0-9]+);", keymap)
+        assert match is not None, f"{name} is missing from the X server's keymap"
+        name = match[1]
+    xd("key", name)
+
+
 def ask_to_close(window):
     """Ask a window to close, as a window manager's close button does.
 
@@ -416,90 +429,105 @@ def keys(evidence):
     print("PASS full screen from F11 and its button, left with Escape and F11", flush=True)
 
 
-def ending(binary, root, how):
-    """End the application one way with a reader open on a real chapter, an
-    instant after a page turn, and report what was left. Run by hand, once
-    per way, never in a loop: an ending that crashes something leaves a
-    record the desktop shows its user. See docs/design/epub-reading.md,
-    "The ways the application ends"."""
-    env = dict(
-        os.environ,
-        HOME=str(root),
-        XDG_DATA_HOME=str(root / "data"),
-        XDG_CONFIG_HOME=str(root / "config"),
-        XDG_CACHE_HOME=str(root / "cache"),
-        GDK_SCALE="1",
-        GDK_DEBUG="no-portals",
-        GDK_BACKEND="x11",
-        GTK_A11Y="atspi",
-        GSK_RENDERER="cairo",
-    )
-    books = root / "Books"
-    books.mkdir()
-    epub(books / "01-Atlas.epub")
-    proc = subprocess.Popen([binary], env=env)
-    find("Your first book belongs here")
-    click("Add files")
-    picker(books / "01-Atlas.epub", "Choose EPUB files")
-    find("Import complete")
-    click("Done")
-    click("Read")
-    find("Page 1 of", contains=True)
-    for _ in range(2):
-        xd("key", "Right")
-        time.sleep(0.5)
-    find("Page 3 of", contains=True)
-    time.sleep(0.6)
-    web = web_processes(proc.pid)
-    assert web, "no web process to watch"
-    # The turn to page 4 is made an instant before the end.
-    xd("key", "Right")
-    if how in ("term", "int", "kill", "abrt"):
-        proc.send_signal(
-            {
-                "term": signal.SIGTERM,
-                "int": signal.SIGINT,
-                "kill": signal.SIGKILL,
-                "abrt": signal.SIGABRT,
-            }[how]
-        )
-    elif how == "display":
-        display = os.environ["DISPLAY"].lstrip(":").split(".")[0]
-        server = subprocess.check_output(
-            ["pgrep", "-f", f"Xvfb :{display} "], text=True
-        ).split()[0]
-        os.kill(int(server), signal.SIGKILL)
-    else:
-        raise SystemExit(f"unknown ending {how!r}")
-    try:
-        code = proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        code = "still running after 15 seconds"
-        proc.kill()
-    deadline = time.monotonic() + 10
-    left = web
-    while left and time.monotonic() < deadline:
-        left = [pid for pid in web if Path(f"/proc/{pid}").exists()]
-        time.sleep(0.2)
-    saved = "not checked"
-    if how != "display":
-        proc = subprocess.Popen([binary], env=env)
-        find("The Lantern Atlas")
-        click("Read")
-        label = find("Page ", "label", contains=True)
-        saved = re.search(r"Page (\d+) of", label.get_name()).group(1)
-        click("Back to library")
-        time.sleep(0.5)
-        proc.terminate()
-        proc.wait(timeout=10)
-    print(
-        f"ENDING {how}: application exit {code}; web processes left after 10 seconds: {left or 'none'}; reopened on page {saved} (4 is the page turned to an instant before)",
-        flush=True,
-    )
+def focus(title):
+    wid = subprocess.check_output(
+        ["xdotool", "search", "--onlyvisible", "--name", "^" + title + "$"], text=True
+    ).splitlines()[-1]
+    xd("windowactivate", "--sync", wid)
+    return wid
 
 
-def run(binary, evidence, root):
-    env = dict(
+def key(*names):
+    for name in names:
+        send_key(name)
+        time.sleep(0.15)
+
+
+def type_text(text):
+    xd("type", "--delay", "20", text)
+    time.sleep(0.3)
+
+
+def replace_text(text):
+    """Replaces the focused field's text from the keyboard."""
+    key("ctrl+a")
+    type_text(text)
+
+
+def gone(name):
+    """Waits until nothing visible has this name."""
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            if not any(
+                (n.get_name() or "") == name
+                and n.get_state_set().contains(Atspi.StateType.SHOWING)
+                for n in walk(Atspi.get_desktop(0))
+            ):
+                return
+        except GLib.Error:
+            pass
+        time.sleep(0.1)
+    raise AssertionError(f"{name!r} is still shown")
+
+
+def search(words):
+    """Types into the library window, which opens the search."""
+    type_text(words)
+
+
+def select_book(words):
+    """Finds a book by typing and selects it, as a reader would."""
+    focus("Ebook Manager")
+    key("Escape")
+    search(words)
+    time.sleep(0.5)
+    key("Down")
+
+
+def painted(image, colour, fuzz):
+    """How many pixels of the picture are within `fuzz` percent of a colour."""
+    target = "rgb({},{},{})".format(*colour)
+    out = subprocess.check_output(
+        [
+            # ImageMagick 7 names its command `magick`, and 6 `convert`.
+            shutil.which("magick") or "convert",
+            str(image),
+            "-alpha",
+            "off",
+            "-fuzz",
+            f"{fuzz}%",
+            "-fill",
+            "black",
+            "+opaque",
+            target,
+            "-fill",
+            "white",
+            "-opaque",
+            target,
+            "-format",
+            "%[fx:mean*w*h]",
+            "info:",
+        ],
+        text=True,
+    )
+    return float(out)
+
+
+BINDINGS = [
+    (0x24, 0x40, 0x5C),
+    (0x6F, 0x2A, 0x2A),
+    (0x31, 0x50, 0x47),
+    (0x7A, 0x3B, 0x22),
+    (0x51, 0x44, 0x6B),
+    (0xB9, 0x8A, 0x3C),
+    (0x46, 0x53, 0x66),
+    (0x2F, 0x3A, 0x2B),
+]
+
+
+def environment(root, **extra):
+    return dict(
         os.environ,
         HOME=str(root),
         XDG_DATA_HOME=str(root / "data"),
@@ -698,8 +726,7 @@ def run(binary, evidence, root):
         before = markers(evidence / "scrolled.png")
         assert before and before[0] > 0, before
         # End the first process with the reader still open after turning settled.
-        proc.terminate()
-        proc.wait(timeout=10)
+        stop(proc)
         for attempt in range(3):
             if attempt:
                 focus("Ebook Manager")
@@ -723,20 +750,23 @@ def run(binary, evidence, root):
         # A turn that has reached the reader is the place saved on leaving,
         # with no wait for the save's own timer. The line under the page
         # shows the turn once the reader has it.
-        click("Read")
+        select_book("lantern")
+        key("Return")
         find("Page 4 of", contains=True)
         xd("key", "Right")
         find("Page 5 of", contains=True)
         click("Back to library")
         time.sleep(0.5)
-        click("Read")
+        select_book("lantern")
+        key("Return")
         find("Page 5 of", contains=True)
         click("Back to library")
         time.sleep(0.3)
         print("PASS a page turned just before leaving is where the book reopens", flush=True)
         # The reader is modal, so asking the library window to close while it
         # is open does nothing: both windows stay and the reader still turns.
-        click("Read")
+        select_book("lantern")
+        key("Return")
         find("Page 5 of", contains=True)
         library = subprocess.check_output(
             ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"], text=True
@@ -761,7 +791,8 @@ def run(binary, evidence, root):
             time.sleep(0.2)
         proc = subprocess.Popen([binary], env=env)
         find("Mira Vale")
-        click("Read")
+        select_book("lantern")
+        key("Return")
         find("Page 6 of", contains=True)
         click("Back to library")
         time.sleep(0.3)
@@ -804,6 +835,10 @@ def run(binary, evidence, root):
         ask_to_close(library)
         assert proc.wait(timeout=10) == 0
         print("PASS the library closes when asked with no reader open", flush=True)
+        proc = subprocess.Popen([binary], env=env)
+        find("Mira Vale")
+        covers(binary, evidence, root, proc)
+        proc = None
     finally:
         if proc and proc.poll() is None:
             proc.send_signal(signal.SIGTERM)
@@ -1267,6 +1302,80 @@ def covers(binary, evidence, root, proc):
             stop(proc)
 
 
+def ending(binary, root, how):
+    """End the application one way with a reader open on a real chapter, an
+    instant after a page turn, and report what was left. Run by hand, once
+    per way, never in a loop: an ending that crashes something leaves a
+    record the desktop shows its user. See docs/design/epub-reading.md,
+    "The ways the application ends"."""
+    env = environment(root)
+    books = root / "Books"
+    books.mkdir()
+    epub(books / "01-Atlas.epub")
+    proc = subprocess.Popen([binary], env=env)
+    find("No books yet")
+    focus("Ebook Manager")
+    key("ctrl+o")
+    picker(books / "01-Atlas.epub", "Choose EPUB files")
+    find("Import complete")
+    click("Done")
+    select_book("lantern")
+    key("Return")
+    find("Page 1 of", contains=True)
+    for _ in range(2):
+        xd("key", "Right")
+        time.sleep(0.5)
+    find("Page 3 of", contains=True)
+    time.sleep(0.6)
+    web = web_processes(proc.pid)
+    assert web, "no web process to watch"
+    # The turn to page 4 is made an instant before the end.
+    xd("key", "Right")
+    if how in ("term", "int", "kill", "abrt"):
+        proc.send_signal(
+            {
+                "term": signal.SIGTERM,
+                "int": signal.SIGINT,
+                "kill": signal.SIGKILL,
+                "abrt": signal.SIGABRT,
+            }[how]
+        )
+    elif how == "display":
+        display = os.environ["DISPLAY"].lstrip(":").split(".")[0]
+        server = subprocess.check_output(
+            ["pgrep", "-f", f"Xvfb :{display} "], text=True
+        ).split()[0]
+        os.kill(int(server), signal.SIGKILL)
+    else:
+        raise SystemExit(f"unknown ending {how!r}")
+    try:
+        code = proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        code = "still running after 15 seconds"
+        proc.kill()
+    deadline = time.monotonic() + 10
+    left = web
+    while left and time.monotonic() < deadline:
+        left = [pid for pid in web if Path(f"/proc/{pid}").exists()]
+        time.sleep(0.2)
+    saved = "not checked"
+    if how != "display":
+        proc = subprocess.Popen([binary], env=env)
+        find("The Lantern Atlas")
+        select_book("lantern")
+        key("Return")
+        label = find("Page ", "label", contains=True)
+        saved = re.search(r"Page (\d+) of", label.get_name()).group(1)
+        click("Back to library")
+        time.sleep(0.5)
+        proc.terminate()
+        proc.wait(timeout=10)
+    print(
+        f"ENDING {how}: application exit {code}; web processes left after 10 seconds: {left or 'none'}; reopened on page {saved} (4 is the page turned to an instant before)",
+        flush=True,
+    )
+
+
 def desktop(body):
     """Inside the private session: starts the accessibility registry and a
     window manager, runs `body`, and stops both."""
@@ -1371,81 +1480,12 @@ if __name__ == "__main__":
     evidence = args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     if args.private_session:
-        os.environ["AT_SPI_BUS_ADDRESS"] = os.environ["DBUS_SESSION_BUS_ADDRESS"]
-        registries = [
-            Path("/usr/lib/at-spi2-registryd"),
-            Path("/usr/libexec/at-spi2-registryd"),
-        ]
-        registry = next(p for p in registries if p.exists())
-        proc = subprocess.Popen([registry])
-        # Full screen is a request to the window manager, so the session needs one.
-        manager = subprocess.Popen(["openbox"])
-        try:
-            deadline = time.monotonic() + 10
-            while subprocess.run(
-                ["xdotool", "getactivewindow"], capture_output=True
-            ).returncode and subprocess.run(
-                ["xdotool", "get_num_desktops"], capture_output=True, text=True
-            ).stdout.strip() in ("", "0"):
-                assert time.monotonic() < deadline, "openbox did not start"
-                time.sleep(0.1)
-            if args.ending:
-                ending(binary, Path(os.environ["HOME"]), args.ending)
-            else:
-                run(binary, evidence, Path(os.environ["HOME"]))
-        finally:
-            manager.terminate()
-            manager.wait(timeout=10)
-            proc.terminate()
-            proc.wait(timeout=10)
+        if args.ending:
+            desktop(lambda home: ending(binary, home, args.ending))
+        else:
+            desktop(lambda home: run(binary, evidence, home))
     else:
-        with tempfile.TemporaryDirectory() as temp:
-            env = dict(
-                os.environ,
-                HOME=temp,
-                XDG_DATA_HOME=temp + "/data",
-                XDG_CONFIG_HOME=temp + "/config",
-                XDG_CACHE_HOME=temp + "/cache",
-                GDK_DEBUG="no-portals",
-                GDK_SCALE="1",
-                GDK_BACKEND="x11",
-                GIO_USE_VFS="local",
-                GSETTINGS_BACKEND="memory",
-                LC_ALL="C.UTF-8",
-            )
-            for key in (
-                "WAYLAND_DISPLAY",
-                "DBUS_SESSION_BUS_ADDRESS",
-                "AT_SPI_BUS_ADDRESS",
-                "XDG_CURRENT_DESKTOP",
-                "XDG_SESSION_DESKTOP",
-                "DESKTOP_SESSION",
-                "HYPRLAND_INSTANCE_SIGNATURE",
-            ):
-                env.pop(key, None)
-            # The private bus starts no services. Otherwise the app's requests
-            # start the host's portals and file-system daemons, which crash
-            # when this bus closes and show the user a crash notice.
-            services = Path(temp) / "no-services"
-            services.mkdir()
-            config = Path(temp) / "bus.conf"
-            config.write_text(BUS_CONFIG.format(services=escape(str(services))))
-            subprocess.run(
-                [
-                    "xvfb-run",
-                    "-a",
-                    "-s",
-                    f"-screen 0 {SCREEN[0]}x{SCREEN[1]}x24 -nolisten tcp",
-                    "dbus-run-session",
-                    f"--config-file={config}",
-                    "--",
-                    sys.executable,
-                    __file__,
-                    str(binary),
-                    str(evidence),
-                    "--private-session",
-                    *(["--ending", args.ending] if args.ending else []),
-                ],
-                env=env,
-                check=True,
-            )
+        private_session(
+            __file__,
+            [binary, evidence, *(["--ending", args.ending] if args.ending else [])],
+        )

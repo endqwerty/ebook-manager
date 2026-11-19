@@ -23,6 +23,8 @@ ebook-reader = { path = "../../crates/ebook-reader" }
 [dev-dependencies]
 libtest-mimic = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# The generated catalogue, for driving the read thread over many pages.
+ebook-library = { path = "../../crates/ebook-library", features = ["fixture"] }
 
 # The web view tests keep GTK on one thread, so they bring their own runner.
 [[test]]
