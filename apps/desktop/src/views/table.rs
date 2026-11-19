@@ -83,16 +83,24 @@ fn header_menu(field: SortField) -> gio::Menu {
         }
     }
     menu.append_section(Some("Columns"), &shown);
-    let moves = gio::Menu::new();
-    for (label, action) in [
-        ("Move Toward the _Start", "win.column-start"),
-        ("Move Toward the _End", "win.column-end"),
+    for commands in [
+        [
+            ("Move Toward the _Start", "win.column-start"),
+            ("Move Toward the _End", "win.column-end"),
+        ],
+        [
+            ("Make _Wider", "win.column-wider"),
+            ("Make _Narrower", "win.column-narrower"),
+        ],
     ] {
-        let item = gio::MenuItem::new(Some(label), None);
-        item.set_action_and_target_value(Some(action), Some(&field.id().to_variant()));
-        moves.append_item(&item);
+        let section = gio::Menu::new();
+        for (label, action) in commands {
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(Some(action), Some(&field.id().to_variant()));
+            section.append_item(&item);
+        }
+        menu.append_section(None, &section);
     }
-    menu.append_section(None, &moves);
     menu
 }
 
@@ -150,7 +158,7 @@ pub fn build(
         column.set_id(Some(field.id()));
         column.set_visible(saved.visible);
         column.set_resizable(true);
-        column.set_expand(field == SortField::Title);
+        column.set_expand(field == SortField::Title && saved.width.is_none());
         column.set_fixed_width(saved.width.unwrap_or(-1));
         column.set_header_menu(Some(&header_menu(field)));
         // A sorter makes the header one that can be activated. It never
@@ -326,15 +334,70 @@ pub fn build(
     };
     let layout = Rc::new(layout);
     for column in columns_of(&view) {
-        let layout = layout.clone();
-        column.connect_fixed_width_notify(move |_| layout());
+        let resized = layout.clone();
+        column.connect_fixed_width_notify(move |column| {
+            if field_of(column) == Some(SortField::Title) {
+                // The title fills spare space only until the reader sets a width.
+                column.set_expand(column.fixed_width() < 0);
+            }
+            resized();
+        });
+        let changed = layout.clone();
+        column.connect_visible_notify(move |_| changed());
     }
-    view.columns()
-        .connect_items_changed(move |_, _, _, _| layout());
+    view.columns().connect_items_changed(move |_, _, _, _| {
+        // Moving a column emits separate removal and insertion signals.
+        let layout = layout.clone();
+        glib::idle_add_local_once(move || layout());
+    });
     table
 }
 
+#[derive(Clone, Copy)]
+pub enum Change {
+    Toggle,
+    Move(bool),
+    Resize(i32),
+}
+
 impl Table {
+    pub fn change(&self, field: SortField, change: Change) {
+        let columns = columns_of(&self.view);
+        let Some(at) = columns
+            .iter()
+            .position(|column| field_of(column) == Some(field))
+        else {
+            return;
+        };
+        let column = &columns[at];
+        match change {
+            Change::Toggle => column.set_visible(!column.is_visible()),
+            Change::Move(toward_end) => {
+                let shown = |n: &usize| columns[*n].is_visible();
+                let other = if toward_end {
+                    (at + 1..columns.len()).find(shown)
+                } else {
+                    (0..at).rev().find(shown)
+                };
+                if let Some(other) = other {
+                    self.view.insert_column(other as u32, column);
+                }
+            }
+            Change::Resize(delta) => {
+                let header = self.view.first_child().and_then(|row| row.first_child());
+                if let Some(bounds) = std::iter::successors(header, gtk::Widget::next_sibling)
+                    .nth(at)
+                    .and_then(|header| header.compute_bounds(&self.view))
+                {
+                    let width = bounds.width().round() as i32;
+                    column.set_fixed_width(
+                        (width + delta).clamp(Column::MIN_WIDTH, Column::MAX_WIDTH),
+                    );
+                }
+            }
+        }
+    }
+
     /// Shows the model's sort on the headers: the arrow on the first key,
     /// and a small 2 or 3 on a second and third.
     pub fn show_sort(&self, sort: &Sort) {

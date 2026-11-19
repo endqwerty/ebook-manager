@@ -153,7 +153,7 @@ impl Library {
     }
 
     /// Sets each control to the choice it stands for.
-    fn show_choices(&self) {
+    pub(super) fn show_choices(&self) {
         let settings = self.settings.borrow();
         let sort = settings.sort(self.shown());
         let state = |name: &str, value: glib::Variant| {
@@ -204,7 +204,16 @@ impl Library {
 
     /// The window crossed the width under which the table is not offered.
     fn set_narrow(self: &Rc<Self>, narrow: bool) {
-        self.narrow.set(narrow);
+        if self.narrow.replace(narrow) == narrow {
+            return;
+        }
+        if let Some(action) = self
+            .window
+            .lookup_action("view-table")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            action.set_enabled(!narrow);
+        }
         self.controls.switch.set_visible(!narrow);
         self.controls.switch_menu.set_visible(narrow);
         self.show(false);
@@ -306,11 +315,19 @@ impl Library {
         self.set_sort(keys.into());
     }
 
-    /// Shows or hides a column of the table, or moves it one place among
-    /// the columns shown.
-    fn change_columns(self: &Rc<Self>, change: impl FnOnce(&mut Vec<crate::settings::Column>)) {
-        change(&mut self.settings.borrow_mut().columns);
-        self.show(true);
+    fn choose_view(self: &Rc<Self>, id: &str) {
+        if let Some(kind) = ViewKind::from_id(id)
+            && (kind != ViewKind::Table || !self.narrow.get())
+        {
+            self.settings.borrow_mut().view = kind;
+            self.show(false);
+        }
+    }
+
+    fn with_table(&self, act: impl FnOnce(&table::Table)) {
+        if let Some((_, View::Table(table))) = &*self.view.borrow() {
+            act(table);
+        }
     }
 
     pub(super) fn install_controls(self: &Rc<Self>) {
@@ -331,12 +348,15 @@ impl Library {
             });
             self.window.add_action(&action);
         };
-        chosen("view", settings.view.id(), |library, id| {
-            if let Some(kind) = ViewKind::from_id(id) {
-                library.settings.borrow_mut().view = kind;
-                library.show(false);
+        chosen("view", settings.view.id(), Self::choose_view);
+        let table = gio::SimpleAction::new("view-table", None);
+        let weak = Rc::downgrade(self);
+        table.connect_activate(move |_, _| {
+            if let Some(library) = weak.upgrade() {
+                library.choose_view(ViewKind::Table.id());
             }
         });
+        self.window.add_action(&table);
         chosen("cover-size", settings.cover_size.id(), |library, id| {
             if let Some(size) = CoverSize::from_id(id) {
                 library.settings.borrow_mut().cover_size = size;
@@ -354,12 +374,26 @@ impl Library {
             let sort = library.sort().with_direction(id == "descending");
             library.set_sort(sort);
         });
-        chosen("column-start", "", |library, id| {
-            library.move_column(id, false)
-        });
-        chosen("column-end", "", |library, id| {
-            library.move_column(id, true)
-        });
+        for (name, action) in [
+            ("column-start", table::Change::Move(false)),
+            ("column-end", table::Change::Move(true)),
+            ("column-wider", table::Change::Resize(24)),
+            ("column-narrower", table::Change::Resize(-24)),
+        ] {
+            let command = gio::SimpleAction::new(name, Some(glib::VariantTy::STRING));
+            let weak = Rc::downgrade(self);
+            command.connect_activate(move |_, target| {
+                if let (Some(library), Some(field)) = (
+                    weak.upgrade(),
+                    target
+                        .and_then(|target| target.str())
+                        .and_then(SortField::from_id),
+                ) {
+                    library.with_table(|table| table.change(field, action));
+                }
+            });
+            self.window.add_action(&command);
+        }
         let more = gio::SimpleAction::new("sort-more", None);
         let weak = Rc::downgrade(self);
         more.connect_activate(move |_, _| {
@@ -378,55 +412,25 @@ impl Library {
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
                 if let Some(library) = weak.upgrade() {
-                    library.change_columns(|columns| {
-                        for column in columns.iter_mut().filter(|c| c.field == field) {
-                            column.visible = !column.visible;
-                        }
-                    });
+                    library.with_table(|table| table.change(field, table::Change::Toggle));
                 }
             });
             self.window.add_action(&action);
         }
-        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
-            adw::BreakpointConditionLengthType::MaxWidth,
-            639.0,
-            adw::LengthUnit::Px,
-        ));
-        for (signal_narrow, weak) in [(true, Rc::downgrade(self)), (false, Rc::downgrade(self))] {
-            let react = move |_: &adw::Breakpoint| {
-                if let Some(library) = weak.upgrade() {
-                    library.set_narrow(signal_narrow);
-                }
-            };
-            if signal_narrow {
-                narrow.connect_apply(react);
-            } else {
-                narrow.connect_unapply(react);
-            }
-        }
-        self.window.add_breakpoint(narrow);
-        self.show_choices();
-    }
-
-    fn move_column(self: &Rc<Self>, id: &str, toward_end: bool) {
-        let Some(field) = SortField::from_id(id) else {
-            return;
-        };
-        self.change_columns(|columns| {
-            let Some(at) = columns.iter().position(|c| c.field == field) else {
-                return;
-            };
-            // The next column shown on that side. Hidden ones are passed over.
-            let shown = |n: &usize| columns[*n].visible;
-            let other = if toward_end {
-                (at + 1..columns.len()).find(shown)
-            } else {
-                (0..at).rev().find(shown)
-            };
-            if let Some(other) = other {
-                let moved = columns.remove(at);
-                columns.insert(other, moved);
+        let weak = Rc::downgrade(self);
+        self.window.connect_realize(move |window| {
+            if let Some(surface) = window.surface() {
+                let weak = weak.clone();
+                surface.connect_layout(move |_, width, _| {
+                    let weak = weak.clone();
+                    glib::idle_add_local_once(move || {
+                        if let Some(library) = weak.upgrade() {
+                            library.set_narrow(width < 640);
+                        }
+                    });
+                });
             }
         });
+        self.show_choices();
     }
 }

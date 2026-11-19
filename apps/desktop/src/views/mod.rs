@@ -296,6 +296,18 @@ pub fn cells(root: &gtk::Widget) -> Vec<BookCell> {
     found
 }
 
+/// A cell's row may extend beyond the cell's own content and padding.
+pub fn row_bounds(cell: &BookCell, body: &gtk::Widget) -> Option<gtk::graphene::Rect> {
+    let mut row: gtk::Widget = cell.clone().upcast();
+    loop {
+        let parent = row.parent()?;
+        if parent == *body {
+            return row.compute_bounds(body);
+        }
+        row = parent;
+    }
+}
+
 /// The first cell on screen in a view's body, with where its top is from
 /// the top of the body: zero or less when it starts above.
 pub fn top_cell(body: &gtk::Widget) -> Option<(BookCell, f32)> {
@@ -303,13 +315,15 @@ pub fn top_cell(body: &gtk::Widget) -> Option<(BookCell, f32)> {
         .into_iter()
         .filter(|cell| cell.is_mapped() && cell.book().is_some())
         .filter_map(|cell| {
-            let bounds = cell.compute_bounds(body)?;
+            let bounds = row_bounds(&cell, body)?;
             (bounds.y() + bounds.height() > 0.0).then_some((cell, bounds))
         })
-        .min_by(|(_, a), (_, b)| {
-            (a.y(), a.x())
-                .partial_cmp(&(b.y(), b.x()))
-                .unwrap_or(std::cmp::Ordering::Equal)
+        .min_by(|(a, a_bounds), (b, b_bounds)| {
+            a_bounds.y().total_cmp(&b_bounds.y()).then_with(|| {
+                a.book()
+                    .map(|book| book.rank())
+                    .cmp(&b.book().map(|book| book.rank()))
+            })
         })
         .map(|(cell, bounds)| (cell, bounds.y()))
 }

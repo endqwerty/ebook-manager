@@ -32,6 +32,7 @@ struct Library {
     settings: RefCell<Settings>,
     settings_file: PathBuf,
     saving: Cell<bool>,
+    saved: RefCell<Settings>,
     /// The view is to be built anew when the model next has its books.
     rebuild: Cell<bool>,
     /// The view on screen was built since the reader was last placed.
@@ -154,8 +155,9 @@ impl Library {
         let rebuilt = self.rebuilt.take();
         let serial = self.placed.get() + 1;
         self.placed.set(serial);
+        let keep_top = rebuilt || placed.background;
         if let Some(rank) = placed.current {
-            if was.focused || !placed.background {
+            if was.focused || !keep_top {
                 self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::FOCUS));
             }
             // The book that held the keyboard focus went with the old view.
@@ -163,10 +165,8 @@ impl Library {
                 self.with_view(|view| view.body().grab_focus());
             }
         }
-        // A search or sort the reader asked for starts at the book they
-        // were on, or at the top. A change they did not ask for leaves the
-        // page where it was.
-        if !placed.background {
+        // A new layout and a catalogue refresh both keep the top book.
+        if !keep_top {
             return;
         }
         let Some(rank) = placed.top else { return };
@@ -198,14 +198,15 @@ impl Library {
                     views::cells(&body)
                         .into_iter()
                         .find(|cell| cell.book().is_some_and(|book| book.rank() == rank))
-                        .and_then(|cell| cell.compute_bounds(&body))
+                        .and_then(|cell| views::row_bounds(&cell, &body))
                 })
                 .flatten();
             let Some(bounds) = found else {
                 return glib::ControlFlow::Continue;
             };
             let adjustment = library.scrolled.vadjustment();
-            adjustment.set_value(adjustment.value() + f64::from(bounds.y() - top_offset));
+            let value = adjustment.value() + f64::from(bounds.y() - top_offset);
+            adjustment.set_value(if rebuilt { value.ceil() } else { value });
             glib::ControlFlow::Break
         });
     }
@@ -272,6 +273,7 @@ impl Library {
                         layout: Box::new(move |columns| {
                             if let Some(library) = layouts.upgrade() {
                                 library.settings.borrow_mut().columns = columns;
+                                library.show_choices();
                                 library.save_soon();
                             }
                         }),
@@ -288,6 +290,12 @@ impl Library {
                 gio::prelude::ActionGroupExt::activate_action(&window, "read", None);
             }
         });
+        self.scrolled
+            .set_hscrollbar_policy(if kind == ViewKind::Table {
+                gtk::PolicyType::Automatic
+            } else {
+                gtk::PolicyType::Never
+            });
         self.scrolled.set_child(Some(view.widget()));
         self.view.replace(Some((kind, view)));
         self.rebuilt.set(true);
@@ -303,7 +311,7 @@ impl Library {
     /// Writes the remembered choices shortly, once for a run of changes
     /// such as a column being dragged wider.
     fn save_soon(self: &Rc<Self>) {
-        if self.saving.replace(true) {
+        if *self.settings.borrow() == *self.saved.borrow() || self.saving.replace(true) {
             return;
         }
         let weak = Rc::downgrade(self);
@@ -317,7 +325,10 @@ impl Library {
     fn save(&self) {
         self.saving.set(false);
         // The choices are a convenience. Losing them is not worth a message.
-        let _ = self.settings.borrow().save(&self.settings_file);
+        let settings = self.settings.borrow();
+        if *settings != *self.saved.borrow() && settings.save(&self.settings_file).is_ok() {
+            self.saved.replace(settings.clone());
+        }
     }
 
     /// Runs `command` with the ID of each selected book.
@@ -584,7 +595,7 @@ pub fn accelerators(app: &adw::Application) {
         ("win.search", &["<Control>f"]),
         ("win.view('grid')", &["<Control>1"]),
         ("win.view('list')", &["<Control>2"]),
-        ("win.view('table')", &["<Control>3"]),
+        ("win.view-table", &["<Control>3"]),
         ("win.sort-more", &["<Control><Shift>s"]),
         ("win.refresh", &["F5", "<Control>r"]),
         ("win.edit", &["F2"]),
@@ -678,10 +689,7 @@ pub fn open(app: &adw::Application) {
     let settings_file = glib::user_config_dir().join("ebook-manager/settings.json");
     let settings = Settings::load(&settings_file);
     let library = Rc::new({
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .build();
+        let scrolled = gtk::ScrolledWindow::builder().vexpand(true).build();
         let pages = gtk::Stack::new();
         pages.set_vexpand(true);
         Library {
@@ -694,6 +702,7 @@ pub fn open(app: &adw::Application) {
             view: RefCell::new(None),
             narrow: Cell::new(false),
             sorted_by: Rc::new(Cell::new(settings.sort(settings.view).first().field)),
+            saved: RefCell::new(settings.clone()),
             settings: RefCell::new(settings),
             settings_file,
             saving: Cell::new(false),
