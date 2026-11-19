@@ -368,11 +368,8 @@ def gone(name):
 
 
 def search(words):
-    """Types into the library window, which opens the search. The pause lets
-    the search field take the focus: GTK drops a second key that arrives
-    within a few milliseconds of the one that opened it."""
-    type_text(words[0])
-    type_text(words[1:])
+    """Types into the library window, which opens the search."""
+    type_text(words)
 
 
 def select_book(words):
@@ -491,7 +488,9 @@ def run(binary, evidence, root):
         print("PASS file picker import", flush=True)
         # Typing anywhere in the window searches.
         focus("Ebook Manager")
-        search("unmatched")
+        # Faster than anyone types: every key must reach the search field,
+        # those typed while it opens included.
+        xd("type", "--delay", "3", "unmatched")
         find("No books match")
         find("Nothing in the library matches “unmatched”.", "label")
         capture("Ebook Manager", evidence / "no-match.png")
@@ -635,6 +634,24 @@ def covers(binary, evidence, root, proc):
     click("Done")
     find(f"{len(GALLERY) + 1} books")
     assert len(list(thumbs.glob("*.png"))) == with_cover, list(thumbs.iterdir())
+    # Return reads the selected book, as every key acts on the selection,
+    # when the focus has moved off it.
+    select_book("glass")
+    key("Escape")
+    find(f"{len(GALLERY) + 1} books")
+    key("ctrl+Right")
+    focused = [
+        node.get_name()
+        for node in walk(Atspi.get_desktop(0))
+        if node.get_role_name() == "table cell"
+        and node.get_state_set().contains(Atspi.StateType.FOCUSED)
+    ]
+    assert focused and not focused[0].startswith("The Glass Orchard"), focused
+    key("Return")
+    find("The Glass Orchard", "frame")
+    click("Back to library")
+    gone("Back to library")
+    print("PASS Return reads the selected book and not the focused one", flush=True)
     stop(proc)
     for name, extra in (
         ("grid-light", {"ADW_DEBUG_COLOR_SCHEME": "prefer-light"}),

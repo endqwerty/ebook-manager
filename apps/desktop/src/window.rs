@@ -215,7 +215,16 @@ impl Library {
         glib::spawn_future_local(async move {
             let mut books = vec![];
             for book in selected {
-                let row = book.loaded_row().await;
+                // The list was replaced before this row arrived, so the
+                // place no longer stands for a book.
+                let Some(row) = book.loaded_row().await else {
+                    notice(
+                        &library.window,
+                        "The list changed",
+                        "The book was still loading when the list changed. Select it again.",
+                    );
+                    return;
+                };
                 books.push((row.id.clone(), row.title.clone()));
             }
             if !books.is_empty() {
@@ -505,7 +514,6 @@ pub fn open(app: &adw::Application) {
         )
         .build();
     search_bar.connect_entry(&search);
-    search_bar.set_key_capture_widget(Some(&window));
     search_bar
         .bind_property("search-mode-enabled", &search_button, "active")
         .bidirectional()
@@ -606,6 +614,19 @@ pub fn open(app: &adw::Application) {
     library.pages.add_named(&library.scrolled, Some("books"));
     library.pages.add_named(&empty, Some("empty"));
     library.pages.add_named(&library.no_match, Some("none"));
+    let again = gtk::Button::builder()
+        .label("_Try Again")
+        .use_underline(true)
+        .halign(gtk::Align::Center)
+        .build();
+    again.add_css_class("pill");
+    let weak = model.downgrade();
+    again.connect_clicked(move |_| {
+        if let Some(model) = weak.upgrade() {
+            model.retry();
+        }
+    });
+    library.failed.set_child(Some(&again));
     library.pages.add_named(&library.failed, Some("failed"));
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -648,20 +669,14 @@ pub fn open(app: &adw::Application) {
             library.refresh_actions();
         }
     });
-    let weak = Rc::downgrade(&library);
-    library.grid.connect_activate(move |grid, position| {
-        let (Some(library), Some(book)) = (
-            weak.upgrade(),
-            grid.model()
-                .and_then(|model| model.item(position))
-                .and_downcast::<browse::BookObject>(),
-        ) else {
-            return;
-        };
-        glib::spawn_future_local(async move {
-            let id = book.loaded_row().await.id.clone();
-            library.read(id);
-        });
+    // Return and a double click read the selected book, as every command
+    // from the keyboard acts on the selection. A click selects the book it
+    // lands on, so for a pointer the two are the same book.
+    let weak = window.downgrade();
+    library.grid.connect_activate(move |_, _| {
+        if let Some(window) = weak.upgrade() {
+            gio::prelude::ActionGroupExt::activate_action(&window, "read", None);
+        }
     });
     let weak = Rc::downgrade(&library);
     library.width.connect_resize(move |_, _, _| {
@@ -721,8 +736,11 @@ pub fn open(app: &adw::Application) {
             library.search_for(search.text().as_str());
         }
     });
-    // With the search open and a book focused, typing goes on to the search
-    // field. The search bar itself passes keys on only while it is closed.
+    // Typing anywhere but in a text field goes to the search field, and
+    // opens the search if it is closed. The window does this itself and
+    // does not leave it to the search bar, which passes keys on only while
+    // it is closed: a key typed after the one that opened it, and before
+    // its field had the focus, was lost.
     let typing = gtk::EventControllerKey::new();
     typing.set_propagation_phase(gtk::PropagationPhase::Capture);
     let weak = Rc::downgrade(&library);
@@ -731,12 +749,15 @@ pub fn open(app: &adw::Application) {
         let Some(library) = weak.upgrade() else {
             return glib::Propagation::Proceed;
         };
+        let focus = gtk::prelude::GtkWindowExt::focus(&library.window);
+        let in_text = focus
+            .as_ref()
+            .is_some_and(|focus| focus.is::<gtk::Text>() || focus.is::<gtk::TextView>());
+        // On a book or a button, Space is that widget's own key.
         let printable = key
             .to_unicode()
-            .is_some_and(|c| !c.is_control() && c != ' ')
+            .is_some_and(|c| !c.is_control() && (c != ' ' || in_text))
             && !modifiers.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK);
-        let on_books = gtk::prelude::GtkWindowExt::focus(&library.window)
-            .is_none_or(|focus| focus.is_ancestor(&library.scrolled));
         let field = {
             let mut child = library.search.first_child();
             while child.as_ref().is_some_and(|c| !c.is::<gtk::Text>()) {
@@ -745,13 +766,21 @@ pub fn open(app: &adw::Application) {
             child
         };
         match field {
-            Some(field)
-                if printable
-                    && on_books
-                    && library.search_bar.is_search_mode()
-                    && typing.forward(&field) =>
-            {
-                library.search.grab_focus();
+            // The field takes the focus at once, and takes keys only when
+            // it is on screen, a frame later. Until then they are passed
+            // to it here.
+            Some(field) if printable && (!in_text || !field.is_mapped()) => {
+                library.search_bar.set_search_mode(true);
+                if !typing.forward(&field) {
+                    return glib::Propagation::Proceed;
+                }
+                // Taking the focus the ordinary way would select what has
+                // been typed, and the next key would replace it.
+                if let Some(text) = field.downcast_ref::<gtk::Text>()
+                    && !text.has_focus()
+                {
+                    text.grab_focus_without_selecting();
+                }
                 glib::Propagation::Stop
             }
             _ => glib::Propagation::Proceed,

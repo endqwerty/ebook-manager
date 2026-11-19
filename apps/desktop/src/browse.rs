@@ -5,11 +5,10 @@
 //! item is handed out at once and filled in when its page arrives. Books
 //! are tracked across views by ID, because a rank means nothing once the
 //! view is replaced.
+mod worker;
+
 use crate::store::Store;
-use ebook_library::{
-    BrowseQuery, BrowseReader, BrowseRow, Cancel, Cancelled, OpenView, SortOrder, SortTerm,
-    ViewToken,
-};
+use ebook_library::{BrowseRow, Cancel, OpenView, SortTerm, ViewToken};
 use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use gtk4 as gtk;
 use std::{
@@ -19,6 +18,7 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
+use worker::{Reply, Request};
 
 /// Rows come from the read thread in pages of this many.
 pub const PAGE: u32 = 128;
@@ -34,7 +34,7 @@ pub struct Query {
 }
 
 /// The books the window wants found again in the next view.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Anchors {
     /// The book commands act on: the focused one, else the selected one.
     pub current: Option<String>,
@@ -64,118 +64,13 @@ type OnReplaced = dyn Fn(Option<&Replaced>);
 
 /// How the window takes part in replacing a view.
 pub struct Hooks {
-    /// Asked just before a view is requested.
+    /// Asked when a view has opened and is about to be shown, so the
+    /// answer is where the reader is then and not where they were when the
+    /// view was asked for.
     pub anchors: Box<dyn Fn() -> Anchors>,
     /// Told after the model has swapped views, with where the anchors went,
     /// and with nothing when no view could be opened.
     pub replaced: Box<OnReplaced>,
-}
-
-enum Request {
-    Open {
-        serial: u64,
-        query: Query,
-        cancel: Cancel,
-        /// IDs to find in the new view.
-        keep: Vec<String>,
-        /// Answer `Unchanged` when the open view still matches the catalogue.
-        only_if_changed: bool,
-    },
-    Page {
-        token: ViewToken,
-        page: u32,
-    },
-}
-
-enum Reply {
-    Opened {
-        serial: u64,
-        view: OpenView,
-        kept: Vec<Option<u32>>,
-    },
-    Unchanged {
-        serial: u64,
-    },
-    Failed {
-        serial: u64,
-        message: String,
-    },
-    Page {
-        token: ViewToken,
-        page: u32,
-        rows: Vec<BrowseRow>,
-    },
-}
-
-fn open(
-    reader: &mut BrowseReader,
-    query: &Query,
-    cancel: &Cancel,
-    keep: &[String],
-) -> anyhow::Result<(OpenView, Vec<Option<u32>>)> {
-    let query = BrowseQuery {
-        text: query.text.clone(),
-        sort: if query.sort.is_empty() {
-            SortOrder::default()
-        } else {
-            SortOrder::new(query.sort.clone())?
-        },
-    };
-    let view = reader.open(&query, cancel)?;
-    let kept = reader.locate(view.token, keep)?;
-    Ok((view, kept))
-}
-
-fn serve(store: Store, requests: mpsc::Receiver<Request>, replies: async_channel::Sender<Reply>) {
-    let mut reader: Option<BrowseReader> = None;
-    for request in requests {
-        let reply = match request {
-            Request::Open {
-                serial,
-                query,
-                cancel,
-                keep,
-                only_if_changed,
-            } => {
-                let result = (|| {
-                    if reader.is_none() {
-                        reader = Some(store.call(|library| library.browse_reader())?);
-                    }
-                    let reader = reader.as_mut().expect("reader was just opened");
-                    if only_if_changed && !reader.changed()? {
-                        return Ok(None);
-                    }
-                    open(reader, &query, &cancel, &keep).map(Some)
-                })();
-                match result {
-                    Ok(Some((view, kept))) => Reply::Opened { serial, view, kept },
-                    Ok(None) => Reply::Unchanged { serial },
-                    // A newer request replaced this one, and its reply follows.
-                    Err(e) if e.is::<Cancelled>() => continue,
-                    Err(e) => {
-                        reader = None;
-                        Reply::Failed {
-                            serial,
-                            message: format!("{e:#}"),
-                        }
-                    }
-                }
-            }
-            Request::Page { token, page } => {
-                match reader
-                    .as_mut()
-                    .map(|reader| reader.window(token, page * PAGE, PAGE))
-                {
-                    Some(Ok(rows)) => Reply::Page { token, page, rows },
-                    // A newer open replaced the view, and its reply says so.
-                    _ => continue,
-                }
-            }
-        };
-        if replies.send_blocking(reply).is_err() {
-            return;
-        }
-    }
 }
 
 mod object {
@@ -188,6 +83,10 @@ mod object {
         /// Becomes true once, when the book's row has arrived.
         #[property(get)]
         pub loaded: Cell<bool>,
+        /// Becomes true once, when the view was replaced or lost before
+        /// the row arrived. It never will.
+        #[property(get)]
+        pub gone: Cell<bool>,
         pub row: RefCell<Option<Rc<BrowseRow>>>,
     }
     #[glib::object_subclass]
@@ -220,30 +119,85 @@ impl BookObject {
         self.imp().loaded.set(true);
         self.notify_loaded();
     }
-    /// The book's row, once its page has arrived. Never resolves if the
-    /// view is replaced first, so a command on a vanished row does nothing.
-    pub async fn loaded_row(&self) -> Rc<BrowseRow> {
-        if let Some(row) = self.row() {
-            return row;
+    /// The view this place was in has gone. If its row had not arrived, a
+    /// command waiting for it is told so.
+    fn leave(&self) {
+        if !self.loaded() && !self.imp().gone.replace(true) {
+            self.notify_gone();
         }
-        let (tx, rx) = async_channel::bounded(1);
-        let handler = self.connect_loaded_notify(move |_| {
+    }
+    /// The book's row, once its page has arrived. `None` when the view was
+    /// replaced or lost first, and the place no longer stands for a book.
+    pub async fn loaded_row(&self) -> Option<Rc<BrowseRow>> {
+        if self.row().is_some() || self.gone() {
+            return self.row();
+        }
+        let (tx, rx) = async_channel::bounded(2);
+        let arrived = tx.clone();
+        let loaded = self.connect_loaded_notify(move |_| {
+            let _ = arrived.try_send(());
+        });
+        let gone = self.connect_gone_notify(move |_| {
             let _ = tx.try_send(());
         });
-        let arrived = rx.recv().await;
-        self.disconnect(handler);
-        match (arrived, self.row()) {
-            (Ok(()), Some(row)) => row,
-            _ => std::future::pending().await,
-        }
+        let _ = rx.recv().await;
+        self.disconnect(loaded);
+        self.disconnect(gone);
+        self.row()
     }
 }
 
+/// The IDs of selected books, by rank. The selection itself is a bitset of
+/// ranks, which mean nothing in the next view, and a page that held a
+/// selected book can leave the cache before the view is replaced.
+#[derive(Default)]
+struct Chosen(HashMap<u32, String>);
+
+impl Chosen {
+    /// Takes the ID of each selected book among `rows`, and forgets books
+    /// no longer selected.
+    fn remember<'a>(
+        &mut self,
+        selected: impl Fn(u32) -> bool,
+        rows: impl Iterator<Item = (u32, &'a str)>,
+    ) {
+        self.0.retain(|rank, _| selected(*rank));
+        for (rank, id) in rows {
+            if selected(rank) {
+                self.0.entry(rank).or_insert_with(|| id.to_owned());
+            }
+        }
+    }
+    /// The selected books in view order.
+    fn ids(&self) -> Vec<String> {
+        let mut ranked: Vec<_> = self.0.iter().collect();
+        ranked.sort();
+        ranked.into_iter().map(|(_, id)| id.clone()).collect()
+    }
+}
+
+/// An open the read thread has been asked for.
 struct Opening {
     serial: u64,
     cancel: Cancel,
-    selected: usize,
     background: bool,
+    /// The view it made, waiting for its books to be found.
+    arrived: Option<Arrived>,
+}
+
+struct Arrived {
+    view: OpenView,
+    /// What was asked to be found in it.
+    asked: Asked,
+    /// How many times the reader had moved on by the time the answer came.
+    again: u32,
+}
+
+/// Where the reader is: the selected books and the window's anchors.
+#[derive(Clone, PartialEq)]
+struct Asked {
+    selected: Vec<String>,
+    anchors: Anchors,
 }
 
 struct State {
@@ -259,6 +213,7 @@ struct State {
     requested: HashSet<u32>,
     live: HashMap<u32, glib::WeakRef<BookObject>>,
     selection: gtk::Bitset,
+    chosen: Chosen,
     /// The catalogue changed while a view was opening.
     dirty: bool,
     last_refresh: Option<Instant>,
@@ -279,6 +234,7 @@ impl Default for State {
             requested: HashSet::new(),
             live: HashMap::new(),
             selection: gtk::Bitset::new_empty(),
+            chosen: Chosen::default(),
             dirty: false,
             last_refresh: None,
             refresh_waiting: false,
@@ -302,6 +258,34 @@ impl State {
                 self.pages.remove(&old);
             }
         }
+        self.remember_selected();
+    }
+    /// Notes the ID of every selected book whose row is in memory.
+    fn remember_selected(&mut self) {
+        let selection = &self.selection;
+        self.chosen.remember(
+            |rank| selection.contains(rank),
+            self.pages.iter().flat_map(|(page, rows)| {
+                rows.iter()
+                    .enumerate()
+                    .map(move |(n, row)| (page * PAGE + n as u32, row.id.as_str()))
+            }),
+        );
+    }
+    /// Empties the view, and returns the places that were waiting for a
+    /// row with how many items there were.
+    fn clear(&mut self) -> (Vec<BookObject>, u32) {
+        let left = self
+            .live
+            .drain()
+            .filter_map(|(_, weak)| weak.upgrade())
+            .collect();
+        self.pages.clear();
+        self.recent.clear();
+        self.requested.clear();
+        self.selection = gtk::Bitset::new_empty();
+        self.chosen = Chosen::default();
+        (left, std::mem::take(&mut self.count))
     }
 }
 
@@ -340,9 +324,8 @@ mod imp {
             if row.is_none()
                 && let Some(token) = state.view
                 && state.requested.insert(page)
-                && let Some(requests) = self.requests.get()
             {
-                let _ = requests.send(Request::Page { token, page });
+                self.send(Request::Page { token, page });
             }
             let object = BookObject::new(position, row);
             if state.live.len() > 4096 {
@@ -353,13 +336,31 @@ mod imp {
         }
     }
     impl BookListModel {
+        /// Sends a request to the read thread. If the thread has gone, the
+        /// model says so once the caller has returned.
+        pub(super) fn send(&self, request: Request) {
+            let sent = self
+                .requests
+                .get()
+                .is_some_and(|requests| requests.send(request).is_ok());
+            if !sent {
+                let weak = self.obj().downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(model) = weak.upgrade() {
+                        model.lose("The library reader has stopped.".into());
+                    }
+                });
+            }
+        }
+
         /// Applies a change to the selection and reports the span it touched.
         fn select(&self, change: impl FnOnce(&gtk::Bitset, u32)) -> bool {
             let span = {
-                let state = self.state.borrow();
+                let mut state = self.state.borrow_mut();
                 let before = state.selection.copy();
                 change(&state.selection, state.count);
                 before.difference(&state.selection);
+                state.remember_selected();
                 (!before.is_empty()).then(|| (before.minimum(), before.maximum()))
             };
             if let Some((first, last)) = span {
@@ -428,13 +429,18 @@ impl BookListModel {
         let model: Self = glib::Object::new();
         let (requests, received) = mpsc::channel();
         let (send, replies) = async_channel::unbounded();
-        std::thread::spawn(move || serve(store, received, send));
+        std::thread::spawn(move || worker::serve(store, received, send));
         let _ = model.imp().requests.set(requests);
         let weak = model.downgrade();
         glib::spawn_future_local(async move {
             while let Ok(reply) = replies.recv().await {
-                let Some(model) = weak.upgrade() else { break };
+                let Some(model) = weak.upgrade() else { return };
                 model.handle(reply);
+            }
+            // The read thread ended, which it does not do while it is asked
+            // for anything.
+            if let Some(model) = weak.upgrade() {
+                model.lose("The library reader has stopped.".into());
             }
         });
         model
@@ -462,6 +468,18 @@ impl BookListModel {
                 return;
             }
             state.query = query;
+        }
+        self.open(false);
+    }
+
+    /// Tries again to open the library after it could not be read.
+    pub fn retry(&self) {
+        {
+            let mut state = self.imp().state.borrow_mut();
+            state.status = Status::Loading;
+        }
+        if let Some(hooks) = self.hooks() {
+            (hooks.replaced)(None);
         }
         self.open(false);
     }
@@ -498,43 +516,65 @@ impl BookListModel {
     }
 
     fn open(&self, background: bool) {
+        let request = {
+            let mut state = self.imp().state.borrow_mut();
+            if let Some(earlier) = state.opening.take() {
+                earlier.cancel.cancel();
+            }
+            if background {
+                state.last_refresh = Some(Instant::now());
+            }
+            state.serial += 1;
+            let cancel = Cancel::default();
+            state.opening = Some(Opening {
+                serial: state.serial,
+                cancel: cancel.clone(),
+                background,
+                arrived: None,
+            });
+            Request::Open {
+                serial: state.serial,
+                query: state.query.clone(),
+                cancel,
+                only_if_changed: background,
+            }
+        };
+        self.imp().send(request);
+    }
+
+    /// Where the reader is now: what is selected, and the window's anchors.
+    fn asked(&self) -> Asked {
         let anchors = self
             .hooks()
             .map(|hooks| (hooks.anchors)())
             .unwrap_or_default();
-        let mut state = self.imp().state.borrow_mut();
-        if let Some(earlier) = state.opening.take() {
-            earlier.cancel.cancel();
+        Asked {
+            selected: self.imp().state.borrow().chosen.ids(),
+            anchors,
         }
-        if background {
-            state.last_refresh = Some(Instant::now());
-        }
-        // A selected row that never loaded has no ID to find it by.
-        let mut keep: Vec<String> = gtk::BitsetIter::init_first(&state.selection)
-            .into_iter()
-            .flat_map(|(iter, first)| std::iter::once(first).chain(iter))
-            .filter_map(|rank| Some(state.row(rank)?.id.clone()))
-            .collect();
-        let selected = keep.len();
-        keep.push(anchors.current.unwrap_or_default());
-        keep.push(anchors.top.unwrap_or_default());
-        state.serial += 1;
-        let cancel = Cancel::default();
-        state.opening = Some(Opening {
-            serial: state.serial,
-            cancel: cancel.clone(),
-            selected,
-            background,
-        });
-        if let Some(requests) = self.imp().requests.get() {
-            let _ = requests.send(Request::Open {
-                serial: state.serial,
-                query: state.query.clone(),
-                cancel,
-                keep,
-                only_if_changed: background,
-            });
-        }
+    }
+
+    /// Asks the read thread where the reader's books are in the view that
+    /// has just opened.
+    fn locate(&self, view: OpenView, again: u32) {
+        let asked = self.asked();
+        let request = {
+            let mut state = self.imp().state.borrow_mut();
+            let Some(opening) = state.opening.as_mut() else {
+                return;
+            };
+            let mut ids = asked.selected.clone();
+            ids.push(asked.anchors.current.clone().unwrap_or_default());
+            ids.push(asked.anchors.top.clone().unwrap_or_default());
+            let request = Request::Locate {
+                serial: opening.serial,
+                token: view.token,
+                ids,
+            };
+            opening.arrived = Some(Arrived { view, asked, again });
+            request
+        };
+        self.imp().send(request);
     }
 
     /// The open with this serial has been answered. `None` for an answer to
@@ -547,48 +587,103 @@ impl BookListModel {
         state.opening.take()
     }
 
+    fn opening(&self, serial: u64) -> bool {
+        let state = self.imp().state.borrow();
+        state.opening.as_ref().is_some_and(|o| o.serial == serial)
+    }
+
+    /// Replaces what the model holds with a view whose books have been found.
+    fn swap(&self, opening: Opening, view: OpenView, asked: &Asked, ranks: &[Option<u32>]) {
+        let (left, before) = {
+            let mut state = self.imp().state.borrow_mut();
+            state.view = Some(view.token);
+            state.status = Status::Ready;
+            // The interval runs from when a refresh is shown.
+            if opening.background {
+                state.last_refresh = Some(Instant::now());
+            }
+            state.clear()
+        };
+        for place in left {
+            place.leave();
+        }
+        // Two signals, not one. Given a removal and an addition together,
+        // a GTK list asks for every added item to see whether a row it is
+        // showing can stay: 100,000 calls. Between the two the model is
+        // empty in every answer it gives: no items and nothing selected.
+        self.items_changed(0, before, 0);
+        {
+            let mut state = self.imp().state.borrow_mut();
+            state.count = view.count;
+            for (id, rank) in asked.selected.iter().zip(ranks) {
+                if let Some(rank) = rank {
+                    state.selection.add(*rank);
+                    state.chosen.0.insert(*rank, id.clone());
+                }
+            }
+            state.store_page(0, view.first);
+        }
+        self.items_changed(0, 0, view.count);
+        let replaced = Replaced {
+            current: ranks[asked.selected.len()],
+            top: ranks[asked.selected.len() + 1],
+            background: opening.background,
+        };
+        if let Some(hooks) = self.hooks() {
+            (hooks.replaced)(Some(&replaced));
+        }
+        self.settle();
+    }
+
+    /// The view can no longer be read. The window shows why, and every
+    /// place waiting for its row is told it will not come.
+    fn lose(&self, message: String) {
+        let (left, before) = {
+            let mut state = self.imp().state.borrow_mut();
+            if let Some(opening) = state.opening.take() {
+                opening.cancel.cancel();
+            }
+            state.view = None;
+            state.status = Status::Failed(message);
+            state.clear()
+        };
+        for place in left {
+            place.leave();
+        }
+        if before > 0 {
+            self.items_changed(0, before, 0);
+        }
+        if let Some(hooks) = self.hooks() {
+            (hooks.replaced)(None);
+        }
+    }
+
     fn handle(&self, reply: Reply) {
         match reply {
-            Reply::Opened { serial, view, kept } => {
-                let Some(opening) = self.finish(serial) else {
-                    return;
-                };
-                let (before, replaced) = {
-                    let mut state = self.imp().state.borrow_mut();
-                    let before = state.count;
-                    state.view = Some(view.token);
-                    state.count = 0;
-                    state.status = Status::Ready;
-                    // The interval runs from when a refresh is shown.
-                    if opening.background {
-                        state.last_refresh = Some(Instant::now());
-                    }
-                    state.pages.clear();
-                    state.recent.clear();
-                    state.requested.clear();
-                    state.live.clear();
-                    state.store_page(0, view.first);
-                    state.selection = gtk::Bitset::new_empty();
-                    for rank in kept[..opening.selected].iter().flatten() {
-                        state.selection.add(*rank);
-                    }
-                    let replaced = Replaced {
-                        current: kept[opening.selected],
-                        top: kept[opening.selected + 1],
-                        background: opening.background,
-                    };
-                    (before, replaced)
-                };
-                // Two signals, not one. Given a removal and an addition
-                // together, a GTK list asks for every added item to see
-                // whether a row it is showing can stay: 100,000 calls.
-                self.items_changed(0, before, 0);
-                self.imp().state.borrow_mut().count = view.count;
-                self.items_changed(0, 0, view.count);
-                if let Some(hooks) = self.hooks() {
-                    (hooks.replaced)(Some(&replaced));
+            Reply::Opened { serial, view } => {
+                if self.opening(serial) {
+                    self.locate(view, 0);
                 }
-                self.settle();
+            }
+            Reply::Located { serial, ranks } => {
+                if !self.opening(serial) {
+                    return;
+                }
+                let now = self.asked();
+                let arrived = {
+                    let mut state = self.imp().state.borrow_mut();
+                    state.opening.as_mut().and_then(|o| o.arrived.take())
+                };
+                let Some(arrived) = arrived else { return };
+                // The reader scrolled or selected while their books were
+                // being found. Find them again, a few times at most.
+                if arrived.asked != now && arrived.again < 3 {
+                    self.locate(arrived.view, arrived.again + 1);
+                    return;
+                }
+                if let Some(opening) = self.finish(serial) {
+                    self.swap(opening, arrived.view, &arrived.asked, &ranks);
+                }
             }
             Reply::Unchanged { serial } => {
                 if self.finish(serial).is_some() {
@@ -599,17 +694,10 @@ impl BookListModel {
                 if self.finish(serial).is_none() {
                     return;
                 }
-                let shown = {
-                    let mut state = self.imp().state.borrow_mut();
-                    // A view that is open stays usable when its refresh fails.
-                    let first = state.view.is_none();
-                    if first {
-                        state.status = Status::Failed(message);
-                    }
-                    first
-                };
-                if shown && let Some(hooks) = self.hooks() {
-                    (hooks.replaced)(None);
+                // A view that is open stays readable when its refresh
+                // fails, and the next change to the catalogue tries again.
+                if self.imp().state.borrow().view.is_none() {
+                    self.lose(message);
                 }
                 self.settle();
             }
@@ -629,6 +717,20 @@ impl BookListModel {
                 };
                 for (object, row) in arrived {
                     object.fill(row);
+                }
+            }
+            Reply::Lost { token, message } => {
+                let (current, arriving) = {
+                    let state = self.imp().state.borrow();
+                    let arriving = state
+                        .opening
+                        .as_ref()
+                        .and_then(|o| o.arrived.as_ref())
+                        .is_some_and(|arrived| arrived.view.token == token);
+                    (state.view == Some(token), arriving)
+                };
+                if current || arriving {
+                    self.lose(message);
                 }
             }
         }
@@ -664,5 +766,29 @@ impl BookListModel {
             .into_iter()
             .filter_map(|rank| self.item(rank).and_downcast())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Chosen;
+
+    #[test]
+    fn a_selected_book_is_known_by_id_after_its_page_leaves_memory() {
+        let mut chosen = Chosen::default();
+        let selected = |rank: u32| rank == 3 || rank == 200;
+        // The page holding rank 3 is in memory, and the book is selected.
+        chosen.remember(selected, [(2, "b"), (3, "c")].into_iter());
+        // That page is dropped and another loads.
+        chosen.remember(selected, [(200, "x"), (201, "y")].into_iter());
+        assert_eq!(chosen.ids(), ["c", "x"]);
+    }
+
+    #[test]
+    fn a_book_no_longer_selected_is_forgotten() {
+        let mut chosen = Chosen::default();
+        chosen.remember(|rank| rank == 3, [(3, "c")].into_iter());
+        chosen.remember(|_| false, std::iter::empty());
+        assert!(chosen.ids().is_empty());
     }
 }
