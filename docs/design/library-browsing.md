@@ -420,17 +420,23 @@ flowchart LR
   arrived waits for that page.
 - **Changing the query.** A new search or sort cancels the one in flight and
   opens a view. The model swaps the count, the first page and the token
-  together and emits one `items-changed`.
+  together. It reports the swap as a removal of every item and then an
+  addition. Given both in one `items-changed`, a GTK list asks the model for
+  every added item to see which rows it can keep, which is 100,000 calls.
 - **Selection, focus and scroll position** are kept by book ID in the model:
   the selected books, the focused book and the first book on screen. After a
   view is replaced, `locate` finds where they went. Books no longer in the
   view leave the selection, and the view scrolls to keep the focused book on
   screen if it is still there, else the first book that was on screen, else
-  the top.
+  the top. A view replaced because the catalogue changed, and not by the
+  reader, keeps the first book on screen where it was and does not scroll to
+  the focused one. A selected row whose page never loaded has no ID to find
+  it by and leaves the selection. With no book focused, the one found again
+  is the first selected.
 - **When the catalogue changes** (an import, an edit, a saved position), the
-  write thread tells the window. The model coalesces these, reopens the same
-  query off the main thread, and swaps as above. During an import it reopens
-  at most once a second.
+  write thread tells the window after each job. The model asks the read
+  thread whether the catalogue changed and, if so, reopens the same query
+  there and swaps as above. It shows such a refresh at most once a second.
 - **Grid** is a `GtkGridView`. A cell is a custom `Cover` widget and a caption.
   `Cover` draws the frame, image, edge line, spine shade and shadows from
   [the cover table](interface.md#covers), the binding set in type for a book
@@ -515,12 +521,19 @@ needed 135 reads for its primary-key fetches and import needed 25 for its
 indexed lookups. None of these samples fetched bytes from physical storage.
 CI reports the step as **Scale benchmark**.
 
-The window's own start is measured from the third pull request on, when the
-window is paged. Until then the desktop keeps `Library::search` and its
-current window, and is no faster than today. It is measured in the desktop smoke run: with a 100,000
-book catalogue in place, the time from starting the process to the first
-titles being readable through the accessibility tree must be under 2 seconds
-plus the driver's own polling interval.
+The window's own start is measured by `apps/desktop/tests/scale.py`, which CI
+runs as **Desktop at 100,000 books**. With a generated catalogue of 100,000
+books in place it starts the app five times after one uncounted start. The
+median time from starting the process to the first titles being readable
+through the accessibility tree must be under 2 seconds plus the time the
+driver's own look takes, which was up to 0.07 seconds. Locally the median is
+0.26 seconds, with a range of 0.25 to 0.30, so the limit is about eight times
+the measurement. A launch is bounded by GTK starting, 0.1 seconds, and by the
+catalogue putting the books in order on one thread, 0.06 seconds. The rest
+builds and draws the first rows. The check then searches, jumps to the last
+row, and imports 400 generated EPUBs. During that import the count on screen
+must change no more often than once a second, and the books on screen and the
+selected one must be the same after three refreshes.
 
 ## Behaviour
 
@@ -651,12 +664,17 @@ same time.
    Closes [#28](https://github.com/endqwerty/ebook-manager/issues/28).
 2. **Helper facts and covers** (done). Everything under `crates/ebook-reader`.
    Behaviour 15.
-3. **The window** (open). After 1 and 2. Import passes the helper's facts
-   into `ParsedMetadata`, the reader saves the fraction read, the thumbnail
-   cache, the survey, the model, Grid, List and Table, the controls, actions
-   and remembered choices, and the launch time check. Behaviour 17 without the
-   shelf.
+3. **The window** (in two pull requests, the first done). After 1 and 2.
+   Behaviour 17 without the shelf.
    Closes [#25](https://github.com/endqwerty/ebook-manager/issues/25).
+   - First (done): import passes the helper's facts into `ParsedMetadata`,
+     the reader saves the fraction read, the thumbnail cache, the survey, the
+     model, Grid, search, the actions and their keys, the Edit window's
+     filing fields, and the launch time check. `Library::search` is deleted.
+     A view stays readable after the catalogue changes, which the first
+     pull request's contract did not allow and an import needs.
+   - Second (open): List and Table, the view switch, the Sort menu and its
+     editor, the cover sizes and the remembered choices.
 4. **The shelf** (open). After 3. Behaviour 18.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).
 
