@@ -66,5 +66,25 @@ fn e4_only_one_racing_job_publishes_a_checked_readable_copy() {
         Some("A catalogue title & subtitle")
     );
     assert_eq!(book.metadata().authors[0].name, "Catalogue Author");
-    assert!(!book.read_chapter(0).unwrap().blocks.is_empty());
+    let titles: Vec<_> = book
+        .chapters()
+        .iter()
+        .map(|c| c.title.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Chapter One: The Lamp",
+            "Chapter Two: The Storm",
+            "Chapter Three: Morning"
+        ]
+    );
+    let page = book.read_chapter(0).unwrap();
+    let text: String = page
+        .blocks
+        .iter()
+        .flat_map(|b| b.spans.iter().map(|s| s.text.as_str()))
+        .collect();
+    assert!(text.contains("Marta Ruiz & her cat"));
+    assert!(winner.report.losses.iter().any(|loss| loss.contains("GIF")));
 }
