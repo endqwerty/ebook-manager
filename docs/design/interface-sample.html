@@ -5,34 +5,34 @@
 <title>Interface sample</title>
 <!-- Illustrates docs/design/interface.md. Add #dark to the address for dark appearance.
      Regenerate the pictures with:
-     chromium --headless --hide-scrollbars --window-size=820,1470 --screenshot=interface-sample-light.png interface-sample.html
-     and the same with interface-sample.html#dark for interface-sample-dark.png. -->
+     chromium --headless --hide-scrollbars --window-size=820,1700 --screenshot=interface-sample-light.png interface-sample.html
+     and the same with interface-sample.html#dark for interface-sample-dark.png.
+     The covers are drawn here and are not real cover art. -->
 <style>
-  /* Binding type is 11% and 9% of the cover's width: 10.8px and 8.8px on a 98px cover, 17.6px and 14.4px at 160px. */
   :root {
-    --background: #f6f6f7; --foreground: #1c1c1f; --card: #ffffff; --border: #dcdce0;
+    --background: #f6f6f7; --foreground: #1c1c1f; --card: #ffffff; --border: #dcdce0; --fill: #e9e9ec;
     --primary: #2f6fde; --primary-foreground: #ffffff; --radius: 10px;
     --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Adwaita Sans", Roboto, sans-serif;
-    --contact: rgba(0,0,0,.16); --ambient: rgba(0,0,0,.16); --edge: rgba(0,0,0,.08);
+    --contact: rgba(0,0,0,.16); --ambient: rgba(0,0,0,.16); --edge: rgba(0,0,0,.12);
     --serif: "New York", "Iowan Old Style", "Sitka Text", Literata, "Source Serif 4", Charter, "Noto Serif", Georgia, serif;
     --hair: color-mix(in srgb, var(--foreground) 12%, transparent);
     --dim: color-mix(in srgb, var(--foreground) 62%, transparent);
     --faint: color-mix(in srgb, var(--foreground) 6%, transparent);
   }
   :root[data-theme="dark"] {
-    --background: #1b1b1e; --foreground: #f1f1f3; --card: #232326; --border: #37373c;
+    --background: #1b1b1e; --foreground: #f1f1f3; --card: #232326; --border: #37373c; --fill: #34343a;
     --primary: #5b93f0; --primary-foreground: #0b1220;
-    --contact: rgba(0,0,0,.28); --ambient: rgba(0,0,0,.28); --edge: rgba(255,255,255,.09);
+    --contact: rgba(0,0,0,.28); --ambient: rgba(0,0,0,.28); --edge: rgba(255,255,255,.18);
   }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 24px; background: var(--background); font: 13px/18px var(--font-sans); color: var(--foreground); }
   h2 { font: 600 11px/1.3 var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 28px 0 10px; }
   h2:first-of-type { margin-top: 0; }
-  p.note { color: var(--dim); margin: 8px 0 0; max-width: 64ch; }
+  p.note { color: var(--dim); margin: 8px 0 0; max-width: 66ch; }
 
   /* Stand-in frame: not part of the rules. */
   .window { display: grid; grid-template-columns: 158px 1fr; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-  .side { padding: 14px 8px; border-right: 1px solid var(--hair); background: var(--faint); }
+  .side { padding: 14px 8px; border-inline-end: 1px solid var(--hair); background: var(--faint); }
   .side h3 { font: 600 11px/1 var(--font-sans); color: var(--dim); margin: 16px 8px 6px; }
   .side h3:first-child { margin-top: 2px; }
   .side a { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: 6px; }
@@ -41,6 +41,7 @@
   .field { align-self: center; width: 150px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--hair); color: var(--dim); background: var(--faint); }
   .btn { align-self: center; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--hair); background: var(--faint); font-weight: 600; }
   .btn.pri { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
 
   /* Content layer: these follow the page. */
   .main { padding: 16px 20px 22px; min-width: 0; }
@@ -49,60 +50,68 @@
   .bar .count { color: var(--dim); font-variant-numeric: tabular-nums; }
   .bar .sp { flex: 1; }
 
-  .shelf { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 20px; row-gap: 28px; align-items: end; }
+  .shelf { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 20px; row-gap: 28px; }
   .book { min-width: 0; }
-  .cover {
-    position: relative; width: 100%; border-radius: 2px; overflow: hidden;
-    box-shadow: 0 1px 2px var(--contact), 0 6px 14px -4px var(--ambient);
-    display: flex; flex-direction: column; justify-content: space-between; padding: 12%;
-  }
-  .cover::before { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--edge); pointer-events: none; }
-  .cover::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 5%; background: linear-gradient(90deg, rgba(0,0,0,.14), rgba(0,0,0,0)); pointer-events: none; }
-  .cover .t { font: 600 10.8px/1.15 var(--serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
-  .cover .a { font: 8.8px/1.25 var(--font-sans); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-  .cover .rule { height: 1px; background: currentColor; margin: 6px 0; }
-  .meta { }
-  .meta .lines { height: 54px; }
-  .meta .t { font-weight: 600; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-  .meta .a { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cover { position: relative; width: 100%; aspect-ratio: 2/3; border-radius: 2px; overflow: hidden; background: var(--fill);
+    box-shadow: 0 1px 2px var(--contact), 0 6px 14px -4px var(--ambient); transition: transform .167s, box-shadow .167s; }
+  /* Spine shade below, edge line above everything. */
+  .cover::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 0; width: 5%; background: linear-gradient(90deg, rgba(0,0,0,.14), rgba(0,0,0,0)); pointer-events: none; z-index: 1; }
+  .cover.nofill::before { display: none; }
+  .cover::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--edge); pointer-events: none; z-index: 2; }
+  .art { position: absolute; inset: 0; overflow: hidden; }
+  .art i, .art b, .art u { font-style: normal; }
+  .art.fit { display: flex; align-items: center; }
+  .art.fit .sq { position: relative; width: 100%; aspect-ratio: 1; }
+  /* Binding set in type: padding 12%, title 11% and author 9% of the cover's width. */
+  .binding { display: flex; flex-direction: column; justify-content: space-between; padding: 12%; }
+  .binding .t { font: 600 10.8px/1.15 var(--serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+  .binding .a { font: 8.8px/1.25 var(--font-sans); display: none; }
+  .binding .rule { height: 1px; background: currentColor; margin: 6px 0; }
+  .b-umber { background: #7a3b22; color: #f1e6cc; }
+  .b-slate { background: #465366; color: #f1e6cc; }
+  .b-navy { background: #24405c; color: #f1e6cc; }
+
   .prog { height: 2px; border-radius: 1px; background: var(--hair); margin: 5px 0; }
   .prog i { display: block; height: 100%; border-radius: 1px; background: var(--dim); }
   .prog.none { background: transparent; }
+  .meta .lines { height: 54px; }
+  .meta .t { font-weight: 600; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .meta .a { display: flex; gap: 4px; font-size: 12px; color: var(--dim); }
+  .meta .a span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta .a .chk { flex: none; }
 
-  /* Stand-ins for artwork. Every cover is a 2:3 frame. */
-  .c1 { aspect-ratio: 2/3; background: #1d3557; color: #e9e2cf; }
-  .c2 { aspect-ratio: 2/3; background: #7b2d26; color: #f1dfc0; }
-  .c3 { aspect-ratio: 2/3; background: #e8e0cc; color: #2b2a26; }
-  .c4 { aspect-ratio: 2/3; background: #3a5a40; color: #faeac3; }
-  .c5 { aspect-ratio: 2/3; background: #1f1f22; color: #d9c48a; }
-  .c6 { aspect-ratio: 2/3; background: #c9973f; color: #23190a; }
-  .c7 { aspect-ratio: 2/3; background: #4a3f6b; color: #ece6f5; }
-  .c8 { aspect-ratio: 2/3; background: #d7dbd4; color: #24322a; }
-  .c9 { aspect-ratio: 2/3; background: #5c2a3a; color: #f3e3cf; }
-  /* Bindings set in type, from the page's palette. */
-  .b-umber { aspect-ratio: 2/3; background: #7a3b22; color: #f1e6cc; }
-  .b-moss { aspect-ratio: 2/3; background: #2f3a2b; color: #f1e6cc; }
-
-  .row3 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
-  .cell { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
-  .cell .stage { height: 166px; display: flex; align-items: flex-end; justify-content: center; }
-  .cell .stage .cover { width: 96px; }
-  .cell b { display: block; margin-top: 14px; }
+  .row5 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+  .cell { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 12px; }
+  .cell .stage { display: flex; justify-content: center; padding: 8px 0 0; }
+  .cell .stage .book { width: 96px; padding: 6px; margin: -6px; border-radius: 8px; }
+  .cell > b { display: block; margin-top: 8px; }
   .cell small { color: var(--dim); font-size: 12px; }
-  .lift .cover { transform: translateY(-3px); box-shadow: 0 2px 3px var(--contact), 0 14px 22px -4px var(--ambient); }
-  .sel .cover { outline: 3px solid var(--primary); outline-offset: 3px; }
+  .lift .cover { transform: translateY(-2px); box-shadow: 0 2px 3px var(--contact), 0 9px 18px -4px var(--ambient); }
+  .sel { background: color-mix(in srgb, var(--primary) 22%, transparent); }
+  .foc { outline: 2px solid var(--primary); outline-offset: 0; }
   .hc .cover { box-shadow: none; outline: 1px solid var(--foreground); }
   .hc .cover::before, .hc .cover::after { display: none; }
 
-  .detail { display: grid; grid-template-columns: 160px 1fr; gap: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
-  .detail .cover { align-self: start; border-radius: 2px; }
-  .detail .cover .t { font-size: 17.6px; }
-  .detail .cover .a { font-size: 14.4px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: start; font-weight: 400; font-size: 12px; color: var(--dim); padding: 0 10px 6px; border-bottom: 1px solid var(--hair); }
+  td { padding: 4px 10px; height: 36px; color: var(--dim); border-bottom: 1px solid var(--faint); }
+  td.ti { display: flex; align-items: center; gap: 10px; color: var(--foreground); font-weight: 600; }
+  th.n, td.n { text-align: end; font-variant-numeric: tabular-nums; }
+  .cover.mini { width: 19px; flex: none; border-radius: 1px; box-shadow: none; }
+  .cover.mini::before { display: none; }
+  .cover.mini.binding { padding: 0; display: block; }
+  .cover.mini * { display: none; }
+  .cover.mini .art { display: block; }
+
+  .detail { display: grid; grid-template-columns: 160px 1fr; gap: 22px; }
+  .detail .cover { align-self: start; }
+  .detail .cover .art { zoom: 1.6; }
   .detail h1 { font: 600 24px/1.15 var(--serif); letter-spacing: -.01em; margin: 0 0 2px; }
   .detail .by { font-size: 15px; line-height: 20px; color: var(--dim); }
+  .detail .ser { color: var(--dim); }
   .detail .acts { display: flex; gap: 8px; margin: 14px 0 16px; }
-  .detail dl { display: grid; grid-template-columns: 84px 1fr; gap: 5px 12px; margin: 0; }
-  .detail dt { color: var(--dim); text-align: right; }
+  .detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; }
+  .detail dt { color: var(--dim); }
   .detail dd { margin: 0; font-variant-numeric: tabular-nums; }
 </style>
 </head>
@@ -130,32 +139,47 @@
       <span class="field">Search</span><span class="btn pri">Add</span>
     </div>
     <div class="shelf">
-      <div class="book"><div class="cover c1"><div><div class="t">Moby-Dick</div><div class="rule"></div></div><div class="a">Herman Melville</div></div><div class="meta"><div class="prog"><i style="width:62%"></i></div><div class="lines"><div class="t" title="Moby-Dick">Moby-Dick</div><div class="a">Herman Melville</div></div></div></div>
-      <div class="book"><div class="cover c2"><div><div class="t">Middlemarch</div><div class="rule"></div></div><div class="a">George Eliot</div></div><div class="meta"><div class="prog"><i style="width:18%"></i></div><div class="lines"><div class="t" title="Middlemarch">Middlemarch</div><div class="a">George Eliot</div></div></div></div>
-      <div class="book"><div class="cover c3"><div><div class="t">The Waste Land</div><div class="rule"></div></div><div class="a">T. S. Eliot</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="The Waste Land">The Waste Land</div><div class="a">T. S. Eliot</div></div></div></div>
-      <div class="book"><div class="cover c4"><div><div class="t">Walden</div><div class="rule"></div></div><div class="a">Henry David Thoreau</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Walden">Walden</div><div class="a">Henry David Thoreau</div></div></div></div>
-      <div class="book"><div class="cover c5"><div><div class="t">Frankenstein</div><div class="rule"></div></div><div class="a">Mary Shelley</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Frankenstein; or, The Modern Prometheus">Frankenstein; or, The Modern Prometheus</div><div class="a">Mary Shelley</div></div></div></div>
-      <div class="book"><div class="cover c6"><div><div class="t">Dubliners</div><div class="rule"></div></div><div class="a">James Joyce</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Dubliners">Dubliners</div><div class="a">James Joyce <span class="chk" title="Finished">✓</span></div></div></div></div>
-      <div class="book"><div class="cover c7"><div><div class="t">Jane Eyre</div><div class="rule"></div></div><div class="a">Charlotte Brontë</div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a">Charlotte Brontë</div></div></div></div>
-      <div class="book"><div class="cover c8"><div><div class="t">Leaves of Grass</div><div class="rule"></div></div><div class="a">Walt Whitman</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Leaves of Grass">Leaves of Grass</div><div class="a">Walt Whitman</div></div></div></div>
-      <div class="book"><div class="cover b-umber"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Persuasion">Persuasion</div><div class="a">Jane Austen</div></div></div></div>
-      <div class="book"><div class="cover b-moss"><div><div class="t">The Odyssey</div><div class="rule"></div></div><div class="a">Homer</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="The Odyssey">The Odyssey</div><div class="a">Homer <span class="chk" title="Finished">✓</span></div></div></div></div>
+      <div class="book "><div class="cover"><div class="art" style="background:linear-gradient(180deg,#0f2a47 0%,#1d4e79 55%,#e9eef2 55%,#c9d6df 100%)"><i style="position:absolute;left:18%;top:30%;width:64%;aspect-ratio:1;border-radius:50%;background:#f4f1e8"></i><b style="position:absolute;left:10%;right:10%;bottom:9%;font:800 11px/1 var(--font-sans);letter-spacing:.04em;color:#0f2a47;text-align:center">MOBY-DICK</b></div></div><div class="meta"><div class="prog"><i style="width:62%"></i></div><div class="lines"><div class="t" title="Moby-Dick">Moby-Dick</div><div class="a"><span>Herman Melville</span></div></div></div></div>
+      <div class="book "><div class="cover"><div class="art" style="background:#efe6d2"><i style="position:absolute;left:0;right:0;top:38%;height:30%;background:#a23b2a"></i><b style="position:absolute;left:8%;right:8%;top:44%;font:italic 600 12px/1.1 Georgia,serif;color:#fbf3e0;text-align:center">Middlemarch</b><u style="position:absolute;left:0;right:0;bottom:8%;font:7px/1 var(--font-sans);letter-spacing:.12em;color:#5b4a3a;text-align:center;text-decoration:none">GEORGE ELIOT</u></div></div><div class="meta"><div class="prog"><i style="width:18%"></i></div><div class="lines"><div class="t" title="Middlemarch">Middlemarch</div><div class="a"><span>George Eliot</span></div></div></div></div>
+      <div class="book "><div class="cover"><div class="art" style="background:#f7f7f5"><b style="position:absolute;left:10%;top:10%;font:500 9px/1.2 var(--font-sans);color:#111">The<br>Waste<br>Land</b><i style="position:absolute;left:10%;bottom:10%;width:14%;height:2px;background:#111"></i></div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="The Waste Land">The Waste Land</div><div class="a"><span>T. S. Eliot</span></div></div></div></div>
+      <div class="book "><div class="cover"><div class="art" style="background:radial-gradient(120% 80% at 30% 20%,#9fc59a 0%,#3f6b4b 45%,#16301f 100%)"><b style="position:absolute;left:10%;bottom:10%;font:300 15px/1 var(--font-sans);color:#f3f7ee">walden</b></div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Walden">Walden</div><div class="a"><span>Henry David Thoreau</span><span class="chk">✓</span></div></div></div></div>
+      <div class="book "><div class="cover"><div class="art" style="background:#08080a"><b style="position:absolute;left:10%;right:10%;top:42%;font:400 8.5px/1.3 var(--font-sans);letter-spacing:.18em;color:#d8c36a;text-align:center">FRANKEN<br>STEIN</b></div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Frankenstein; or, The Modern Prometheus">Frankenstein; or, The Modern Prometheus</div><div class="a"><span>Mary Shelley</span></div></div></div></div>
+      <div class="book "><div class="cover"><div class="art" style="background:#d9772b"><b style="position:absolute;left:-6%;top:-12%;font:900 96px/1 Georgia,serif;color:#f6d9a8">D</b><u style="position:absolute;left:10%;bottom:9%;font:700 9px/1 var(--font-sans);color:#2a1505;text-decoration:none">Dubliners</u></div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Dubliners">Dubliners</div><div class="a"><span>James Joyce</span><span class="chk">✓</span></div></div></div></div>
+      <div class="book "><div class="cover"><div class="art" style="background:linear-gradient(160deg,#3b2a5c,#8a3f73 60%,#d98b7a)"><b style="position:absolute;left:10%;right:10%;top:12%;font:italic 400 14px/1.05 Georgia,serif;color:#fbeef0">Jane<br>Eyre</b></div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a"><span>Charlotte Brontë</span></div></div></div></div>
+      <div class="book "><div class="cover nofill"><div class="art fit"><div class="sq" style="background:repeating-linear-gradient(60deg,#5d8f4e 0 6px,#7fb069 6px 12px)"><b style="position:absolute;left:8%;right:8%;top:38%;font:700 9px/1.1 var(--font-sans);color:#fff;text-align:center;text-shadow:0 1px 2px rgba(0,0,0,.5)">LEAVES OF GRASS</b></div></div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Leaves of Grass">Leaves of Grass</div><div class="a"><span>Walt Whitman</span></div></div></div></div>
+      <div class="book "><div class="cover binding b-umber"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="Persuasion">Persuasion</div><div class="a"><span>Jane Austen</span></div></div></div></div>
+      <div class="book "><div class="cover binding b-slate"><div><div class="t">The Odyssey</div><div class="rule"></div></div><div class="a">Homer</div></div><div class="meta"><div class="prog none"></div><div class="lines"><div class="t" title="The Odyssey">The Odyssey</div><div class="a"><span>Homer</span><span class="chk">✓</span></div></div></div></div>
     </div>
   </div>
 </div>
-<p class="note">Every cover is the same size, so rows are level. No shelf is drawn. The screen title is the only serif. Captions start at the cover's leading edge and keep a fixed height, so rows stay level. A line marks a book being read and a check mark a finished one. The last two books have no cover image and get a binding set in type.</p>
+<p class="note">Eight covers stand in for artwork of different styles, including one nearly white, one nearly black, and a square image that does not fill its frame. The last two books have no image and get a binding set in type. Every frame is the same size. The screen title is the only serif. A line marks a book being read and a check mark a finished one, which stays visible when the author's name is cut short.</p>
 
 <h2>Cover states</h2>
-<div class="row3">
-  <div class="cell "><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>At rest</b><small>Corners of 2, contact and ambient shadow, hairline edge, spine shade.</small></div>
-  <div class="cell lift"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>Pointer over</b><small>Rises 3 units and the shadow lengthens. No scaling.</small></div>
-  <div class="cell sel"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>Selected</b><small>The platform's own selection visual, in the system accent.</small></div>
-  <div class="cell hc"><div class="stage"><div class="cover c9"><div><div class="t">Persuasion</div><div class="rule"></div></div><div class="a">Jane Austen</div></div></div><b>More contrast</b><small>No shadow or shade. An outline outside the edge.</small></div>
+<div class="row5">
+  <div class="cell"><div class="stage"><div class="book "><div class="cover"><div class="art" style="background:linear-gradient(160deg,#3b2a5c,#8a3f73 60%,#d98b7a)"><b style="position:absolute;left:10%;right:10%;top:12%;font:italic 400 14px/1.05 Georgia,serif;color:#fbeef0">Jane<br>Eyre</b></div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a"><span>Charlotte Brontë</span></div></div></div></div></div><b>At rest</b><small>Corners of 2, two-layer shadow, edge line, spine shade.</small></div>
+  <div class="cell"><div class="stage"><div class="book lift"><div class="cover"><div class="art" style="background:linear-gradient(160deg,#3b2a5c,#8a3f73 60%,#d98b7a)"><b style="position:absolute;left:10%;right:10%;top:12%;font:italic 400 14px/1.05 Georgia,serif;color:#fbeef0">Jane<br>Eyre</b></div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a"><span>Charlotte Brontë</span></div></div></div></div></div><b>Pointer over</b><small>Rises 2 units and the shadow lengthens a little. No scaling.</small></div>
+  <div class="cell"><div class="stage"><div class="book sel"><div class="cover"><div class="art" style="background:linear-gradient(160deg,#3b2a5c,#8a3f73 60%,#d98b7a)"><b style="position:absolute;left:10%;right:10%;top:12%;font:italic 400 14px/1.05 Georgia,serif;color:#fbeef0">Jane<br>Eyre</b></div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a"><span>Charlotte Brontë</span></div></div></div></div></div><b>Selected</b><small>The platform's own selection around cover and caption.</small></div>
+  <div class="cell"><div class="stage"><div class="book foc"><div class="cover"><div class="art" style="background:linear-gradient(160deg,#3b2a5c,#8a3f73 60%,#d98b7a)"><b style="position:absolute;left:10%;right:10%;top:12%;font:italic 400 14px/1.05 Georgia,serif;color:#fbeef0">Jane<br>Eyre</b></div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a"><span>Charlotte Brontë</span></div></div></div></div></div><b>Keyboard focus</b><small>The platform's own focus ring, distinct from selection.</small></div>
+  <div class="cell"><div class="stage"><div class="book hc"><div class="cover"><div class="art" style="background:linear-gradient(160deg,#3b2a5c,#8a3f73 60%,#d98b7a)"><b style="position:absolute;left:10%;right:10%;top:12%;font:italic 400 14px/1.05 Georgia,serif;color:#fbeef0">Jane<br>Eyre</b></div></div><div class="meta"><div class="prog"><i style="width:85%"></i></div><div class="lines"><div class="t" title="Jane Eyre">Jane Eyre</div><div class="a"><span>Charlotte Brontë</span></div></div></div></div></div><b>More contrast</b><small>No shadow or shade. An outline outside the edge.</small></div>
+</div>
+
+<h2>Table view</h2>
+<div class="panel">
+  <table>
+    <thead><tr><th>Title</th><th>Author</th><th>Series</th><th>Added ↓</th><th class="n">Progress</th></tr></thead>
+    <tbody>
+      <tr><td class="ti"><div class="cover mini"><div class="art" style="background:linear-gradient(180deg,#0f2a47 0%,#1d4e79 55%,#e9eef2 55%,#c9d6df 100%)"><i style="position:absolute;left:18%;top:30%;width:64%;aspect-ratio:1;border-radius:50%;background:#f4f1e8"></i><b style="position:absolute;left:10%;right:10%;bottom:9%;font:800 11px/1 var(--font-sans);letter-spacing:.04em;color:#0f2a47;text-align:center">MOBY-DICK</b></div></div><span>Moby-Dick</span></td><td>Herman Melville</td><td></td><td>12 Nov 2026</td><td class="n">62%</td></tr>
+      <tr><td class="ti"><div class="cover mini"><div class="art" style="background:#efe6d2"><i style="position:absolute;left:0;right:0;top:38%;height:30%;background:#a23b2a"></i><b style="position:absolute;left:8%;right:8%;top:44%;font:italic 600 12px/1.1 Georgia,serif;color:#fbf3e0;text-align:center">Middlemarch</b><u style="position:absolute;left:0;right:0;bottom:8%;font:7px/1 var(--font-sans);letter-spacing:.12em;color:#5b4a3a;text-align:center;text-decoration:none">GEORGE ELIOT</u></div></div><span>Middlemarch</span></td><td>George Eliot</td><td></td><td>12 Nov 2026</td><td class="n">18%</td></tr>
+      <tr><td class="ti"><div class="cover mini"><div class="art" style="background:#d9772b"><b style="position:absolute;left:-6%;top:-12%;font:900 96px/1 Georgia,serif;color:#f6d9a8">D</b><u style="position:absolute;left:10%;bottom:9%;font:700 9px/1 var(--font-sans);color:#2a1505;text-decoration:none">Dubliners</u></div></div><span>Dubliners</span></td><td>James Joyce</td><td></td><td>9 Nov 2026</td><td class="n">✓</td></tr>
+      <tr><td class="ti"><div class="cover binding b-slate mini"><div><div class="t">The Odyssey</div><div class="rule"></div></div><div class="a">Homer</div></div><span>The Odyssey</span></td><td>Homer</td><td>Epic Cycle, 2</td><td>3 Nov 2026</td><td class="n">✓</td></tr>
+      <tr><td class="ti"><div class="cover mini"><div class="art" style="background:#f7f7f5"><b style="position:absolute;left:10%;top:10%;font:500 9px/1.2 var(--font-sans);color:#111">The<br>Waste<br>Land</b><i style="position:absolute;left:10%;bottom:10%;width:14%;height:2px;background:#111"></i></div></div><span>The Waste Land</span></td><td>T. S. Eliot</td><td></td><td>1 Nov 2026</td><td class="n"></td></tr>
+    </tbody>
+  </table>
 </div>
 
 <h2>Book details</h2>
-<div class="detail">
-  <div class="cover c1"><div><div class="t">Moby-Dick</div><div class="rule"></div></div><div class="a">Herman Melville</div></div>
+<div class="panel detail">
+  <div class="cover"><div class="art" style="background:linear-gradient(180deg,#0f2a47 0%,#1d4e79 55%,#e9eef2 55%,#c9d6df 100%)"><i style="position:absolute;left:18%;top:30%;width:64%;aspect-ratio:1;border-radius:50%;background:#f4f1e8"></i><b style="position:absolute;left:10%;right:10%;bottom:9%;font:800 11px/1 var(--font-sans);letter-spacing:.04em;color:#0f2a47;text-align:center">MOBY-DICK</b></div></div>
   <div>
     <h1>Moby-Dick; or, The Whale</h1>
     <div class="by">Herman Melville</div>
@@ -169,7 +193,7 @@
     </dl>
   </div>
 </div>
-<p class="note">The book's title is the second place a serif appears. Labels align to the trailing edge against their values, as on a catalogue card. Numbers use tabular figures. One prominent action per screen. The book has no series, so that fact is left out.</p>
+<p class="note">The book's title is the second place a serif appears. The title, the action and the fact labels share one leading edge. Numbers use tabular figures. One prominent action per screen. The book has no series, so that line is left out.</p>
 
 </body>
 </html>

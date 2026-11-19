@@ -30,8 +30,9 @@ no custom styling, and its content matches the rules below.
 
 The pictures show the content rules on plain surfaces. Their sidebar, buttons
 and outlined panels are stand-ins and not a mock-up of any platform's frame.
-Their covers stand in for artwork, except the two labelled as bindings set in
-type. [`interface-sample.html`](interface-sample.html) draws both.
+Eight covers are drawn stand-ins for artwork of different styles and are not
+real cover art. The last two are bindings set in type. They also show the
+table view and the states of a cover. [`interface-sample.html`](interface-sample.html) draws both.
 
 ## What makes it feel like a library
 
@@ -53,37 +54,47 @@ book-shaped custom controls. They date the app and fight the platform's material
 Lengths are in the platform's own unit: points on Apple systems, effective pixels
 on Windows, CSS pixels in GTK and density-independent pixels on Android.
 
+Leading and trailing follow the interface language: leading is left in English
+and right in Arabic. The side of a cover that carries its spine follows the book
+and not the interface. See [Covers](#covers).
+
 ### Placement
 
-- The sidebar lists places, in this order: Library (All books, Reading now,
-  Unread, Finished), then Collections, then Devices. A count sits at the trailing
-  edge of each row.
-- The screen's title sits at the top of the content at its leading edge, with the
-  number of books beside it on the same baseline. It names the place selected in
-  the sidebar.
-- Search and Add go where the platform puts search and the primary action. See
-  [the platform table](#how-each-rule-maps-to-a-platform).
+- On a wide window the sidebar lists places, in this order: Library (All books,
+  Reading now, Unread, Finished), then Collections, then Devices. A count sits at
+  the trailing edge of each row.
+- On a phone the three groups become three destinations in the platform's bar:
+  Library, Collections and Devices. The four Library places become a filter at
+  the top of the Library grid, using the platform's filter control.
+- The screen's title names the place selected, with the number of books beside
+  it. Where the platform's bar shows a large title that collapses on scroll, the
+  bar owns the title. Elsewhere it sits at the top of the content at the leading
+  edge, with the count on the same baseline. The title appears once, never in
+  both places. See [the platform table](#how-each-rule-maps-to-a-platform).
+- Search and Add go where the platform puts search and the primary action.
 - A screen has one prominent action. On the library it is Add. On book details it
   is Read for a book not started, Continue reading for one partly read and Read
   again for a finished one. Every other action is plain, in a menu or in the
   context menu.
 - Book details put the cover at the leading edge, 160 wide, and the rest beside
-  it in this order: the title, the author, the prominent action with Send to
-  device after it, then the facts. The facts are Series, Published, Language,
-  Length, Format with file size, and Added. Leave out a fact the book lacks.
+  it in this order: the title, the author, the series with the book's number in
+  it, the prominent action with Send to device after it, then the facts. The
+  facts are Published, Language, Length, Format with file size, and Added. Leave
+  out a fact the book lacks.
 - When the details area is under 480 wide, the cover moves above the title and
   stays at the leading edge, 40% of the width and no wider than 160. The order
   below it is unchanged. The screen has no heading of its own, because the
   book's title is the heading.
 - A finished job shows no message. The reader sees the result: the books appear
   and the count changes. A running job shows progress where the platform puts it.
-  Only a problem that needs a decision gets a message, and it uses the
-  platform's part for that.
+  Only a problem that needs a decision gets a message. It stays until the reader
+  answers it and never dismisses itself.
 
 ### Alignment
 
-- One leading edge per screen. The title, section headers, the first cover in each
-  row and the first line of an empty state start at the same x position.
+- One leading edge per screen. The title, the first cover in each row, the first
+  line of an empty state and, in book details, the title, the action and the
+  fact labels start at the same x position.
 - Every cover in a grid is the same size: a frame two wide by three tall, as
   wide as its column. Cover images come in many proportions, and
   [the cover table](#covers) says how an image goes into the frame. Never stretch
@@ -93,13 +104,16 @@ on Windows, CSS pixels in GTK and density-independent pixels on Android.
   title's last line. The caption block keeps the height of three lines even when
   the title needs one. Every item in a row is therefore the same height, and the
   next row starts level.
+- The finished check mark sits at the trailing end of the author line in a slot
+  of its own. Only the author's name is truncated, never the mark.
 - Truncate at the end with an ellipsis. Wherever a title is truncated, the full
   title is available in a tooltip on pointer platforms and in book details
-  everywhere.
+  everywhere. In book details the title and author wrap and are never truncated.
 - In a table, text columns align to the leading edge and number columns to the
   trailing edge. Dates count as text.
-- In book details the labels align to the trailing edge of their column and the
-  values to the leading edge of theirs, so the two meet at one line.
+- In book details the fact labels are a column at the leading edge, as wide as
+  the longest label, in the secondary label colour. The values are a second
+  column beside it. Both align to their own leading edge.
 
 ### Type
 
@@ -117,10 +131,15 @@ on Windows, CSS pixels in GTK and density-independent pixels on Android.
   Small serif text renders poorly on low-density Windows and Linux displays.
 - The serif is semibold in titles. No italics, no small capitals and no all-capital
   labels anywhere in the interface.
+- A title in a script the serif does not cover uses the platform's serif for
+  that script. If that script has no serif, or none in semibold, the title uses
+  the UI font. Never mix a fallback face into one title by hand. Let the
+  platform's text system choose.
 - Counts, sizes, dates in tables and anything that updates in place use tabular
   figures so digits do not shift.
 - Capital letters follow each platform's own rule, so a string can differ between
-  shells. See [the platform table](#how-each-rule-maps-to-a-platform).
+  shells. See [the platform table](#how-each-rule-maps-to-a-platform). The rule
+  applies only to scripts that have capitals.
 
 ### Colour
 
@@ -146,14 +165,15 @@ the lesser one. Design and review each screen in both.
   materials have both appearances. A colour written as a number has one, so the
   content layer may use a fixed colour only where this page gives its value for
   both appearances.
-- Use the platform's own dark window colour. Do not darken it to pure black or
-  tint it warm.
+- Use the platform's own dark window colour, whatever it is. It is pure black on
+  an iPhone and a dark grey on GNOME. Do not replace it or tint it warm.
 - Cover artwork is shown as it is in both appearances. Never dim, invert or
   tint a cover.
 - What the app draws around a cover changes: the shadow and the edge line have
   a value for each appearance, under [Covers](#covers) and
-  [Shadows and depth](#shadows-and-depth). In dark appearance the edge line is
-  what separates a dark cover from the window, so it is never left out.
+  [Shadows and depth](#shadows-and-depth). A shadow does not show on a dark
+  window, so in dark appearance the edge line alone separates a dark cover from
+  the window. It is never left out.
 - Bindings set in type keep their colours in both appearances. Their text sits
   on the binding and not on the window, so its contrast does not change.
 - The progress line, its track, the check mark and the loading block use
@@ -170,19 +190,23 @@ A cover is the one thing in the window drawn as a physical object.
 | Property | Value |
 |---|---|
 | Shape | A frame of 2:3, width to height, for every book. Corners of 2 units, 3 when the cover is 200 units wide or more. The platform's control radius never applies to a cover. |
-| Image in the frame | When the image's width is between 0.59 and 0.75 of its height, scale it to fill the frame and crop the overflow equally from both sides or from top and bottom. That covers most book covers and removes at most 6% from each side. Any other image, such as a square audiobook cover, is scaled to fit whole and centred, and the rest of the frame takes the image's average colour. Book details use the same frame. |
-| Edge | A 1 unit line inside the edge, white at 9% in dark appearance and black at 8% in light, so a cover the colour of the window keeps its outline. |
-| Spine | A shade over the leading 5% of the width, black at 14% fading to nothing. Leave it out when the cover is under 64 units wide. |
-| Widths | Small 96, medium 128, large 160. Medium is the default. With a row W wide and a chosen width c, the grid has floor((W + 20) / (c + 20)) columns and never fewer than two. The columns share the row equally, so covers are c wide or a little more. Only the two-column minimum can make them narrower than c. |
+| Image that fills | When the image's width is between 0.56 and 0.80 of its height, scale it to fill the frame and crop the overflow equally from both sides or from top and bottom. That takes in most book covers and both common paper sizes, and removes at most 8.5% from each side. |
+| Image that does not fill | Any other image, such as a square audiobook cover or a wide comic, is scaled to fit whole and centred in the frame. The rest of the frame takes the platform's secondary fill colour. The spine shade is left out, and the edge line and shadow belong to the frame. |
+| Unusable image | An image with transparency is drawn over white. An image that fails to decode, or would have to be enlarged to more than three times its pixel size, is not used, and the book gets a binding set in type. |
+| Edge | A 1 unit line inside the frame's edge, drawn above everything else on the cover: white at 18% in dark appearance and black at 12% in light. It keeps the outline of a cover that is the colour of the window. |
+| Spine | A shade over 5% of the width, black at 14% fading to nothing, on the side the book is bound: the left for a book read left to right and the right for one read right to left, whatever the interface language. Leave it out when the cover is under 64 units wide. |
+| Widths | Small 96, medium 128, large 160. Medium is the default. With a row W wide and a chosen width c, the grid has floor((W + 20) / (c + 20)) columns, and one when that gives none. The columns share the row equally up to a cover width of 1.25 c. Past that, covers stay 1.25 c wide and the grid keeps to the leading edge. A cover is never wider than the row. |
 | Gaps | 20 between columns. 12 from cover to caption. 28 from the caption block to the next row. The larger gap between rows makes each row read as a shelf. |
 | Progress | A line 2 units thick in the middle of the gap between cover and caption, as wide as the cover: a track in the separator colour, filled from the leading edge in the secondary label colour. Drawn only while a book is partly read. The gap is the same for every book. |
 | Loading | The catalogue stores each cover's average colour when the book is imported. Until the image is decoded, fill the frame with that colour, then cross-fade. If the catalogue has none, use the platform's secondary fill colour. A cover never pops in and never shows a spinner. |
 
-A book with no cover image gets a binding set in type. It is 2:3, a flat colour,
-with padding of 12% of its width. The title is at the top in the serif, semibold,
-at 11% of the cover's width, on up to four lines and then an ellipsis. A hairline
-rule in the text colour follows it. The author is at the bottom in the UI font at
-9% of the width, on up to two lines, and is left out when unknown.
+A book with no usable cover image gets a binding set in type. It is 2:3, a flat
+colour, with padding of 12% of its width. The title is at the top in the serif,
+semibold, at 11% of the cover's width, on up to four lines and then an ellipsis.
+A hairline rule in the text colour follows it. The author is at the bottom in the
+UI font at 9% of the width, on up to two lines. Leave the author out when it is
+unknown or when the cover is under 110 units wide, where the type would be too
+small to read.
 
 Pick the colour so a book keeps it on every device. Take the SHA-256 of the
 book's identifier as UTF-8, read the first four bytes as an unsigned big-endian
@@ -196,7 +220,7 @@ number, and take it modulo 8. The result indexes this list from zero.
 | Umber | `#7a3b22` | `#f1e6cc` | 6.8:1 |
 | Plum | `#51446b` | `#f1e6cc` | 7.1:1 |
 | Ochre | `#b98a3c` | `#23190a` | 5.6:1 |
-| Charcoal | `#2a2b2f` | `#f1e6cc` | 11.4:1 |
+| Slate | `#465366` | `#f1e6cc` | 6.3:1 |
 | Moss | `#2f3a2b` | `#f1e6cc` | 9.6:1 |
 
 ### Shadows and depth
@@ -207,11 +231,63 @@ number, and take it modulo 8. The result indexes this list from zero.
   2 unit blur. An ambient shadow sits 6 units below with a 14 unit blur, pulled in
   by 4 units so it stays under the cover.
 - In light appearance both layers are black at 16%. In dark appearance they are
-  black at 28%, and the inner edge line does most of the work because a shadow
-  hardly shows on a dark window.
+  black at 28%. They add a little depth on a dark grey window and nothing on a
+  black one, which is why the edge line carries the outline there.
 - Light comes from above. Shadows fall straight down and never to the side.
 - Group content with space and alignment first, a hairline second. Boxes are for
   the platform's own grouped lists.
+
+### Selection, focus and commands
+
+- Selection and keyboard focus are two states and both are always visible. Each
+  uses the collection control's own visual around the whole item, cover and
+  caption together. The app draws neither. Do not restyle them to match the
+  cover's corners.
+- With a pointer, a click selects the book, and book details follow the selection
+  when the details pane is open. A double click or Return opens the reader. Space
+  opens or closes the details pane. In a window too narrow for a pane, Space
+  opens book details as a page and Escape goes back.
+- Arrow keys move focus through the grid in reading order and Tab moves between
+  the sidebar, the grid and the details pane. Selecting several books uses the
+  platform's own gestures and keys.
+- With touch, a tap opens book details and the prominent action there opens the
+  reader. A long press opens the context menu. Selecting several books uses the
+  platform's selection mode.
+- With several books selected, the details pane shows the number of books as its
+  title, such as "3 books", in the serif, then the facts the books share. It has
+  no cover and no Read action. Its actions are the ones that apply to all the
+  books: Send to device, Add to collection and Edit.
+- A command from a menu, the toolbar or the keyboard acts on the selection. A
+  context menu opened on a book outside the selection acts on that book alone
+  and leaves the selection as it was.
+- The context menu is in this order: Read, a separator, Show details, Edit, Add
+  to collection, Send to device, a separator, Remove from library. Remove uses
+  the platform's destructive style and is always last.
+
+### Drag and drop
+
+- Files and folders dropped anywhere on the window are added to the library.
+  The drop target is the whole content area, shown with the platform's own drop
+  highlight. The app draws no overlay or dashed box.
+- Books dragged from the grid can be dropped on a collection or a device in the
+  sidebar. The row under the pointer shows the platform's drop highlight. A row
+  that cannot take the books shows nothing.
+- The thing dragged is the cover, at the size it had in the grid. Several books
+  are the platform's stack with a count. The covers left behind stay in place
+  at half opacity until the drop.
+
+### Table view
+
+- The table is the second way to show the same books on a wide window, switched
+  from the toolbar. It is the platform's table control with its own headers,
+  sort indicator, row height and selection.
+- The first columns are Title, Author, Series, Added and Progress. Title is in
+  the emphasised body style and the rest are in body style in the secondary label
+  colour, so the title is what the eye finds in a row.
+- Title carries a small cover at its leading edge, 2:3, as tall as the row less
+  8 units, with the edge line, corners of 1 unit and no shadow or spine shade.
+- Progress is a percentage in tabular figures, empty for an unread book and a
+  check mark for a finished one.
 
 ### Motion
 
@@ -219,22 +295,17 @@ number, and take it modulo 8. The result indexes this list from zero.
   cross-fades in when its image arrives, over the platform's short control
   duration. Nothing loops, pulses or plays on arrival. Rows do not animate in
   when a screen opens.
-- Pointer over a cover: it rises 3 units and its shadow lengthens, the contact
-  layer to 2 units below with a 3 unit blur and the ambient layer to 14 below with
-  a 22 unit blur. It does not scale. Use the platform's short control duration.
+- Pointer over a cover: it rises 2 units and its shadow lengthens a little, the
+  contact layer to 2 units below with a 3 unit blur and the ambient layer to 9
+  below with an 18 unit blur. It does not scale. Use the platform's short control
+  duration. The movement shows in dark appearance too, where the shadow does not.
 - Press: the cover settles back to rest.
-- With a pointer, a click selects the book, and book details follow the selection
-  when the details pane is open. A double click or Return opens the reader. Space
-  opens or closes the details pane. In a window too narrow for a pane, Space
-  opens book details as a page and Escape goes back. The context menu holds
-  every other action.
-- With touch, a tap opens book details and the prominent action there opens the
-  reader. A long press opens the context menu.
 - Opening book details as a page, or the reader from anywhere: the cover travels
   from where it was to its place in the destination, using the platform's
-  shared-element transition. Closing reverses it to the same cover. If the cover
-  has scrolled out of view, cross-fade instead. A details pane beside the grid
-  changes its content with a cross-fade and nothing travels.
+  shared-element transition where it has one. Closing reverses it to the same
+  cover. If the cover has scrolled out of view, or the platform has no such
+  transition, cross-fade instead. A details pane beside the grid changes its
+  content with a cross-fade and nothing travels.
 - Sorting, filtering and resizing move covers to their new places with the
   platform's standard layout animation. With more than about 200 covers changing
   place, cross-fade the grid instead.
@@ -242,14 +313,20 @@ number, and take it modulo 8. The result indexes this list from zero.
 - When the system asks for less motion, replace the rise, the shared-element
   travel and the layout moves with a cross-fade or nothing.
 
-### Words
+### Words and empty states
 
 - Plain words in the reader's language: Library, Collection, Book, Author,
   Series, Add, Read. No bookish vocabulary such as tome, shelf-mate or bibliophile.
-- An empty state has a serif headline of a few words, one sentence in the UI font
-  saying what to do, and one action. For example "No books yet", "Add EPUB files
-  or a folder to start your library.", Add.
 - No exclamation marks. No praise for routine actions.
+- A place with nothing to show has a serif headline of a few words, one sentence
+  in the UI font and at most one action. There are three cases and they are never
+  confused.
+
+| Case | Headline | Sentence | Action |
+|---|---|---|---|
+| The catalogue is still loading | None. Show nothing for 300 ms, then the platform's indeterminate progress indicator. | None | None |
+| The library has no books | No books yet | Add EPUB files or a folder to start your library. | Add |
+| A search or filter matches nothing | No books match | Names what was searched for or which filter is on. | Clear search, or Clear filter |
 
 ### Settings that change the look
 
@@ -260,7 +337,7 @@ roles and the motion above are drawn by the app, so the app must follow them.
 | Setting | What the content layer does |
 |---|---|
 | Dark appearance | As described under [Light and dark](#light-and-dark). |
-| Larger text | The serif roles and captions scale with it. Multiply the chosen cover width by the system's text scale before counting columns, so the grid loses columns as text grows and captions keep their line length. |
+| Larger text | The serif roles and captions scale with it. Multiply the chosen cover width by the system's text scale before counting columns, so the grid loses columns as text grows, down to one. |
 | More contrast | The inner edge line, the spine shade and both shadows are removed. A 1 unit outline in the platform's primary text colour is drawn outside the cover's edge, where artwork cannot hide it. Selection, focus and the pointer rise are unchanged. Bindings set in type keep their colours, which already meet 4.5:1. |
 | Less transparency | Nothing in the content layer is translucent, so nothing changes. |
 | Less motion | As described under [Motion](#motion). |
@@ -270,20 +347,23 @@ roles and the motion above are drawn by the app, so the app must follow them.
 
 | Rule | Mac | iPhone and iPad | Windows 11 | GNOME | Android |
 |---|---|---|---|---|---|
-| Window structure | `NavigationSplitView` with a sidebar and an inspector for details | Tab bar on iPhone, sidebar on iPad | `NavigationView` at the left under a Mica window | `AdwNavigationSplitView` inside `AdwToolbarView` | `NavigationSuiteScaffold`, with a list-detail layout from the expanded width up |
-| Search | Toolbar search field | A search tab, `Tab(role: .search)` | `AutoSuggestBox` in the title bar | Search button in the header bar that reveals a search bar | `SearchBar` in the top app bar |
+| Window structure | `NavigationSplitView` with a sidebar and an inspector for details | Tab bar on iPhone with Library, Collections, Devices and Search. Sidebar on iPad. | `NavigationView` at the left under a Mica window | `AdwNavigationSplitView`, with an `AdwToolbarView` inside each pane | `NavigationSuiteScaffold` with Library, Collections and Devices, and a list-detail layout from the expanded width up |
+| Screen title and count | At the top of the content. The toolbar shows no title. | The navigation bar's large title in the serif design | `NavigationView`'s header, at the top of the content | At the top of the content. The header bar shows no title. | The title and subtitle of a large flexible top app bar |
+| Library filter on a phone | Not needed | A menu in the navigation bar | Not needed | A menu in the header bar on a narrow window | Filter chips under the top app bar |
+| Add | Toolbar, trailing, `.glassProminent` | Navigation bar, trailing, `.glassProminent` | An accent button at the trailing end of the header row | A labelled button at the start of the header bar, not accented, as GNOME header bars are | An extended floating action button |
+| Search | Toolbar search field | The search tab, `Tab(role: .search)` | `AutoSuggestBox` in the title bar | Search button in the header bar that reveals a search bar | A search action in the top app bar that opens the search view |
 | Serif | New York, through the system serif design | New York | Sitka | A bundled serif | A bundled serif |
 | Grid | AppKit collection view | `LazyVGrid` or a UIKit collection view | `ItemsView` or `GridView` | `GtkGridView` | `LazyVerticalGrid` |
-| Table | `Table` | Not offered on iPhone | `ListView` with column headers | `GtkColumnView` | Not offered on phones |
+| Table | `Table` | `Table` on iPad. Not offered on iPhone. | `ListView` with column headers | `GtkColumnView` | Not offered on phones |
 | Pointer over a cover | The rise above | iPad pointer only | The rise above | The rise above | None |
-| Caption title, then author | Subheadline in semibold, Footnote | The same | Body Strong, Caption | `.heading`, `.caption` with `.dimmed` | `titleSmall`, `bodySmall` |
-| Details author, then facts | Title 3 in the secondary colour, Body | The same | Body Large in `TextFillColorSecondaryBrush`, Body | `.title-4` with `.dimmed`, `.body` | `titleMedium` in `onSurfaceVariant`, `bodyMedium` |
-| Opening a book | Zoom from the cover | `navigationTransition(.zoom)` from a `matchedTransitionSource` | Connected animation | The navigation view's push, with a cross-fade of the cover | `sharedElement` in a `SharedTransitionLayout` |
+| Caption title, then author | Body in semibold, Callout | Subheadline in semibold, Footnote | Body Strong, Caption | `.heading`, `.caption` with `.dimmed` | `titleSmall`, `bodySmall` |
+| Details author, then facts | Title 3 in the secondary colour, Body | The same | Body Large in `TextFillColorSecondaryBrush`, Body | `.title-4` with `.dimmed`, the default label style | `titleMedium` in `onSurfaceVariant`, `bodyMedium` |
+| Opening a book | Cross-fade. SwiftUI's zoom transition is not offered on macOS. | `navigationTransition(.zoom)` from a `matchedTransitionSource` | Connected animation | The navigation view's push, with a cross-fade of the cover | `sharedElement` in a `SharedTransitionLayout` |
 | Empty state | `ContentUnavailableView` | The same | A centred text block in the content layer | `AdwStatusPage` | A centred text block |
-| Progress of a running job | Toolbar | Toolbar | Title bar | Header bar | Top app bar |
-| A problem that needs a decision | A plain row at the top of the content | The same | `InfoBar` at the top of the content | `AdwBanner` | Snackbar with an action. It lies over the bottom of the grid, which is accepted. |
+| Progress of a running job | Toolbar | Navigation bar | Title bar | Header bar | Top app bar |
+| A problem that needs a decision | A plain row at the top of the content | The same | `InfoBar` at the top of the content | `AdwBanner` | A plain row at the top of the content. A snackbar dismisses itself, so it is not used. |
 | Button and menu capitals | Title Case | Title Case | Sentence case | Header Capitalisation | Sentence case |
-| Following light and dark | Semantic colours and asset catalogue colours with both appearances | The same | Theme resources, with the window's requested theme left at its default | `AdwStyleManager` at its default colour scheme, and `prefers-color-scheme` in the app's CSS | `isSystemInDarkTheme()` choosing between the light and dark colour scheme |
+| Following light and dark | Semantic colours and asset catalogue colours with both appearances | The same | Theme resources, with `RequestedTheme` on the application and the root element left at the default, and the title bar's `PreferredTheme` following the system | `AdwStyleManager` at its default colour scheme, and `prefers-color-scheme` in the app's CSS | `isSystemInDarkTheme()` choosing between the light and dark colour scheme |
 | Icons | SF Symbols | SF Symbols | Segoe Fluent Icons | Symbolic icons from GTK and the Icon Library | Material Symbols |
 
 ### Mac, iPhone and iPad: Liquid Glass
@@ -318,13 +398,20 @@ without changes.
   because they are content and not part of the frame.
 - At rest no cover should sit half under a floating control. Size the top inset
   so the first row clears the toolbar.
+- On iPhone and iPad the screen title is the navigation bar's large title, which
+  collapses as the grid scrolls. On the Mac the toolbar shows no title and the
+  screen title is the first line of the content.
 - Use the text styles: Large Title for the screen title and Title 1 for the
   book's title, both with the serif design. The author under the book's title is
   Title 3 in the secondary colour. Fact labels and values are Body. On a Mac those are 26 and 22 points.
   The Mac has no Dynamic Type, so the app offers no text size of its own in the
   library.
+- Under a cover the Mac uses Body in semibold and Callout, 13 and 12 points,
+  because its Subheadline and Footnote are 11 and 10. iPhone and iPad use
+  Subheadline in semibold and Footnote.
 - Springs are the default animation. Use `.smooth` for the cover's rise and for
-  layout moves, and the system's zoom transition for opening.
+  layout moves. On iPhone and iPad a book opens with the system's zoom
+  transition. SwiftUI does not offer it on macOS, so the Mac cross-fades.
 - The system adapts glass to Reduce Transparency, Increase Contrast and Reduce
   Motion, and to the user's clear-to-tinted glass setting. Test the covers and the
   serif roles under each, because the system does not adapt those.
@@ -351,6 +438,8 @@ The current release is 26H2, with Windows App SDK 2.7.
 - Type comes from the Windows ramp: Title, 28 on a 36 line, for the screen title
   and the book's title in Sitka. Under a cover the title is Body Strong and the
   author is Caption in `TextFillColorSecondaryBrush`.
+- The app leaves `RequestedTheme` at its default on the application and on the
+  root element, so the window follows the system's light or dark setting.
 - Under a contrast theme the outline around a cover is
   `TextFillColorPrimaryBrush`, which becomes the system's window text colour.
 - The cover's rise uses `ControlFastAnimationDuration`, 167 ms. Page changes use
@@ -365,6 +454,9 @@ The current release is 26H2, with Windows App SDK 2.7.
 
 The current releases are GNOME 51 and libadwaita 1.10.
 
+- The header bar of the content pane shows no title, because the screen title
+  is the first line of the content. Add is a labelled button at its start,
+  without the accent, as GNOME header bars are.
 - `AdwNavigationSplitView` holds the sidebar and the content, and collapses to a
   navigation stack on a narrow window. Each side is an `AdwToolbarView` with an
   `AdwHeaderBar` in the flat style, which shows a shadow only when content has
@@ -392,25 +484,34 @@ The current releases are GNOME 51 and libadwaita 1.10.
   light when it learns no preference. So that dark appearance is available on
   every desktop, the Linux shell has an Appearance setting with Follow system,
   Light and Dark, which GNOME's guidelines allow for apps used for long periods.
-  Follow system is the default. Hide that choice when
-  `AdwStyleManager:system-supports-color-schemes` is false.
+  Follow system is the default. When
+  `AdwStyleManager:system-supports-color-schemes` is false, the desktop shares
+  no preference: remove only the Follow system option, keep Light and Dark, and
+  start on Light.
 
 ### Android
 
 The current releases are Android 17 and Compose Material 3 1.5.
 
 - Colour follows the wallpaper through `dynamicLightColorScheme` and
-  `dynamicDarkColorScheme` on Android 12 and later. The fallback scheme is a
-  neutral one built from the Forest placeholder colour.
+  `dynamicDarkColorScheme` on Android 12 and later. Earlier versions get a light
+  and a dark scheme built from the Forest placeholder colour.
 - Covers sit directly on `surface`. Do not wrap them in `Card`. The shape scale,
   where a card is 12, does not apply to a cover.
 - Navigation is a bar on a compact width and a rail from medium up, through
   `NavigationSuiteScaffold`. From the expanded width, 840, the library and book
   details show side by side.
 - The app draws edge to edge, which Android 15 and later enforce for an app
-  that targets SDK 35 or higher. Inset the grid with `WindowInsets.safeDrawing`.
+  that targets SDK 35 or higher. Give the grid the padding its `Scaffold` passes
+  in, which already accounts for the system bars. Adding the window insets again
+  would inset it twice. System bar icons follow light and dark with the app.
+- The compact navigation bar holds Library, Collections and Devices. Reading
+  now, Unread and Finished are filter chips under the top app bar in Library.
+- Add is an extended floating action button, the Material place for a screen's
+  primary action.
 - The screen title is `headlineMedium` in a large flexible top app bar that
-  collapses as the grid scrolls. The book's title is `headlineSmall`. Both take
+  collapses as the grid scrolls, with the count as its subtitle. Search is an
+  action in that bar that opens the search view. The book's title is `headlineSmall`. Both take
   the bundled serif through per-role `TextStyle` in `Typography`. Under a cover
   the title is `titleSmall` and the author `bodySmall`.
 - Motion uses the standard `MotionScheme`, not the expressive one. Its spatial
@@ -420,8 +521,10 @@ The current releases are Android 17 and Compose Material 3 1.5.
   indicators.
 - Every touch target is at least 48 by 48, including a cover in the small grid
   and its context menu.
-- Read the system contrast level from `UiModeManager.getContrast()` for the
-  cover's edge line, because the app draws it.
+- The app draws the cover, so it applies the More contrast rule itself. On
+  Android 14 and later, read `UiModeManager.getContrast()`, treat 0.5 or more as
+  more contrast, and listen for changes with `addContrastChangeListener`.
+  Earlier versions have no such setting and use the ordinary treatment.
 
 ## The reader
 
@@ -459,6 +562,13 @@ Each was the default taken to finish this page. Any can change.
 7. **A tap on a phone opens book details, not the reader.** Opening the reader
    at once is faster for reading and gives no way to reach a book's facts or
    send it to a device without a long press.
+8. **Fact labels align to the leading edge.** The first version aligned them to
+   the trailing edge so labels and values met at one line, as on a catalogue
+   card and in the Mac's own inspectors. Two reviewers found it broke the single
+   leading edge and squeezed values in a narrow pane.
+9. **The edge line is strong enough to see: white at 18% in dark appearance.**
+   A fainter line is more elegant on most covers and loses a black cover on a
+   dark window.
 
 ## Check on a device before relying on it
 
@@ -467,8 +577,9 @@ not confirmed there, or the documentation contradicts itself.
 
 - Whether a native Mac app gets New York from the serif font design. Apple's
   guidelines confirm it for iPhone, iPad and Mac Catalyst.
-- Whether the zoom navigation transition is available on the Mac, and each glass
-  API's minimum system version.
+- Each glass API's minimum system version.
+- Whether the navigation bar's large title takes the serif design through
+  SwiftUI alone or needs the UIKit appearance API.
 - The iPhone sizes of the text styles. The Mac sizes above are from Apple's table.
 - Whether Sitka picks its optical size from the font size by itself or the app
   must choose between Sitka Text, Heading and Display.
