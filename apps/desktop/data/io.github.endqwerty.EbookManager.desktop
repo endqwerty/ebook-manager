@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Ebook Manager
+Comment=Organize and read your personal EPUB library
+Exec=ebook-manager
+Icon=accessories-dictionary
+Terminal=false
+Categories=Office;Viewer;

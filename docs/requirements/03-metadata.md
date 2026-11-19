@@ -42,6 +42,9 @@ People carry VIAF, ISNI, ORCID, LC name authority and Wikidata identifiers.
 
 ## Editing
 
+The [local library](../../specs/library-mvp.md) supports the title and authors
+portion of META-1 and retains their imported values.
+
 - `META-1` (core) Edit every field of one book in a form, with the cover.
 - `META-2` (core) Edit a selection in bulk: set, add to, remove from, find and
   replace, copy one field to another. The app previews the result and can undo it.

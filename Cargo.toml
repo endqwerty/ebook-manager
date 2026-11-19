@@ -1,0 +1,6 @@
+[workspace]
+members = ["apps/desktop", "crates/ebook-device", "crates/ebook-library", "crates/ebook-reader"]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true

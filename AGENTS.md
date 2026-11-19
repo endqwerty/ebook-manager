@@ -70,8 +70,8 @@ pull request so a reviewer can check the affected code.
 ## Project state
 
 A public open-source project under the Apache License 2.0 ([LICENSE](LICENSE)).
-Application development has not started. Build toward a shared Rust core with native
-desktop and mobile interfaces. The [design documents](README.md#implementation-design)
+The first implementation targets a local Linux desktop library for DRM-free EPUBs,
+with a shared Rust core and a mounted-folder export for e-readers. The [design documents](README.md#implementation-design)
 record the selected stack, storage decisions and executable catalogue experiment.
 Everything committed here is public: never commit secrets, tokens,
 private addresses or personal data.
@@ -203,7 +203,8 @@ Mainworthy when a pull request ends.
   secret, revoke the old token, and update the date here. The procedure for
   Mainworthy production access is in the homelab repository.
 - The CLI comes from the public image `ghcr.io/endqwerty/mainworthy:main`.
-- Until the first tests exist, CI reports `--nothing-required`, which the project's
-  policy accepts (`policy empty nothing-required`). When the first test suite lands,
-  have it write JUnit XML and change the step to `mainworthy report results.xml`.
-  Then set the policy back with `mainworthy policy empty pending`.
+- CI runs the Rust workspace with the nextest `ci` profile and reports
+  `target/nextest/ci/junit.xml` along with the desktop and mounted FAT32
+  acceptance results. When this workflow reaches the default branch,
+  set the project policy to `mainworthy policy empty pending` to retire the
+  pre-implementation allowance for empty reports.

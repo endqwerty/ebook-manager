@@ -1,0 +1,11 @@
+.shelf-title { font-family: serif; font-size: 32pt; font-weight: bold; }
+.book-cover {
+  min-width: 42px;
+  min-height: 56px;
+  border-radius: 2px 6px 6px 2px;
+  border-left: 5px solid #416458;
+  background: #315047;
+  color: #faeac3;
+  font: bold 18pt serif;
+}
+.reading-text { font: 15pt serif; }
