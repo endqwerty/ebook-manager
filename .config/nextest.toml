@@ -1,2 +1,10 @@
 [profile.ci.junit]
 path = "junit.xml"
+
+# A view test's WebKit processes end when the test's own process does, by
+# seeing their connection to it close, which takes them a moment longer than
+# the 100 ms nextest allows before it calls a test leaky. None is left: wait
+# for them instead of reporting them.
+[[profile.default.overrides]]
+filter = 'binary(view)'
+leak-timeout = "5s"
