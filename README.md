@@ -78,3 +78,5 @@ The [storage decision](docs/design/library-storage.md) explains recovery and the
 first sync transport. The [platform plan](docs/design/platforms.md) records the
 shared core, native shells and distribution choices. The [model roadmap](docs/design/model-roadmap.md)
 lists the fixtures to run before committing to the rest of the schema.
+[Reading an EPUB](docs/design/epub-reading.md) says how a chapter is drawn and
+where untrusted book content stops.
