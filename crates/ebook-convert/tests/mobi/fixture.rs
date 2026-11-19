@@ -27,7 +27,10 @@ pub struct MobiFixture {
     pub drm: bool,
     pub mobi_type: u32,
     pub version: u32,
+    /// Adds an EXTH 121 ("KF8 BOUNDARY Offset") record holding 7.
     pub exth_kf8_boundary: bool,
+    /// Adds a record holding the bytes `BOUNDARY` after the images. No allowed
+    /// source describes such a record's content; the decoder must ignore it.
     pub boundary_record: bool,
     pub extra_flags: u32,
     pub markup: String,
@@ -36,6 +39,18 @@ pub struct MobiFixture {
     pub declared_text_length: Option<u32>,
     /// Replaces the generated text records (bytes as stored, trailing entries included).
     pub raw_text_records: Option<Vec<Vec<u8>>>,
+    /// Overrides the text record count in the PalmDOC header.
+    pub declared_text_records: Option<u16>,
+    /// Overrides the first content record number (record 0 offset 192).
+    pub first_content_record: Option<u16>,
+    /// Bytes stored as the full name instead of the encoded title.
+    pub raw_title: Option<Vec<u8>>,
+    /// Extra EXTH records appended after the generated ones.
+    pub extra_exth: Vec<(u32, Vec<u8>)>,
+    /// Records placed after the text records and before the 2-zero-byte record.
+    pub records_after_text: Vec<Vec<u8>>,
+    /// Overrides the first non-book record number (record 0 offset 80).
+    pub first_non_book: Option<u32>,
 }
 
 impl Default for MobiFixture {
@@ -60,6 +75,12 @@ impl Default for MobiFixture {
             cover: None,
             declared_text_length: None,
             raw_text_records: None,
+            declared_text_records: None,
+            first_content_record: None,
+            raw_title: None,
+            extra_exth: Vec::new(),
+            records_after_text: Vec::new(),
+            first_non_book: None,
         }
     }
 }
@@ -127,7 +148,8 @@ impl MobiFixture {
 
         let mut records: Vec<Vec<u8>> = vec![Vec::new()];
         records.extend(text_records.iter().cloned());
-        let first_non_book = records.len();
+        records.extend(self.records_after_text.iter().cloned());
+        let first_non_book = self.first_non_book.map_or(records.len(), |n| n as usize);
         records.push(vec![0, 0]);
         let first_image = if self.images.is_empty() {
             ABSENT
@@ -142,7 +164,10 @@ impl MobiFixture {
         records.push(fcis(text_length));
         records.push(vec![0xE9, 0x8E, 0x0D, 0x0A]);
 
-        records[0] = self.record0(text_length, text_records.len(), first_non_book, first_image);
+        let count = self
+            .declared_text_records
+            .map_or(text_records.len(), usize::from);
+        records[0] = self.record0(text_length, count, first_non_book, first_image);
         palm_database(&self.pdb_name, &records)
     }
 
@@ -163,7 +188,10 @@ impl MobiFixture {
         put16(&mut r, 0);
 
         let exth = self.exth();
-        let name = self.encode(&self.title);
+        let name = match &self.raw_title {
+            Some(bytes) => bytes.clone(),
+            None => self.encode(&self.title),
+        };
         let name_offset = 16 + HEADER_LENGTH + exth.len();
 
         let mut h = vec![0u8; HEADER_LENGTH];
@@ -185,7 +213,7 @@ impl MobiFixture {
         set32(&mut h, 112, if exth.is_empty() { 0 } else { 0x50 });
         set32(&mut h, 152, if self.drm { 0x200 } else { ABSENT });
         set32(&mut h, 156, if self.drm { 1 } else { ABSENT });
-        h[176..178].copy_from_slice(&1u16.to_be_bytes());
+        h[176..178].copy_from_slice(&self.first_content_record.unwrap_or(1).to_be_bytes());
         h[178..180].copy_from_slice(&(text_records as u16).to_be_bytes());
         set32(&mut h, 224, self.extra_flags);
         set32(&mut h, 228, ABSENT);
@@ -213,6 +241,7 @@ impl MobiFixture {
         if self.exth_kf8_boundary {
             entries.push((121, 7u32.to_be_bytes().to_vec()));
         }
+        entries.extend(self.extra_exth.iter().cloned());
         if entries.is_empty() {
             return Vec::new();
         }

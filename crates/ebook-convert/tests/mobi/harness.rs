@@ -112,10 +112,12 @@ fn sample_reading_order_text_images_and_cover() {
         losses,
         [
             "GIF images were dropped; only JPEG and PNG images are kept.",
+            "Heading levels were changed; every heading is written at the same level.",
             "Inline formatting such as bold, italic and font sizes was removed.",
             "Links were removed; their text was kept.",
             "Lists were flattened into paragraphs.",
             "Tables were flattened into paragraphs.",
+            "The book's guide (such as its start position and contents entry) was not carried over.",
         ]
     );
 }
@@ -171,7 +173,7 @@ fn utf8_characters_split_across_records_survive_both_compressions() {
                 first.ends_with("a\u{e9}\u{2014}\u{1F30A}x"),
                 "split {split} compression {compression}"
             );
-            assert!(book.losses.is_empty(), "{:?}", book.losses);
+            assert!(other_losses(&book).is_empty(), "{:?}", book.losses);
         }
     }
 }
@@ -362,7 +364,7 @@ fn unknown_named_references_are_kept_and_reported_once() {
         ]
     );
     assert_eq!(unknown_reference_losses(&book), 1);
-    assert_eq!(book.losses.len(), 1, "{:?}", book.losses);
+    assert_eq!(other_losses(&book).len(), 1, "{:?}", book.losses);
 }
 
 #[test]
@@ -421,8 +423,9 @@ fn greater_than_inside_quoted_attributes_stays_in_the_tag() {
 }
 
 #[test]
-/// A quote with no partner within 1024 bytes is stray, so the first `>` ends
-/// the tag. A partner within that window closes the value, as in HTML.
+/// A quote with no partner within 1024 bytes, or whose value would contain the
+/// start of a tag, is stray, so the first `>` ends the tag and a loss is noted.
+/// A partner within that window closes the value, as in HTML.
 fn unclosed_quote_in_a_tag_ends_at_the_first_greater_than() {
     let words = "no quotes here ".repeat(80);
     let long = "z".repeat(2000);
@@ -437,12 +440,15 @@ fn unclosed_quote_in_a_tag_ends_at_the_first_greater_than() {
         paragraphs(&book),
         ["Kept one", words.trim(), "Kept two", "Kept three"]
     );
+    assert!(has(&book, LOSS_STRAY_QUOTE), "{:?}", book.losses);
 
     let f = MobiFixture {
-        markup: page("<p title=\"oops>Swallowed</p><p class=\"next\">Kept</p>"),
+        markup: page("<p title=\"oops>Recovered</p><p class=\"next\">Kept</p>"),
         ..Default::default()
     };
-    assert_eq!(paragraphs(&ok(&f)), ["Kept"]);
+    let book = ok(&f);
+    assert_eq!(paragraphs(&book), ["Recovered", "Kept"]);
+    assert!(has(&book, LOSS_STRAY_QUOTE), "{:?}", book.losses);
 }
 
 #[test]
@@ -528,17 +534,10 @@ fn unsupported_variants_name_their_reason() {
         ),
         (
             MobiFixture {
-                exth_kf8_boundary: true,
+                extra_flags: 0x1_0003,
                 ..Default::default()
             },
-            "combined MOBI 7 and KF8 book",
-        ),
-        (
-            MobiFixture {
-                boundary_record: true,
-                ..Default::default()
-            },
-            "combined MOBI 7 and KF8 book",
+            "extra data flags 0x10003 name trailing entries above 0x8000",
         ),
         (
             MobiFixture {
@@ -617,7 +616,7 @@ fn malformed_structures_are_invalid() {
     let literal_past_end = vec![0x05, b'a', 0x81];
     let pair_cut_short = vec![b'a', 0x80];
     let trailing_size_too_large = vec![b'a', b'b', 0x00, 0x8F];
-    let unterminated_size = vec![b'a', 0x00, 0x01, 0x01, 0x01, 0x01];
+    let unterminated_size = vec![0x01, 0x01, 0x01];
     for record in [
         back_reference_before_start,
         literal_past_end,
@@ -832,4 +831,338 @@ fn real_sample_trial() {
         println!("expected text found in paragraph {at:?}");
         assert!(at.is_some(), "text not found");
     }
+}
+
+// Regression checks for the review findings on the MOBI decoder.
+
+const LOSS_UNCLOSED_SKIP: &str =
+    "Text after an unclosed script, style or head element was dropped.";
+const LOSS_STRAY_QUOTE: &str =
+    "Tags with an unmatched quote were ended at their first >; nearby text may be out of place.";
+const LOSS_BAD_METADATA: &str =
+    "Title, author or language bytes that are not valid text were replaced.";
+const LOSS_GUIDE: &str =
+    "The book's guide (such as its start position and contents entry) was not carried over.";
+const LOSS_HEADING_LEVELS: &str =
+    "Heading levels were changed; every heading is written at the same level.";
+const LOSS_PRE: &str = "Preformatted text lost its line breaks and spacing.";
+const LOSS_LAYOUT: &str = "Layout such as alignment, indentation and spacing was removed.";
+const LOSS_NUMBERED: &str =
+    "Sections without a heading were given numbered titles such as \"Section 1\".";
+
+fn has(book: &ParsedBook, loss: &str) -> bool {
+    book.losses.iter().any(|l| l == loss)
+}
+
+/// Losses other than the numbered-title note, which any book without headings has.
+fn other_losses(book: &ParsedBook) -> Vec<String> {
+    book.losses
+        .iter()
+        .filter(|l| *l != LOSS_NUMBERED)
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn first_content_record_field_chooses_where_text_starts() {
+    let f = MobiFixture {
+        compression: 1,
+        extra_flags: 0,
+        raw_text_records: Some(vec![b"<p>NO</p>".to_vec(), b"<p>OK</p>".to_vec()]),
+        declared_text_records: Some(1),
+        declared_text_length: Some(9),
+        first_content_record: Some(2),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(paragraphs(&book), ["OK"]);
+
+    for first in [0u16, 2, 900] {
+        let f = MobiFixture {
+            first_content_record: Some(first),
+            raw_text_records: Some(vec![b"<p>NO</p>".to_vec(), b"<p>OK</p>".to_vec()]),
+            declared_text_records: Some(if first == 2 { 600 } else { 2 }),
+            declared_text_length: Some(18),
+            compression: 1,
+            extra_flags: 0,
+            ..Default::default()
+        };
+        invalid(decode(&f));
+    }
+}
+
+#[test]
+fn text_after_skipped_elements_survives() {
+    for markup in [
+        "<p>Before</p><script>if (1 < 2) {}</script><p>After</p>",
+        "<p>Before</p><SCRIPT type=\"text/javascript\">a = '</p>' < b</SCRIPT ><p>After</p>",
+        "<p>Before</p><style>p > a { x: \"<\" }</style><p>After</p>",
+        "<p>Before</p><script>x = \"</scripts>\";</script><p>After</p>",
+    ] {
+        let book = ok(&MobiFixture {
+            markup: page(markup),
+            ..Default::default()
+        });
+        assert_eq!(paragraphs(&book), ["Before", "After"], "{markup}");
+        assert!(!has(&book, LOSS_UNCLOSED_SKIP), "{markup}");
+    }
+
+    let book = ok(&MobiFixture {
+        markup: "<html><head><title>T</title><script>if (a<b) {}</script></head><body><p>After</p></body></html>"
+            .into(),
+        ..Default::default()
+    });
+    assert_eq!(paragraphs(&book), ["After"]);
+}
+
+#[test]
+fn unclosed_skipped_element_is_reported() {
+    let book = ok(&MobiFixture {
+        markup: page("<p>Before</p><script>if (1 < 2) {}<p>Lost</p>"),
+        ..Default::default()
+    });
+    assert_eq!(paragraphs(&book), ["Before"]);
+    assert!(has(&book, LOSS_UNCLOSED_SKIP), "{:?}", book.losses);
+
+    let book = ok(&MobiFixture {
+        markup: "<html><body><p>Before</p><head><p>Lost</p>".into(),
+        ..Default::default()
+    });
+    assert_eq!(paragraphs(&book), ["Before"]);
+    assert!(has(&book, LOSS_UNCLOSED_SKIP), "{:?}", book.losses);
+}
+
+const LOSS_SECOND_COPY: &str =
+    "The file may also hold a newer-format (KF8) copy of the book, which was not read.";
+const LOSS_UNREAD_RECORDS: &str =
+    "Records between the declared text and the first non-book record were not read; they may hold more of the book.";
+
+#[test]
+fn text_records_are_text_whatever_they_contain() {
+    let prose = MobiFixture {
+        compression: 1,
+        extra_flags: 0,
+        markup: "BOUNDARY is a word in prose.".into(),
+        ..Default::default()
+    };
+    let book = ok(&prose);
+    assert_eq!(paragraphs(&book), ["BOUNDARY is a word in prose."]);
+    assert_eq!(other_losses(&book), Vec::<String>::new());
+}
+
+#[test]
+fn possible_newer_copy_is_reported_and_older_text_converted() {
+    for f in [
+        MobiFixture {
+            exth_kf8_boundary: true,
+            ..Default::default()
+        },
+        MobiFixture {
+            exth_kf8_boundary: true,
+            boundary_record: true,
+            images: vec![JPEG.to_vec()],
+            ..Default::default()
+        },
+        MobiFixture {
+            extra_exth: vec![(121, vec![0xFF; 4])],
+            ..Default::default()
+        },
+        MobiFixture {
+            extra_exth: vec![(121, vec![])],
+            ..Default::default()
+        },
+    ] {
+        let book = ok(&f);
+        assert_eq!(paragraphs(&book), ["Hello."]);
+        assert_eq!(other_losses(&book), [LOSS_SECOND_COPY]);
+    }
+}
+
+#[test]
+fn a_record_named_boundary_alone_says_nothing() {
+    let book = ok(&MobiFixture {
+        boundary_record: true,
+        images: vec![JPEG.to_vec()],
+        ..Default::default()
+    });
+    assert_eq!(paragraphs(&book), ["Hello."]);
+    assert_eq!(other_losses(&book), Vec::<String>::new());
+}
+
+#[test]
+fn records_between_text_and_first_non_book_are_left_out_and_reported() {
+    let book = ok(&MobiFixture {
+        records_after_text: vec![b"<p>More</p>".to_vec()],
+        ..Default::default()
+    });
+    assert_eq!(paragraphs(&book), ["Hello."]);
+    assert_eq!(other_losses(&book), [LOSS_UNREAD_RECORDS]);
+
+    let text_end = MobiFixture::default().encoded_text().len().div_ceil(4096) as u32 + 1;
+    let book = ok(&MobiFixture {
+        first_non_book: Some(text_end + 1),
+        ..Default::default()
+    });
+    assert_eq!(
+        other_losses(&book),
+        Vec::<String>::new(),
+        "the 2-zero-byte record is expected there"
+    );
+
+    let book = ok(&MobiFixture {
+        records_after_text: vec![vec![0], vec![0, 0, 0]],
+        ..Default::default()
+    });
+    assert_eq!(
+        other_losses(&book),
+        Vec::<String>::new(),
+        "zero-byte records hold no text"
+    );
+
+    let book = ok(&MobiFixture {
+        first_non_book: Some(text_end - 1),
+        ..Default::default()
+    });
+    assert_eq!(paragraphs(&book), ["Hello."], "the declared range wins");
+}
+
+#[test]
+fn trailing_entries_outside_the_documented_form_are_refused() {
+    let f = MobiFixture {
+        extra_flags: 0x8003,
+        ..Default::default()
+    };
+    assert_eq!(paragraphs(&ok(&f)), ["Hello."]);
+
+    let f = MobiFixture {
+        extra_flags: 0x2,
+        raw_text_records: Some(vec![vec![b'a', 0x00, 0x01, 0x01, 0x01, 0x01]]),
+        declared_text_length: Some(1),
+        ..Default::default()
+    };
+    assert_eq!(
+        err(decode(&f)),
+        DecodeError::Unsupported("trailing entry size longer than four bytes".into())
+    );
+}
+
+#[test]
+fn repaired_metadata_is_reported() {
+    let f = MobiFixture {
+        raw_title: Some(b"Bad \xFF".to_vec()),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(book.title, "Bad \u{FFFD}");
+    assert!(has(&book, LOSS_BAD_METADATA), "{:?}", book.losses);
+
+    let f = MobiFixture {
+        authors: vec![],
+        language: None,
+        extra_exth: vec![(100, b"Ann \xC3".to_vec()), (524, b"e\xFFn".to_vec())],
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert!(has(&book, LOSS_BAD_METADATA), "{:?}", book.losses);
+
+    let f = MobiFixture {
+        encoding: 1252,
+        raw_title: Some(b"Odd \x81".to_vec()),
+        ..Default::default()
+    };
+    assert!(has(&ok(&f), LOSS_BAD_METADATA));
+
+    let clean = ok(&MobiFixture::default());
+    assert!(!has(&clean, LOSS_BAD_METADATA));
+}
+
+#[test]
+fn unused_metadata_guide_and_heading_levels_are_reported() {
+    let f = MobiFixture {
+        extra_exth: vec![
+            (101, b"Harbour Press".to_vec()),
+            (103, b"A short blurb.".to_vec()),
+            (101, b"Second Press".to_vec()),
+            (204, 201u32.to_be_bytes().to_vec()),
+        ],
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert!(
+        book.losses
+            .iter()
+            .any(|l| l == "Metadata not carried over: publisher, description."),
+        "{:?}",
+        book.losses
+    );
+
+    let book = ok(&MobiFixture::default());
+    assert!(!book.losses.iter().any(|l| l.starts_with("Metadata not")));
+
+    let book = ok(&MobiFixture {
+        markup: "<html><head><guide><reference type=\"toc\" filepos=0000000001 /></guide></head><body><h2>A</h2><p>x</p></body></html>".into(),
+        ..Default::default()
+    });
+    assert!(has(&book, LOSS_GUIDE));
+    assert!(!has(&book, LOSS_HEADING_LEVELS), "h2 is the level written");
+
+    for heading in ["h1", "h3", "h6"] {
+        let book = ok(&MobiFixture {
+            markup: page(&format!("<{heading}>A</{heading}><p>x</p>")),
+            ..Default::default()
+        });
+        assert!(has(&book, LOSS_HEADING_LEVELS), "{heading}");
+    }
+}
+
+#[test]
+fn lost_layout_is_reported() {
+    let book = ok(&MobiFixture {
+        markup: page("<pre>one\n    two</pre>"),
+        ..Default::default()
+    });
+    assert_eq!(paragraphs(&book), ["one two"]);
+    assert!(has(&book, LOSS_PRE));
+
+    for markup in [
+        "<p style=\"text-align:center\">Centred</p>",
+        "<p align=\"center\">Centred</p>",
+        "<center>Centred</center>",
+        "<p width=\"2em\">Centred</p>",
+        "<blockquote>Centred</blockquote>",
+    ] {
+        let book = ok(&MobiFixture {
+            markup: page(markup),
+            ..Default::default()
+        });
+        assert_eq!(paragraphs(&book), ["Centred"], "{markup}");
+        assert!(has(&book, LOSS_LAYOUT), "{markup}: {:?}", book.losses);
+    }
+
+    let book = ok(&MobiFixture {
+        markup: page("<p>a</p><hr/><p>b</p>"),
+        ..Default::default()
+    });
+    assert!(has(&book, "Horizontal rules were removed."));
+
+    let book = ok(&MobiFixture {
+        images: vec![JPEG.to_vec()],
+        markup: page("<p>Plain</p><img recindex=1 align=\"baseline\" width=\"10\">"),
+        ..Default::default()
+    });
+    assert_eq!(other_losses(&book), Vec::<String>::new());
+}
+
+#[test]
+fn numbered_section_titles_are_reported() {
+    let book = ok(&MobiFixture {
+        markup: page("<p>one</p><mbp:pagebreak/><h2>Two</h2><p>two</p>"),
+        ..Default::default()
+    });
+    assert!(has(&book, LOSS_NUMBERED));
+    let book = ok(&MobiFixture {
+        markup: page("<h2>One</h2><p>one</p>"),
+        ..Default::default()
+    });
+    assert!(!has(&book, LOSS_NUMBERED));
 }

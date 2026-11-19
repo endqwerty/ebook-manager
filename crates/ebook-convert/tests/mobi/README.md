@@ -9,9 +9,13 @@ rustc --edition 2021 --test tests/mobi/harness.rs -o "$dir/mobi-harness" && "$di
 
 - [fixture.rs](fixture.rs) builds MOBI 7 files. `MobiFixture` has public fields
   for metadata, encoding, compression, encryption, DRM, KF8 markers, trailing
-  entry flags, markup, images and the cover, and `raw_text_records` for
-  hand-made broken records. It has no dependencies, so another test can include
-  it with `#[path = ".../tests/mobi/fixture.rs"] mod fixture;`.
+  entry flags, markup, images and the cover, `raw_text_records` for
+  hand-made broken records, records placed after the text, and overrides for
+  the text record count, the first content record, the first non-book record,
+  the full-name bytes and extra EXTH records. `boundary_record` adds a record
+  holding `BOUNDARY`; no allowed source describes such a record, and the decoder
+  must ignore it. It has no dependencies, so another test can include it with
+  `#[path = ".../tests/mobi/fixture.rs"] mod fixture;`.
 - [sample.mobi](sample.mobi) is `MobiFixture::sample().build()`, written by
   [gen_sample.rs](gen_sample.rs). `checked_in_sample_matches_generator` fails
   when the two drift. To regenerate:
@@ -28,7 +32,8 @@ UTF-8, PalmDOC-compressed, three text records with trailing entries.
 - `images[0]` is the JPEG, placed at the end of chapter one; `images[1]` is the
   PNG, placed in chapter three and used as the cover (`cover == Some(1)`).
 - Chapter two references a GIF, which is dropped.
-- Five losses: inline formatting, links, tables, lists and GIF images.
+- Seven losses: inline formatting, links, tables, lists, GIF images, heading
+  levels (`h1` and `h2` are both written as one level) and the guide.
 - Text with entities and non-ASCII characters, for example
   `Its keeper, Marta Ruiz & her cat — kept the log in café ink: “All clear.”`
   (a no-break space between "All" and "clear").

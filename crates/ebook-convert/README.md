@@ -38,18 +38,32 @@ files, no network, no global state. Its tests and the generated sample live in
 - A Palm database whose type and creator are `BOOK` and `MOBI`, with MOBI type 2
   or 232 and a format version below 8.
 - Uncompressed or PalmDOC-compressed text in 4096-byte records, in CP1252 or
-  UTF-8. Trailing entries named by the extra data flags are removed.
+  UTF-8, starting at the first content record named at record 0 offset 192
+  (record 1 when the MOBI header is too short to hold it). Every record in the
+  declared range is text, whatever its bytes look like. Trailing entries named
+  by the extra data flags are removed.
+- Records after the declared text are not read. When the first non-book record
+  (offset 80) lies further on, the records between the two are left out,
+  because no allowed source says whether they belong to the book. The report
+  says so when one of them holds a non-zero byte. Records of only zero bytes,
+  like the 2-zero-byte record the MOBI page describes, have no text to lose.
+  The four real books each have one such record holding a single zero byte.
+- An EXTH 121 ("KF8 BOUNDARY Offset") record of any size or value: the older
+  text is converted and the report says the file may also hold a newer-format
+  copy that was not read. Nothing else is taken as a sign of a second copy.
 - Title from the full-name field, falling back to the database name; authors
   from every EXTH 100; language from EXTH 524, else `en` when the locale's
   language byte is 0x09; cover from EXTH 201.
-- Markup: `mbp:pagebreak` starts a section; `h1`–`h6` become headings and give
+- Markup: `script` and `style` contents are skipped up to their end tag in any
+  letter case, without reading tags inside them; text inside `head` is not book
+  text; `mbp:pagebreak` starts a section; `h1`–`h6` become headings and give
   the section its title, otherwise it is titled "Section N"; block tags end a
   paragraph; `<img recindex=N>` places image record N, counted from 1 at the
   first image record. Entities `&amp; &lt; &gt; &quot; &apos; &nbsp;` and
   numeric references are decoded.
 - JPEG and PNG images, each record stored once.
 
-Named character references outside the supported set stay visible as written and are reported once per book. A numeric reference outside Unicode becomes � and is reported. A quoted attribute may contain `>`. The decoder looks ahead at most 1,024 bytes for its closing quote.
+Named character references outside the supported set stay visible as written and are reported once per book. A numeric reference outside Unicode becomes � and is reported. A quoted attribute may contain `>`. The decoder looks ahead at most 1,024 bytes for its closing quote. A quote with no partner in that window, or whose value would contain the start of a tag (`<` then `/`, `!` or a letter), is treated as stray: the first `>` ends the tag, the text after it is kept and the report says so.
 
 ### What it refuses or reports
 
@@ -57,9 +71,10 @@ Named character references outside the supported set stay visible as written and
 |---|---|
 | PalmDOC encryption field not 0, or a DRM offset with a non-zero DRM count | `Protected`, before any text is decompressed |
 | HUFF/CDIC compression, other compression types, other encodings, other MOBI types | `Unsupported` with the reason |
-| KF8 only (type 248 or version 8+), or a combined MOBI 7 and KF8 file (EXTH 121 or a `BOUNDARY` record) | `Unsupported` |
+| Record 0 describes a KF8 book (MOBI type 248 or file version 8 or more) | `Unsupported` |
+| Extra data flags above `0x8000`, or a trailing entry size longer than four bytes (see [product limits](#product-limits)) | `Unsupported` with the reason |
 | Plain PalmDOC (`TEXt`/`REAd`) | `Unsupported` |
-| Truncation, offsets out of range or out of order, bad EXTH, bad compressed data, text longer than declared, no readable text | `Invalid` with the reason |
+| Truncation, offsets out of range or out of order, a first content record of 0 or text records past the end of the database, bad EXTH, bad compressed data, text longer than declared, no readable text | `Invalid` with the reason |
 | Input over 64 MiB, or declared text over 64 MiB | `Limit` |
 
 Each record expands to at most 4096 bytes, and the markup is read in one pass
@@ -67,20 +82,69 @@ with no recursion, so work and memory grow linearly with the input.
 
 `losses` names each kind of loss once: inline formatting, links (internal
 `filepos` and external), tables, lists, GIF images, other image formats, missing
-or name-only image references, invalid characters, text shorter than declared
-and markup cut off at the end.
+or name-only image references, invalid characters in the text, text shorter than
+declared and markup cut off at the end. It also reports:
 
-### Known gaps
+- A possible newer-format copy (EXTH 121) and unread records between the text
+  and the first non-book record, as above.
+- Metadata: replaced bytes in the title, an author or the language, and
+  descriptive EXTH records the EPUB does not carry, named in one entry (for
+  example "Metadata not carried over: publisher, description."). Technical EXTH
+  records such as creator software are not listed.
+- Structure: a `guide` or `reference` tag, any `h1`–`h6` other than `h2` (the
+  writer emits every heading as `h2`), and sections titled "Section N" because
+  they had no heading.
+- Layout: `pre` text, `center`, `blockquote`, `hr`, and `style`, `align`, `width`
+  or `height` on any tag but `img`.
+- Scanning: removed scripts and style sheets, an unclosed `script`, `style` or
+  `head` that hides the rest of the text, and tags ended early at a stray quote.
 
-- HUFF/CDIC compression: no allowed source describes it, so these books are
-  refused.
-- Headings: the four real books tried mark chapter titles with font sizes and
-  bold text, not `h1`–`h6`, so their sections are titled "Section N". No allowed
-  source describes MOBI 7 heading conventions.
-- `filepos` links are dropped: no allowed source describes how they resolve.
-- No protected or combined MOBI 7 and KF8 file was available; those refusals are
-  checked only against generated files.
-- Locale codes other than English are not mapped to languages.
+### Source gaps
+
+Facts the allowed pages leave open, and what the decoder does about each:
+
+- HUFF/CDIC compression is not described, so these books are refused.
+- MOBI 7 heading conventions are not described. The four real books tried mark
+  chapter titles with font sizes and bold text, not `h1`–`h6`, so their sections
+  are titled "Section N" and the report says so.
+- How `filepos` links resolve is not described, so they are dropped.
+- Combined files. The MOBI and KF8 pages say KindleGen files hold both a MOBI 7
+  and a KF8 edition, name EXTH 121 "KF8 BOUNDARY Offset" with a usual length of
+  4, and say KindleGen 2.3 and later puts compilation records "just before the
+  BOUNDARY record". They do not say what the 121 value counts, which value means
+  none, what a BOUNDARY record holds or how to find it, or which "flags near the
+  start of the database" identify the file type. So the decoder reads no
+  meaning into the 121 value or into any record's bytes: EXTH 121 adds a report
+  line and the older edition is converted.
+- Records between the declared text and the first non-book record: the page
+  marks the first non-book field with a question mark and describes only the
+  2-zero-byte record there. Records there are left out, and reported unless
+  they hold only zero bytes.
+- Trailing entries above bit 16 and backward-encoded integers longer than four
+  bytes are not described. See product limits.
+- Locale codes other than English: no mapping was taken from a source.
+
+### Product limits
+
+Choices of this decoder, not format facts:
+
+- Extra data flags may use only bits 1–16 (`0x0001`–`0xFFFF`), the range the
+  MOBI page documents. A file that sets a higher flag is refused as
+  `Unsupported`, not decoded with a guessed entry layout.
+- A trailing entry size may be at most four bytes (28 bits, more than any
+  record). A longer one is refused as `Unsupported`; one that runs out of
+  record bytes is `Invalid`.
+- Input and declared text are capped at 64 MiB, and each text record expands
+  to at most 4096 bytes.
+
+### Samples not found
+
+No combined MOBI 7 and KF8 file and no protected file was available, so those
+paths are checked only against generated files. Project Gutenberg's cache for
+book 84 offers `pg84-images-kf8.mobi` (downloaded 2026-11-19, not committed).
+Its bytes show a KF8-only file: file version 8, first content record 0, no
+EXTH 121 and no record named `BOUNDARY`. The decoder refuses it as a KF8 book.
+The same directory has no combined file.
 
 ### MOBI decoder sources
 
@@ -88,7 +152,8 @@ Format facts came only from these pages and from inspecting sample files.
 
 | Source | Read | Used for |
 |---|---|---|
-| <https://wiki.mobileread.com/wiki/MOBI> | 2026-11-19 | Record 0 layout, MOBI header offsets, encryption and DRM fields, EXTH layout and types 100, 121, 201, 524, trailing entries and backward integers, mixed KF8 files |
+| <https://wiki.mobileread.com/wiki/MOBI> | 2026-11-19 | Record 0 layout, MOBI header offsets, encryption and DRM fields, EXTH layout and types 100, 121, 201, 524, trailing entries and backward integers, mixed KF8 files. Read again the same day (page source) for the first content record (offset 192), first non-book record (offset 80), descriptive EXTH types 101–113, 503 and 504, flag bit numbering, and the BOUNDARY and compilation records |
+| <https://wiki.mobileread.com/wiki/KF8> | 2026-11-19 | KF8 files hold a MOBI database first and the KF8 one later; no layout or markers given |
 | <https://wiki.mobileread.com/wiki/PDB> | 2026-11-19 | Palm database header and record list |
 | <https://wiki.mobileread.com/wiki/PalmDOC> | 2026-11-19 | PalmDOC compression byte ranges, distance and length |
 | <https://wiki.mobileread.com/wiki/EBook_HTML> | 2026-11-19 | Tag list (no `recindex`, `filepos` or `mbp:` facts found) |
@@ -117,3 +182,4 @@ their bytes were inspected.
 | 28885, Alice, illustrated by Rackham | `aleph.pglaf.org/cache/epub/28885/pg28885-images.mobi` | 37 JPEGs, 41 image blocks, cover, opening sentence after a drop-cap image |
 | 84, Frankenstein | `gutenberg.pglaf.org/cache/epub/84/pg84-images.mobi` | Title, author, cover, 34 sections, first letter's opening found |
 | 1661, The Adventures of Sherlock Holmes | `aleph.pglaf.org/cache/epub/1661/pg1661-images.mobi` | Title, author, cover, 19 sections, opening found |
+| 84, Frankenstein (KF8 edition) | `aleph.pglaf.org/cache/epub/84/pg84-images-kf8.mobi` | KF8 only, refused as `Unsupported("KF8 (AZW3) book")` |

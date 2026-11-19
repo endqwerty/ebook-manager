@@ -38,6 +38,33 @@ const LOSS_SHORT_TEXT: &str =
 const LOSS_TRUNCATED_MARKUP: &str = "Markup cut off at the end of the text was removed.";
 const LOSS_UNKNOWN_REFERENCE: &str =
     "Unrecognised named character references such as &mdash; were kept as written.";
+const LOSS_UNCLOSED_SKIP: &str =
+    "Text after an unclosed script, style or head element was dropped.";
+const LOSS_STRAY_QUOTE: &str =
+    "Tags with an unmatched quote were ended at their first >; nearby text may be out of place.";
+const LOSS_BAD_METADATA: &str =
+    "Title, author or language bytes that are not valid text were replaced.";
+const LOSS_GUIDE: &str =
+    "The book's guide (such as its start position and contents entry) was not carried over.";
+const LOSS_HEADING_LEVELS: &str =
+    "Heading levels were changed; every heading is written at the same level.";
+const LOSS_PRE: &str = "Preformatted text lost its line breaks and spacing.";
+const LOSS_LAYOUT: &str = "Layout such as alignment, indentation and spacing was removed.";
+const LOSS_RULES: &str = "Horizontal rules were removed.";
+const LOSS_SCRIPTS: &str = "Scripts and style sheets were removed.";
+const LOSS_NUMBERED: &str =
+    "Sections without a heading were given numbered titles such as \"Section 1\".";
+const LOSS_SECOND_COPY: &str =
+    "The file may also hold a newer-format (KF8) copy of the book, which was not read.";
+const LOSS_UNREAD_RECORDS: &str =
+    "Records between the declared text and the first non-book record were not read; they may hold more of the book.";
+/// Extra data flags with documented trailing entries: bit 1 (0x0001) for the
+/// multibyte overlap and bits 2-16 (0x0002-0x8000) for `<data><size>` entries.
+const DOCUMENTED_EXTRA_FLAGS: u32 = 0xFFFF;
+/// Longest backward-encoded trailing entry size this decoder accepts.
+const MAX_SIZE_BYTES: usize = 4;
+/// The heading level the EPUB writer uses for every `Block::Heading`.
+const WRITTEN_HEADING: &str = "h2";
 /// A quoted attribute value longer than this is treated as an unclosed quote.
 const MAX_QUOTED_VALUE: usize = 1024;
 
@@ -48,6 +75,21 @@ pub fn decode(bytes: &[u8]) -> Result<ParsedBook, DecodeError> {
     let db = PalmDatabase::parse(bytes)?;
     let header = Header::parse(&db)?;
     let mut losses = Losses::default();
+    if header.second_copy {
+        losses.note(LOSS_SECOND_COPY);
+    }
+    if header.unread_records {
+        losses.note(LOSS_UNREAD_RECORDS);
+    }
+    if header.metadata_repaired {
+        losses.note(LOSS_BAD_METADATA);
+    }
+    if !header.unused_metadata.is_empty() {
+        losses.note(&format!(
+            "Metadata not carried over: {}.",
+            header.unused_metadata.join(", ")
+        ));
+    }
 
     let raw = read_text(&db, &header, &mut losses)?;
     let text = decode_characters(&raw, header.encoding, &mut losses);
@@ -154,6 +196,7 @@ impl<'a> PalmDatabase<'a> {
 struct Header {
     compression: u16,
     text_length: usize,
+    first_text_record: usize,
     text_records: usize,
     encoding: u32,
     extra_flags: u32,
@@ -162,6 +205,10 @@ struct Header {
     title: String,
     authors: Vec<String>,
     language: Option<String>,
+    metadata_repaired: bool,
+    unused_metadata: Vec<&'static str>,
+    second_copy: bool,
+    unread_records: bool,
 }
 
 impl Header {
@@ -237,25 +284,39 @@ impl Header {
             return Err(DecodeError::Limit);
         }
         let text_records = be16(r0, 8).unwrap_or(0) as usize;
-        if text_records == 0 || text_records >= db.len() {
+        if text_records == 0 {
             return Err(invalid("text record count is out of range"));
         }
         if text_length > text_records * TEXT_RECORD_SIZE {
             return Err(invalid("declared text length exceeds its records"));
         }
-
-        if db
-            .offsets
-            .iter()
-            .skip(1)
-            .any(|&o| db.bytes[o..].starts_with(b"BOUNDARY"))
-        {
-            return Err(DecodeError::Unsupported(
-                "combined MOBI 7 and KF8 book".into(),
-            ));
+        // Record 0 offset 192 holds the first content record number, "normally 1".
+        let first_text_record = if header_end >= 194 {
+            be16(r0, 192).unwrap_or(1) as usize
+        } else {
+            1
+        };
+        let text_end = first_text_record + text_records;
+        if first_text_record == 0 || text_end > db.len() {
+            return Err(invalid("text records are out of range"));
         }
+        // Every record in the declared range is text, whatever its bytes look
+        // like. Records between the text and the first non-book record (offset 80)
+        // are left out. One holding only zero bytes (the page describes a
+        // 2-zero-byte record there) has no text to lose; any other is reported.
+        let first_non_book = field(80)
+            .filter(|&v| v != ABSENT)
+            .map(|v| (v as usize).min(db.len()));
+        let unread_records = first_non_book.is_some_and(|n| {
+            (text_end..n).any(|i| db.record(i).is_some_and(|r| r.iter().any(|&b| b != 0)))
+        });
 
         let extra_flags = field(240).unwrap_or(0);
+        if extra_flags & !DOCUMENTED_EXTRA_FLAGS != 0 {
+            return Err(DecodeError::Unsupported(format!(
+                "extra data flags {extra_flags:#x} name trailing entries above 0x8000"
+            )));
+        }
         let first_image = field(108)
             .filter(|&v| v != ABSENT && v != 0)
             .map(|v| v as usize);
@@ -263,6 +324,7 @@ impl Header {
         let mut header = Header {
             compression,
             text_length,
+            first_text_record,
             text_records,
             encoding,
             extra_flags,
@@ -271,6 +333,10 @@ impl Header {
             title: String::new(),
             authors: Vec::new(),
             language: None,
+            metadata_repaired: false,
+            unused_metadata: Vec::new(),
+            second_copy: false,
+            unread_records,
         };
 
         let exth_flags = field(128).unwrap_or(0);
@@ -285,10 +351,10 @@ impl Header {
                 .checked_add(name_length)
                 .and_then(|end| r0.get(name_offset..end))
                 .ok_or_else(|| invalid("full name runs past the header record"))?;
-            header.title = decode_metadata(name, encoding);
+            header.title = header.metadata(name, encoding);
         }
         if header.title.is_empty() {
-            header.title = decode_metadata(db.name, ENCODING_CP1252);
+            header.title = header.metadata(db.name, ENCODING_CP1252);
         }
         if header.language.is_none() && field(92).map(|locale| locale & 0xFF) == Some(0x09) {
             header.language = Some("en".into());
@@ -316,13 +382,13 @@ impl Header {
             let data = &region[at + 8..end];
             match kind {
                 EXTH_AUTHOR => {
-                    let author = decode_metadata(data, self.encoding);
+                    let author = self.metadata(data, self.encoding);
                     if !author.is_empty() {
                         self.authors.push(author);
                     }
                 }
                 EXTH_LANGUAGE => {
-                    let language = decode_metadata(data, self.encoding);
+                    let language = self.metadata(data, self.encoding);
                     if !language.is_empty() {
                         self.language = Some(language);
                     }
@@ -333,17 +399,49 @@ impl Header {
                         self.cover_offset = Some(offset as usize);
                     }
                 }
-                EXTH_KF8_BOUNDARY => {
-                    return Err(DecodeError::Unsupported(
-                        "combined MOBI 7 and KF8 book".into(),
-                    ))
+                // "KF8 BOUNDARY Offset": a sign that a newer copy may follow. Its
+                // value is not interpreted.
+                EXTH_KF8_BOUNDARY => self.second_copy = true,
+                other => {
+                    if let Some(name) = unused_exth_name(other) {
+                        if !self.unused_metadata.contains(&name) {
+                            self.unused_metadata.push(name);
+                        }
+                    }
                 }
-                _ => {}
             }
             at = end;
         }
         Ok(())
     }
+
+    fn metadata(&mut self, bytes: &[u8], encoding: u32) -> String {
+        let (text, repaired) = decode_metadata(bytes, encoding);
+        self.metadata_repaired |= repaired;
+        text
+    }
+}
+
+/// Descriptive EXTH records from the MOBI wiki's EXTH table that the EPUB does
+/// not carry. Technical records (creator software, DRM, flags) are not listed.
+fn unused_exth_name(kind: u32) -> Option<&'static str> {
+    Some(match kind {
+        101 => "publisher",
+        102 => "imprint",
+        103 => "description",
+        104 => "ISBN",
+        105 => "subject",
+        106 => "publishing date",
+        107 => "review",
+        108 => "contributor",
+        109 => "rights",
+        110 => "subject code",
+        111 => "type",
+        112 => "source",
+        113 | 504 => "ASIN",
+        503 => "updated title",
+        _ => return None,
+    })
 }
 
 fn read_text(
@@ -352,7 +450,7 @@ fn read_text(
     losses: &mut Losses,
 ) -> Result<Vec<u8>, DecodeError> {
     let mut text = Vec::with_capacity(header.text_length);
-    for index in 1..=header.text_records {
+    for index in header.first_text_record..header.first_text_record + header.text_records {
         let record = db
             .record(index)
             .ok_or_else(|| invalid("missing text record"))?;
@@ -387,7 +485,7 @@ fn read_text(
 /// removed. Every other entry ends in a backward-encoded size that includes itself.
 fn strip_trailing_entries(record: &[u8], flags: u32) -> Result<&[u8], DecodeError> {
     let mut end = record.len();
-    for bit in (1..32).rev() {
+    for bit in (1..16).rev() {
         if flags & (1 << bit) == 0 {
             continue;
         }
@@ -414,13 +512,19 @@ fn strip_trailing_entries(record: &[u8], flags: u32) -> Result<&[u8], DecodeErro
 
 fn backward_varint(bytes: &[u8]) -> Result<usize, DecodeError> {
     let mut value = 0usize;
-    for (taken, &byte) in bytes.iter().rev().take(4).enumerate() {
+    for (taken, &byte) in bytes.iter().rev().take(MAX_SIZE_BYTES).enumerate() {
         value |= ((byte & 0x7F) as usize) << (7 * taken);
         if byte & 0x80 != 0 {
             return Ok(value);
         }
     }
-    Err(invalid("trailing entry size is malformed"))
+    if bytes.len() > MAX_SIZE_BYTES {
+        Err(DecodeError::Unsupported(
+            "trailing entry size longer than four bytes".into(),
+        ))
+    } else {
+        Err(invalid("trailing entry size is malformed"))
+    }
 }
 
 /// PalmDOC decompression. Output per record is capped at 4096 bytes, so a hostile
@@ -499,14 +603,22 @@ fn decode_characters(raw: &[u8], encoding: u32, losses: &mut Losses) -> String {
     }
 }
 
-fn decode_metadata(bytes: &[u8], encoding: u32) -> String {
-    let text = if encoding == ENCODING_UTF8 {
-        String::from_utf8_lossy(bytes).into_owned()
+/// Decodes a metadata field and says whether any bytes had to be replaced.
+fn decode_metadata(bytes: &[u8], encoding: u32) -> (String, bool) {
+    let (text, repaired) = if encoding == ENCODING_UTF8 {
+        match String::from_utf8_lossy(bytes) {
+            std::borrow::Cow::Borrowed(s) => (s.to_string(), false),
+            std::borrow::Cow::Owned(s) => (s, true),
+        }
     } else {
-        bytes.iter().map(|&b| cp1252(b)).collect()
+        let text: String = bytes.iter().map(|&b| cp1252(b)).collect();
+        let repaired = text.contains('\u{FFFD}');
+        (text, repaired)
     };
-    text.trim_matches(|c: char| c.is_whitespace() || c == '\0')
-        .to_string()
+    let text = text
+        .trim_matches(|c: char| c.is_whitespace() || c == '\0')
+        .to_string();
+    (text, repaired)
 }
 
 fn cp1252(byte: u8) -> char {
@@ -621,6 +733,7 @@ struct Builder {
     text: String,
     pending: Pending,
     space: bool,
+    numbered: bool,
 }
 
 impl Builder {
@@ -664,7 +777,10 @@ impl Builder {
                 Block::Heading(t) => Some(t.clone()),
                 _ => None,
             })
-            .unwrap_or_else(|| format!("Section {}", self.sections.len() + 1));
+            .unwrap_or_else(|| {
+                self.numbered = true;
+                format!("Section {}", self.sections.len() + 1)
+            });
         self.sections.push(Section { title, blocks });
     }
 }
@@ -672,6 +788,8 @@ impl Builder {
 /// One left-to-right pass over the MOBI 7 markup with no recursion: tags that
 /// start or end a block flush the text gathered so far; `mbp:pagebreak` starts a
 /// new section; `img recindex` places an image; everything else keeps its text.
+/// Script and style contents are raw text: the pass jumps to their end tag
+/// without reading tags inside them. Text inside `head` is not book text.
 fn build_sections(
     text: &str,
     images: &mut ImageTable<'_, '_>,
@@ -683,12 +801,13 @@ fn build_sections(
         text: String::new(),
         pending: Pending::Paragraph,
         space: false,
+        numbered: false,
     };
-    let mut skip_until: Option<&'static str> = None;
+    let mut in_head = false;
     let mut rest = text;
     while !rest.is_empty() {
         let lt = rest.find('<').unwrap_or(rest.len());
-        if skip_until.is_none() {
+        if !in_head {
             b.push_text(&decode_entities(&rest[..lt], losses));
         }
         rest = &rest[lt..];
@@ -705,33 +824,49 @@ fn build_sections(
             }
             continue;
         }
-        let Some(gt) = tag_end(rest) else {
+        let Some((gt, stray_quote)) = tag_end(rest) else {
             losses.note(LOSS_TRUNCATED_MARKUP);
             break;
         };
+        if stray_quote {
+            losses.note(LOSS_STRAY_QUOTE);
+        }
         let tag = Tag::parse(&rest[1..gt]);
         rest = &rest[gt + 1..];
 
-        if let Some(end) = skip_until {
-            if tag.closing && tag.name == end {
-                skip_until = None;
+        if !tag.closing && !tag.self_closing && (tag.name == "script" || tag.name == "style") {
+            losses.note(LOSS_SCRIPTS);
+            match end_tag(rest, &tag.name) {
+                Some(after) => rest = &rest[after..],
+                None => {
+                    losses.note(LOSS_UNCLOSED_SKIP);
+                    break;
+                }
             }
             continue;
         }
+        if !tag.closing
+            && tag.name != "img"
+            && ["style", "align", "width", "height"]
+                .iter()
+                .any(|name| tag.attr(name).is_some_and(|v| !v.trim().is_empty()))
+        {
+            losses.note(LOSS_LAYOUT);
+        }
         match tag.name.as_str() {
-            "head" | "script" | "style" if !tag.closing => {
-                skip_until = Some(match tag.name.as_str() {
-                    "head" => "head",
-                    "script" => "script",
-                    _ => "style",
-                });
-            }
+            "head" => in_head = !tag.closing && !tag.self_closing,
+            "body" => in_head = false,
+            "guide" | "reference" => losses.note(LOSS_GUIDE),
+            _ if in_head => {}
             "mbp:pagebreak" => {
                 if !tag.closing {
                     b.end_section();
                 }
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                if !tag.closing && tag.name != WRITTEN_HEADING {
+                    losses.note(LOSS_HEADING_LEVELS);
+                }
                 b.flush();
                 b.pending = if tag.closing {
                     Pending::Paragraph
@@ -739,7 +874,19 @@ fn build_sections(
                     Pending::Heading
                 };
             }
-            "p" | "div" | "blockquote" | "br" | "hr" | "center" | "pre" | "dl" | "dt" | "dd" => {
+            "pre" => {
+                losses.note(LOSS_PRE);
+                b.flush();
+            }
+            "center" | "blockquote" => {
+                losses.note(LOSS_LAYOUT);
+                b.flush();
+            }
+            "hr" => {
+                losses.note(LOSS_RULES);
+                b.flush();
+            }
+            "p" | "div" | "br" | "dl" | "dt" | "dd" => {
                 b.flush();
             }
             "table" | "tr" | "td" | "th" | "caption" | "thead" | "tbody" => {
@@ -773,18 +920,47 @@ fn build_sections(
             | "span" | "s" | "strike" | "del" | "ins" | "cite" | "code" | "var" => {
                 losses.note(LOSS_FORMATTING);
             }
-            "html" | "body" | "img" | "mbp:section" | "mbp:nu" | "mbp:frameset" | "head"
-            | "script" | "style" | "guide" | "reference" | "" => {}
+            "html" | "img" | "mbp:section" | "mbp:nu" | "mbp:frameset" | "script" | "style"
+            | "" => {}
             _ => losses.note(LOSS_UNKNOWN_MARKUP),
         }
     }
+    if in_head {
+        losses.note(LOSS_UNCLOSED_SKIP);
+    }
     b.end_section();
+    if b.numbered {
+        losses.note(LOSS_NUMBERED);
+    }
     b.sections
+}
+
+/// Finds the end tag `</name>` (any case, optional space before `>`) in raw text
+/// and returns the byte index just after it.
+fn end_tag(s: &str, name: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut from = 0;
+    while let Some(found) = s[from..].find("</") {
+        let start = from + found + 2;
+        let after = start + name.len();
+        let matches = bytes
+            .get(start..after)
+            .is_some_and(|n| n.eq_ignore_ascii_case(name.as_bytes()))
+            && bytes
+                .get(after)
+                .is_some_and(|&c| c == b'>' || c == b'/' || c.is_ascii_whitespace());
+        if matches {
+            return s[after..].find('>').map(|gt| after + gt + 1);
+        }
+        from = start;
+    }
+    None
 }
 
 struct Tag {
     name: String,
     closing: bool,
+    self_closing: bool,
     attrs: String,
 }
 
@@ -795,6 +971,7 @@ impl Tag {
             Some(rest) => (true, rest.trim_start()),
             None => (false, inner),
         };
+        let self_closing = inner.ends_with('/');
         let inner = inner.strip_suffix('/').unwrap_or(inner);
         let split = inner
             .find(|c: char| c.is_whitespace())
@@ -802,6 +979,7 @@ impl Tag {
         Tag {
             name: inner[..split].to_ascii_lowercase(),
             closing,
+            self_closing,
             attrs: inner[split..].to_string(),
         }
     }
@@ -845,21 +1023,28 @@ impl Tag {
 }
 
 /// Finds the `>` that closes the tag at the start of `s`, skipping any `>` inside
-/// an attribute value quoted after `=`. A quote that does not close within
-/// `MAX_QUOTED_VALUE` bytes is treated as stray, and the first `>` ends the tag.
-fn tag_end(s: &str) -> Option<usize> {
+/// an attribute value quoted after `=`. A quote is stray when it does not close
+/// within `MAX_QUOTED_VALUE` bytes or its value would contain the start of a tag
+/// (`<` followed by `/`, `!` or a letter); then the first `>` ends the tag and the
+/// second value is `true` so the caller can report it.
+fn tag_end(s: &str) -> Option<(usize, bool)> {
     let bytes = s.as_bytes();
     let mut after_equals = false;
     let mut i = 1;
     while i < bytes.len() {
         match bytes[i] {
-            b'>' => return Some(i),
+            b'>' => return Some((i, false)),
             b'=' => after_equals = true,
             quote @ (b'"' | b'\'') if after_equals => {
                 let window = &bytes[i + 1..bytes.len().min(i + 1 + MAX_QUOTED_VALUE)];
-                match window.iter().position(|&b| b == quote) {
-                    Some(close) => i += 1 + close,
-                    None => return s.find('>'),
+                let value = window
+                    .iter()
+                    .position(|&b| b == quote)
+                    .map(|close| &window[..close])
+                    .filter(|value| !contains_tag_start(value));
+                match value {
+                    Some(value) => i += 1 + value.len(),
+                    None => return s.find('>').map(|gt| (gt, true)),
                 }
                 after_equals = false;
             }
@@ -869,6 +1054,12 @@ fn tag_end(s: &str) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+fn contains_tag_start(value: &[u8]) -> bool {
+    value
+        .windows(2)
+        .any(|w| w[0] == b'<' && (w[1] == b'/' || w[1] == b'!' || w[1].is_ascii_alphabetic()))
 }
 
 /// Decodes `&name;`, `&#NNN;` and `&#xHH;` references. A named reference this
