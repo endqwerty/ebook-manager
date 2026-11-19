@@ -218,6 +218,11 @@ break a parser.
   When a change adds or alters a failure test, count `coredumpctl list
   --no-pager -q` lines before and after one run. A new record is a bug in the
   code or the test. Fix it before pushing.
+- Run the GUI under a private X server and a private D-Bus session that starts
+  no services, as [smoke.py](apps/desktop/tests/smoke.py) does. Clear
+  `XDG_CURRENT_DESKTOP` and `HYPRLAND_INSTANCE_SIGNATURE` as well. A private bus
+  that may start services launches the host's portals, which crash when it
+  closes.
 - An exploratory probe that may crash, such as a native call from a script or a
   headless browser, can run once when the crash is what you're studying. Don't
   put it in a loop or a test, and mention the crash in your reply.
