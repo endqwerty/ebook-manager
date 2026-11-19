@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import gi
@@ -19,6 +20,21 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi, GLib
 
 SCREEN = (1100, 800)
+
+BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <servicedir>{services}</servicedir>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"""
 
 
 def epub(path, revised=False):
@@ -391,14 +407,27 @@ if __name__ == "__main__":
                 GDK_DEBUG="no-portals",
                 GDK_SCALE="1",
                 GDK_BACKEND="x11",
+                GIO_USE_VFS="local",
+                GSETTINGS_BACKEND="memory",
                 LC_ALL="C.UTF-8",
             )
             for key in (
                 "WAYLAND_DISPLAY",
                 "DBUS_SESSION_BUS_ADDRESS",
                 "AT_SPI_BUS_ADDRESS",
+                "XDG_CURRENT_DESKTOP",
+                "XDG_SESSION_DESKTOP",
+                "DESKTOP_SESSION",
+                "HYPRLAND_INSTANCE_SIGNATURE",
             ):
                 env.pop(key, None)
+            # The private bus starts no services. Otherwise the app's requests
+            # start the host's portals and file-system daemons, which crash
+            # when this bus closes and show the user a crash notice.
+            services = Path(temp) / "no-services"
+            services.mkdir()
+            config = Path(temp) / "bus.conf"
+            config.write_text(BUS_CONFIG.format(services=escape(str(services))))
             subprocess.run(
                 [
                     "xvfb-run",
@@ -406,6 +435,7 @@ if __name__ == "__main__":
                     "-s",
                     f"-screen 0 {SCREEN[0]}x{SCREEN[1]}x24 -nolisten tcp",
                     "dbus-run-session",
+                    f"--config-file={config}",
                     "--",
                     sys.executable,
                     __file__,
