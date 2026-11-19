@@ -16,3 +16,7 @@ zip = { version = "2", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["now"] }
 uuid = { version = "1", features = ["v4"] }
 language-tags = "0.3"
+
+[[test]]
+name = "mobi"
+path = "tests/mobi/harness.rs"
