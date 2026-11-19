@@ -42,12 +42,21 @@ files, no network, no global state. Its tests and the generated sample live in
   (record 1 when the MOBI header is too short to hold it). Every record in the
   declared range is text, whatever its bytes look like. Trailing entries named
   by the extra data flags are removed.
-- Records after the declared text are not read. When the first non-book record
-  (offset 80) lies further on, the records between the two are left out,
-  because no allowed source says whether they belong to the book. The report
-  says so when one of them holds a non-zero byte. Records of only zero bytes,
-  like the 2-zero-byte record the MOBI page describes, have no text to lose.
-  The four real books each have one such record holding a single zero byte.
+- Records after the declared text are never read, because no allowed source
+  says whether they belong to the book. The report says when one of them might
+  hold more of the book:
+  - When the first non-book record (offset 80) lies at or after the end of the
+    text and inside the database, any record before it that holds a non-zero
+    byte counts.
+  - When that field is missing (a short MOBI header), unset (`0xFFFFFFFF`),
+    before the end of the text or past the end of the database, any later record
+    counts unless it holds only zero bytes, is one the MOBI page documents after
+    the text (FLIS, FCIS, the end-of-file record, SRCS, CMET), or lies at or
+    after a first image record that comes after the text.
+
+  Records of only zero bytes, like the 2-zero-byte record the MOBI page
+  describes, have no text to lose. The four real books each have one such
+  record holding a single zero byte, and none of them gets this report line.
 - An EXTH 121 ("KF8 BOUNDARY Offset") record of any size or value: the older
   text is converted and the report says the file may also hold a newer-format
   copy that was not read. Nothing else is taken as a sign of a second copy.
@@ -85,8 +94,8 @@ with no recursion, so work and memory grow linearly with the input.
 or name-only image references, invalid characters in the text, text shorter than
 declared and markup cut off at the end. It also reports:
 
-- A possible newer-format copy (EXTH 121) and unread records between the text
-  and the first non-book record, as above.
+- A possible newer-format copy (EXTH 121) and records after the text that may
+  hold more of the book, as above.
 - Metadata: replaced bytes in the title, an author or the language, and
   descriptive EXTH records the EPUB does not carry, named in one entry (for
   example "Metadata not carried over: publisher, description."). Technical EXTH
@@ -116,10 +125,11 @@ Facts the allowed pages leave open, and what the decoder does about each:
   start of the database" identify the file type. So the decoder reads no
   meaning into the 121 value or into any record's bytes: EXTH 121 adds a report
   line and the older edition is converted.
-- Records between the declared text and the first non-book record: the page
-  marks the first non-book field with a question mark and describes only the
-  2-zero-byte record there. Records there are left out, and reported unless
-  they hold only zero bytes.
+- Records after the declared text: the page marks the first non-book field with
+  a question mark and describes only the 2-zero-byte record directly after the
+  text, then images, FLIS, FCIS, compilation and end-of-file records. Nothing
+  says where the book's records end when that field is missing or out of range.
+  Such records are left out and reported as above.
 - Trailing entries above bit 16 and backward-encoded integers longer than four
   bytes are not described. See product limits.
 - Locale codes other than English: no mapping was taken from a source.
@@ -152,7 +162,7 @@ Format facts came only from these pages and from inspecting sample files.
 
 | Source | Read | Used for |
 |---|---|---|
-| <https://wiki.mobileread.com/wiki/MOBI> | 2026-11-19 | Record 0 layout, MOBI header offsets, encryption and DRM fields, EXTH layout and types 100, 121, 201, 524, trailing entries and backward integers, mixed KF8 files. Read again the same day (page source) for the first content record (offset 192), first non-book record (offset 80), descriptive EXTH types 101–113, 503 and 504, flag bit numbering, and the BOUNDARY and compilation records |
+| <https://wiki.mobileread.com/wiki/MOBI> | 2026-11-19 | Record 0 layout, MOBI header offsets, encryption and DRM fields, EXTH layout and types 100, 121, 201, 524, trailing entries and backward integers, mixed KF8 files. Read again the same day (page source) for the first content record (offset 192), first non-book record (offset 80), descriptive EXTH types 101–113, 503 and 504, flag bit numbering, and the BOUNDARY and compilation records. Read a third time the same day for the identifiers of the FLIS, FCIS, SRCS and CMET records and the end-of-file record's bytes |
 | <https://wiki.mobileread.com/wiki/KF8> | 2026-11-19 | KF8 files hold a MOBI database first and the KF8 one later; no layout or markers given |
 | <https://wiki.mobileread.com/wiki/PDB> | 2026-11-19 | Palm database header and record list |
 | <https://wiki.mobileread.com/wiki/PalmDOC> | 2026-11-19 | PalmDOC compression byte ranges, distance and length |

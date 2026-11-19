@@ -935,7 +935,7 @@ fn unclosed_skipped_element_is_reported() {
 const LOSS_SECOND_COPY: &str =
     "The file may also hold a newer-format (KF8) copy of the book, which was not read.";
 const LOSS_UNREAD_RECORDS: &str =
-    "Records between the declared text and the first non-book record were not read; they may hold more of the book.";
+    "Records after the declared text whose purpose is uncertain were not read; they may hold more of the book.";
 
 #[test]
 fn text_records_are_text_whatever_they_contain() {
@@ -1024,6 +1024,80 @@ fn records_between_text_and_first_non_book_are_left_out_and_reported() {
         ..Default::default()
     });
     assert_eq!(paragraphs(&book), ["Hello."], "the declared range wins");
+}
+
+/// The review's case: one declared text record, a second record of markup after
+/// it, and no first non-book record. The text converts and the report says a
+/// record was left out.
+#[test]
+fn uncertain_records_are_reported_when_the_first_non_book_field_cannot_bound_them() {
+    let kept_then_more = |first_non_book: Option<u32>| MobiFixture {
+        compression: 1,
+        extra_flags: 0,
+        raw_text_records: Some(vec![b"<p>Kept</p>".to_vec(), b"<p>More</p>".to_vec()]),
+        declared_text_records: Some(1),
+        declared_text_length: Some(11),
+        first_non_book,
+        ..Default::default()
+    };
+    // Field unset, before the end of the text, at record 0, or past the database.
+    for field in [0xFFFF_FFFF, 1, 0, 60_000] {
+        let book = ok(&kept_then_more(Some(field)));
+        assert_eq!(paragraphs(&book), ["Kept"], "offset 80 = {field}");
+        assert_eq!(
+            other_losses(&book),
+            [LOSS_UNREAD_RECORDS],
+            "offset 80 = {field}"
+        );
+    }
+
+    // With the field unusable, the first image record bounds the scan.
+    let book = ok(&MobiFixture {
+        images: vec![JPEG.to_vec()],
+        cover: Some(0),
+        ..kept_then_more(Some(0xFFFF_FFFF))
+    });
+    assert_eq!(other_losses(&book), [LOSS_UNREAD_RECORDS]);
+
+    // A MOBI header too short to hold offset 80 is just as uncertain.
+    let short = MobiFixture {
+        authors: vec![],
+        language: None,
+        ..kept_then_more(None)
+    };
+    let mut bytes = short.build();
+    let r0 = u32::from_be_bytes(bytes[78..82].try_into().unwrap()) as usize;
+    bytes[r0 + 20..r0 + 24].copy_from_slice(&60u32.to_be_bytes());
+    let book = mobi::decode(&bytes).expect("short header decodes");
+    assert_eq!(paragraphs(&book), ["Kept"]);
+    assert_eq!(other_losses(&book), [LOSS_UNREAD_RECORDS]);
+}
+
+/// Without a usable first non-book field, the records the MOBI page documents
+/// after the text (zero-byte filler, FLIS, FCIS, end of file) and image records
+/// from the first image index on are expected, so ordinary files say nothing.
+#[test]
+fn documented_records_after_the_text_need_no_warning() {
+    for f in [
+        MobiFixture {
+            first_non_book: Some(0xFFFF_FFFF),
+            ..Default::default()
+        },
+        MobiFixture {
+            first_non_book: Some(0xFFFF_FFFF),
+            images: vec![JPEG.to_vec(), PNG.to_vec()],
+            cover: Some(1),
+            ..Default::default()
+        },
+        MobiFixture {
+            first_non_book: Some(1),
+            ..Default::default()
+        },
+    ] {
+        let book = ok(&f);
+        assert_eq!(paragraphs(&book), ["Hello."]);
+        assert_eq!(other_losses(&book), Vec::<String>::new());
+    }
 }
 
 #[test]

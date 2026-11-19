@@ -57,7 +57,7 @@ const LOSS_NUMBERED: &str =
 const LOSS_SECOND_COPY: &str =
     "The file may also hold a newer-format (KF8) copy of the book, which was not read.";
 const LOSS_UNREAD_RECORDS: &str =
-    "Records between the declared text and the first non-book record were not read; they may hold more of the book.";
+    "Records after the declared text whose purpose is uncertain were not read; they may hold more of the book.";
 /// Extra data flags with documented trailing entries: bit 1 (0x0001) for the
 /// multibyte overlap and bits 2-16 (0x0002-0x8000) for `<data><size>` entries.
 const DOCUMENTED_EXTRA_FLAGS: u32 = 0xFFFF;
@@ -301,15 +301,9 @@ impl Header {
             return Err(invalid("text records are out of range"));
         }
         // Every record in the declared range is text, whatever its bytes look
-        // like. Records between the text and the first non-book record (offset 80)
-        // are left out. One holding only zero bytes (the page describes a
-        // 2-zero-byte record there) has no text to lose; any other is reported.
-        let first_non_book = field(80)
-            .filter(|&v| v != ABSENT)
-            .map(|v| (v as usize).min(db.len()));
-        let unread_records = first_non_book.is_some_and(|n| {
-            (text_end..n).any(|i| db.record(i).is_some_and(|r| r.iter().any(|&b| b != 0)))
-        });
+        // like. Records after it are never read; see `uncertain_records_after`.
+        let first_image_field = field(108);
+        let unread_records = uncertain_records_after(db, text_end, field(80), first_image_field);
 
         let extra_flags = field(240).unwrap_or(0);
         if extra_flags & !DOCUMENTED_EXTRA_FLAGS != 0 {
@@ -317,7 +311,7 @@ impl Header {
                 "extra data flags {extra_flags:#x} name trailing entries above 0x8000"
             )));
         }
-        let first_image = field(108)
+        let first_image = first_image_field
             .filter(|&v| v != ABSENT && v != 0)
             .map(|v| v as usize);
 
@@ -420,6 +414,41 @@ impl Header {
         self.metadata_repaired |= repaired;
         text
     }
+}
+
+/// Says whether records after the declared text might hold more of the book.
+/// None of them is read. When the first non-book record (offset 80) lies at or
+/// after the text and inside the database, only records before it are in doubt,
+/// and those holding only zero bytes (the page describes a 2-zero-byte record
+/// there) have no text. When that field is missing, unset or out of range,
+/// every later record is in doubt unless it is zero bytes only, one of the
+/// records the MOBI page documents after the text (FLIS, FCIS, end of file,
+/// SRCS, CMET), or at or after a first image record that lies past the text.
+fn uncertain_records_after(
+    db: &PalmDatabase<'_>,
+    text_end: usize,
+    first_non_book: Option<u32>,
+    first_image: Option<u32>,
+) -> bool {
+    let within = |v: Option<u32>, end: usize| {
+        v.filter(|&v| v != ABSENT)
+            .map(|v| v as usize)
+            .filter(|&v| v >= text_end && v <= end)
+    };
+    let zero_only = |r: &[u8]| r.iter().all(|&b| b == 0);
+    if let Some(first_non_book) = within(first_non_book, db.len()) {
+        return (text_end..first_non_book).any(|i| db.record(i).is_some_and(|r| !zero_only(r)));
+    }
+    let end = within(first_image, db.len().saturating_sub(1)).unwrap_or(db.len());
+    (text_end..end).any(|i| {
+        db.record(i).is_some_and(|r| {
+            !(zero_only(r)
+                || r == [0xE9, 0x8E, 0x0D, 0x0A]
+                || [b"FLIS", b"FCIS", b"SRCS", b"CMET"]
+                    .iter()
+                    .any(|id| r.starts_with(*id)))
+        })
+    })
 }
 
 /// Descriptive EXTH records from the MOBI wiki's EXTH table that the EPUB does
