@@ -129,6 +129,7 @@ struct State {
     showing: Cell<bool>,
     /// The first sort key shown.
     first: Cell<Option<SortField>>,
+    keyboard_menu: glib::WeakRef<gtk::PopoverMenu>,
 }
 
 pub fn build(
@@ -247,7 +248,7 @@ pub fn build(
     while let Some(title) = header {
         title.set_focusable(true);
         let keys = gtk::EventControllerKey::new();
-        let (weak, events) = (view.downgrade(), events.clone());
+        let (weak, events, state) = (view.downgrade(), events.clone(), table.state.clone());
         keys.connect_key_pressed(move |keys, key, _, modifiers| {
             use gtk::gdk::{Key, ModifierType};
             let (Some(view), Some(title)) = (weak.upgrade(), keys.widget()) else {
@@ -299,10 +300,15 @@ pub fn build(
                 {
                     let menu = gtk::PopoverMenu::from_model(Some(&header_menu(field)));
                     menu.set_parent(&title);
+                    state.keyboard_menu.set(Some(&menu));
                     menu.connect_closed(|menu| {
                         // After the chosen item's action has run.
                         let menu = menu.clone();
-                        glib::idle_add_local_once(move || menu.unparent());
+                        glib::idle_add_local_once(move || {
+                            if menu.parent().is_some() {
+                                menu.unparent();
+                            }
+                        });
                     });
                     menu.popup();
                     glib::Propagation::Stop
@@ -351,6 +357,18 @@ pub fn build(
         glib::idle_add_local_once(move || layout());
     });
     table
+}
+
+impl Drop for Table {
+    fn drop(&mut self) {
+        // The window can replace the table while a keyboard menu is open.
+        if let Some(menu) = self.state.keyboard_menu.upgrade()
+            && menu.parent().is_some()
+        {
+            menu.popdown();
+            menu.unparent();
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
