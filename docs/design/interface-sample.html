@@ -8,6 +8,7 @@
      chromium --headless --hide-scrollbars --window-size=820,1480 --screenshot=interface-sample-light.png interface-sample.html
      and the same with interface-sample.html#dark for interface-sample-dark.png. -->
 <style>
+  /* Binding type is 11% and 9% of the cover's width: 10.8px and 8.8px on a 98px cover, 17.6px and 14.4px at 160px. */
   :root {
     --background: #f6f6f7; --foreground: #1c1c1f; --card: #ffffff; --border: #dcdce0;
     --primary: #2f6fde; --primary-foreground: #ffffff; --radius: 10px;
@@ -51,15 +52,15 @@
   .shelf { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 20px; row-gap: 28px; align-items: end; }
   .book { min-width: 0; }
   .cover {
-    position: relative; width: 100%; border-radius: 2px; overflow: hidden; container-type: inline-size;
+    position: relative; width: 100%; border-radius: 2px; overflow: hidden;
     box-shadow: 0 1px 2px var(--contact), 0 6px 14px -4px var(--ambient);
     display: flex; flex-direction: column; justify-content: space-between; padding: 12%;
   }
   .cover::before { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--edge); pointer-events: none; }
   .cover::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 5%; background: linear-gradient(90deg, rgba(0,0,0,.14), rgba(0,0,0,0)); pointer-events: none; }
-  .cover .t { font: 600 12cqw/1.15 var(--serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
-  .cover .a { font: 9cqw/1.25 var(--font-sans); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-  .cover .rule { height: 1px; background: currentColor; margin: 6cqw 0; }
+  .cover .t { font: 600 10.8px/1.15 var(--serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+  .cover .a { font: 8.8px/1.25 var(--font-sans); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .cover .rule { height: 1px; background: currentColor; margin: 6px 0; }
   .meta { }
   .meta .lines { height: 54px; }
   .meta .t { font-weight: 600; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
@@ -95,6 +96,8 @@
 
   .detail { display: grid; grid-template-columns: 160px 1fr; gap: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
   .detail .cover { align-self: start; border-radius: 2px; }
+  .detail .cover .t { font-size: 17.6px; }
+  .detail .cover .a { font-size: 14.4px; }
   .detail h1 { font: 600 24px/1.15 var(--serif); letter-spacing: -.01em; margin: 0 0 2px; }
   .detail .by { font-size: 15px; line-height: 20px; color: var(--dim); }
   .detail .acts { display: flex; gap: 8px; margin: 14px 0 16px; }

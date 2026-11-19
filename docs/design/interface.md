@@ -38,9 +38,9 @@ Four things, each of which you can measure on a screen.
 | Quality | Where it comes from |
 |---|---|
 | Order | Covers stand on one line per row. Every screen has one leading edge. Captions keep a fixed height. Numbers line up in columns. |
-| Quiet | One prominent action per screen. No badges, banners or colour that ask for attention. Nothing moves unless the reader caused it. |
+| Quiet | One prominent action per screen. No badges, and a message only for a problem that needs a decision. Nothing moves unless the reader caused it, apart from a cover fading in as it loads. |
 | Warmth | A serif for the names of things. Covers drawn as objects with weight. Paper tones in the reader. |
-| Books first | The frame takes its colour from the system. The only strong colour in the window is on the covers. |
+| Books first | The frame takes its colour from the system. The only strong colour in the window is on the covers and the one prominent action. |
 
 Things the app never draws: wood, leather, cloth or paper textures, a shelf under
 the books, page curls, gilt, drop caps or ornaments in the interface, and
@@ -142,14 +142,14 @@ A cover is the one thing in the window drawn as a physical object.
 | Shape | The image's own proportions. Corners of 2 units, 3 when the cover is 200 units wide or more. The platform's control radius never applies to a cover. |
 | Edge | A 1 unit line inside the edge, white at 9% in dark appearance and black at 8% in light, so a cover the colour of the window keeps its outline. |
 | Spine | A shade over the leading 5% of the width, black at 14% fading to nothing. Leave it out when the cover is under 64 units wide. |
-| Widths | Small 96, medium 128, large 160. Medium is the default. With a row W wide and a chosen width c, the grid has floor((W + 20) / (c + 20)) columns and never fewer than two. The columns share the row equally, so covers are c wide or a little more. |
+| Widths | Small 96, medium 128, large 160. Medium is the default. With a row W wide and a chosen width c, the grid has floor((W + 20) / (c + 20)) columns and never fewer than two. The columns share the row equally, so covers are c wide or a little more. Only the two-column minimum can make them narrower than c. |
 | Gaps | 20 between columns. 12 from cover to caption. 28 from the caption block to the next row. The larger gap between rows makes each row read as a shelf. |
 | Progress | A line 2 units thick in the middle of the gap between cover and caption, as wide as the cover: a track in the separator colour, filled from the leading edge in the secondary label colour. Drawn only while a book is partly read. The gap is the same for every book. |
 | Loading | The catalogue stores each cover's pixel size and average colour when the book is imported. Until the image is decoded, draw a block of that size and colour, then cross-fade. If the catalogue has neither, use 2:3 and the platform's secondary fill colour. A cover never pops in and never shows a spinner. |
 
 A book with no cover image gets a binding set in type. It is 2:3, a flat colour,
 with padding of 12% of its width. The title is at the top in the serif, semibold,
-at 12% of the cover's width, on up to four lines and then an ellipsis. A hairline
+at 11% of the cover's width, on up to four lines and then an ellipsis. A hairline
 rule in the text colour follows it. The author is at the bottom in the UI font at
 9% of the width, on up to two lines, and is left out when unknown.
 
@@ -194,7 +194,9 @@ number, and take it modulo 8. The result indexes this list from zero.
 - Press: the cover settles back to rest.
 - With a pointer, a click selects the book, and book details follow the selection
   when the details pane is open. A double click or Return opens the reader. Space
-  opens or closes the details pane. The context menu holds every other action.
+  opens or closes the details pane. In a window too narrow for a pane, Space
+  opens book details as a page and Escape goes back. The context menu holds
+  every other action.
 - With touch, a tap opens book details and the prominent action there opens the
   reader. A long press opens the context menu.
 - Opening book details as a page, or the reader from anywhere: the cover travels
@@ -243,6 +245,7 @@ roles and the motion above are drawn by the app, so the app must follow them.
 | Table | `Table` | Not offered on iPhone | `ListView` with column headers | `GtkColumnView` | Not offered on phones |
 | Pointer over a cover | The rise above | iPad pointer only | The rise above | The rise above | None |
 | Caption title, then author | Subheadline in semibold, Footnote | The same | Body Strong, Caption | `.heading`, `.caption` with `.dimmed` | `titleSmall`, `bodySmall` |
+| Details author, then facts | Title 3 in the secondary colour, Body | The same | Body Large in `TextFillColorSecondaryBrush`, Body | `.title-4` with `.dimmed`, `.body` | `titleMedium` in `onSurfaceVariant`, `bodyMedium` |
 | Opening a book | Zoom from the cover | `navigationTransition(.zoom)` from a `matchedTransitionSource` | Connected animation | The navigation view's push, with a cross-fade of the cover | `sharedElement` in a `SharedTransitionLayout` |
 | Empty state | `ContentUnavailableView` | The same | A centred text block in the content layer | `AdwStatusPage` | A centred text block |
 | Progress of a running job | Toolbar | Toolbar | Title bar | Header bar | Top app bar |
