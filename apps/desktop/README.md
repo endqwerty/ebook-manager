@@ -8,7 +8,7 @@ The GTK4 application uses GTK 4.12 or later and libadwaita 1.5 or later. Install
 
 ## Exercise the desktop
 
-From the repository root containing the workspace Cargo.toml, build and run the smoke driver in a private graphical session. It requires Xvfb, Openbox, D-Bus, xdotool, ImageMagick, Tesseract with English data, Python with PyGObject, and AT-SPI 2. The driver creates a temporary home directory, generates all its books, exercises the GTK controls and reader keys, restarts the process and compares the exported bytes. Its two arguments are the desktop binary and a directory for screenshots, including the scrolled and restored pages.
+From the repository root containing the workspace Cargo.toml, build and run the smoke driver in a private graphical session. It requires Xvfb, Openbox, D-Bus, xdotool, ImageMagick, Tesseract with English data, Python with PyGObject, and AT-SPI 2. The driver creates a temporary home directory, generates all its books, exercises the GTK controls and reader keys, restarts the process and compares the exported bytes. Its D-Bus session starts no services and it clears the desktop's identity variables, so the host's portals and file-system daemons never start inside it. Those would crash when the private bus closes. Its two arguments are the desktop binary and a directory for screenshots, including the scrolled and restored pages.
 
 ```sh
 cargo build --release --workspace --bins

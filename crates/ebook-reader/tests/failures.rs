@@ -406,7 +406,15 @@ fn memory_and_time_limits_stop_the_helper() {
         .open(&heavy)
         .and_then(|b| b.read_chapter(0))
         .unwrap_err();
-    assert!(matches!(err, ReaderError::HelperFailed { .. }), "{err:?}");
+    // The helper exits instead of aborting, so the desktop reports no crash
+    // for a book that is merely too big.
+    match &err {
+        ReaderError::HelperFailed { detail } => {
+            assert!(detail.starts_with("exit status: 4;"), "{detail}");
+            assert!(detail.contains("memory allocation"), "{detail}");
+        }
+        other => panic!("{other:?}"),
+    }
     assert!(starved.inspect(&path).is_ok());
 
     // A stand-in sandbox that answers the probe and then never replies.
@@ -762,6 +770,55 @@ fn helper_is_built_with_overflow_checks() {
         String::from_utf8_lossy(&out.stdout)
     );
     assert!(out.stdout.is_empty());
+}
+
+/// F7: no way the helper can fail is a crash. Every signal that would dump
+/// core, and a stack overflow, ends it with exit status 4 instead.
+#[test]
+fn fatal_signals_end_the_helper_without_a_crash() {
+    let fatal = [
+        libc::SIGABRT,
+        libc::SIGSEGV,
+        libc::SIGBUS,
+        libc::SIGILL,
+        libc::SIGFPE,
+        libc::SIGTRAP,
+        libc::SIGSYS,
+        libc::SIGQUIT,
+        libc::SIGXCPU,
+        libc::SIGXFSZ,
+    ];
+    let cases = fatal
+        .iter()
+        .map(|s| s.to_string())
+        .chain(["stack".to_owned()]);
+    for case in cases {
+        // Also with every signal blocked, as a parent could leave them.
+        for blocked in [false, true] {
+            let mut cmd = Command::new(HELPER);
+            cmd.args(["fatal-probe", &case]);
+            if blocked {
+                // SAFETY: only async-signal-safe calls between fork and exec.
+                unsafe {
+                    std::os::unix::process::CommandExt::pre_exec(&mut cmd, || {
+                        let mut all: libc::sigset_t = std::mem::zeroed();
+                        libc::sigfillset(&mut all);
+                        libc::sigprocmask(libc::SIG_BLOCK, &all, std::ptr::null_mut());
+                        Ok(())
+                    });
+                }
+            }
+            let out = cmd.output().unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(
+                out.status.code(),
+                Some(4),
+                "{case} blocked={blocked}: {:?} {stderr}",
+                out.status
+            );
+            assert!(stderr.contains("helper: stopped"), "{case}: {stderr}");
+        }
+    }
 }
 
 /// F6: a ZIP64 archive with the longest possible comment is counted by its

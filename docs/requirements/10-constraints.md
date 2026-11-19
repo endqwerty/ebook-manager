@@ -128,6 +128,10 @@ for the planned packages and their capability checks.
   the app's own pages.
 - `SEC-9` (expected) An import records what a file tried to do: scripts found,
   remote resources referenced, limits hit.
+- `SEC-10` (core) No file, however broken or hostile, crashes the app or one of
+  its processes. A parser or converter that fails or hits a limit stops with an
+  error the app can show, and the next file works. Done for EPUB reading: see
+  [the reader spec](../../specs/epub-reader-mvp.md) F7.
 
 ## Fetched data
 
