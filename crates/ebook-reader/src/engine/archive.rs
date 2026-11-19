@@ -161,8 +161,9 @@ impl Archive {
 fn declared_entries(mut file: &File, len: u64) -> Option<u64> {
     use std::io::{Seek, SeekFrom};
     const END: &[u8] = b"PK\x05\x06";
-    // The end record is 22 bytes plus a comment of at most 65,535.
-    let tail_len = len.min(22 + 65_535);
+    // The end record is 22 bytes plus a comment of at most 65,535, and a
+    // ZIP64 archive puts a 20-byte locator just before it.
+    let tail_len = len.min(20 + 22 + 65_535);
     let tail_at = len - tail_len;
     file.seek(SeekFrom::Start(tail_at)).ok()?;
     let mut tail = vec![0u8; tail_len as usize];

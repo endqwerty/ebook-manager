@@ -81,8 +81,11 @@ and media-overlay books, and every platform other than native Linux packages.
   spacing, including spaces at the ends of lines, and loses only the line
   breaks before its first and after its last line. Each table row is one block
   with a tab before every cell after the first, so an empty cell keeps its
-  column wherever it stands. Paragraphs inside a cell are joined with a space.
-  A row with no text at all is left out. Named and numeric character references are replaced. Control
+  column wherever it stands. Paragraphs and other blocks inside a cell are
+  folded into the row's line with a space on either side. A row with nothing
+  in it is left out. A table inside a cell is not kept in that row: it ends
+  the outer row's block, gives its own rows as blocks, and what follows in the
+  outer row starts a new block. Named and numeric character references are replaced. Control
   characters are removed. Documents in UTF-8, UTF-16, ISO-8859-1 and
   Windows-1252 are decoded; HTML-style markup with unclosed or upper-case tags
   is read.
@@ -105,7 +108,8 @@ and media-overlay books, and every platform other than native Linux packages.
   Picture data and addresses are not returned. A chapter carries a
   remote-references warning when one of its elements names a remote address as
   a source, linked resource, poster, object data or source-set candidate, or
-  when a style attribute or style element loads from one. Nothing is fetched.
+  when a style attribute or style element has a `url()` or `@import` whose
+  target is one. Nothing is fetched.
   Style sheet files are not inspected, and ordinary hyperlinks (R4) do not
   count.
 - **R7** A reading position is a chapter index and block index with the text
@@ -164,7 +168,7 @@ to the reader.
   address space, the call's time allowance plus two in CPU seconds, 32 open
   files, no core dump and no further processes or threads, and does not run
   if a limit cannot be set. Where the application already runs under a lower
-  ceiling, that ceiling is kept. Because the helper cannot start another
+  limit, soft or hard, that limit is kept. Because the helper cannot start another
   process, the address-space limit bounds the whole sandbox. The helper is
   built so that arithmetic overflow stops it instead of wrapping, and a test
   checks the built helper for that. The host stops the sandbox after 15
