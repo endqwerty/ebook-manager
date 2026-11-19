@@ -17,7 +17,7 @@ view::View::open(
     |event| { /* Ready, Place, Jump, External, Tap, Failed */ },
     |view: Result<View, String>| { /* put view.widget() in a window */ },
 );
-view.load(chapter, Landing::Offset(0));   // or Landing::Anchor(..), Landing::End
+view.load(chapter, Landing::Start);       // or Landing::Offset(n), Landing::Anchor(..), Landing::End
 view.turn(1, false, |moved| { /* false at the chapter's edge */ });
 view.set_style(&[("--page", "#2b2b2e")]);
 ```
@@ -41,21 +41,31 @@ so [the view tests](../../tests/view.rs) include it directly.
   may navigate. Links, redirects, new windows, downloads and permission
   requests are refused.
 - **The `ebook:` scheme serves one book to one view.** An address carries a
-  random token made for that view. The rest is `/c/<number>` or
-  `/r/<number>`, and anything else is a 404. No part of an address becomes a
-  file path.
+  random token made for that view, and the scheme answers it only to that
+  view: another view asking with the same token gets a 404, and so does
+  anyone once the view is gone. The rest is `/c/<number>` or `/r/<number>`,
+  and anything else is a 404. No part of an address becomes a file path. The
+  scheme is registered as no-access, so a chapter cannot load any other
+  scheme, `file:` included, even with the other layers off.
 - **Events are checked, not trusted.** A message from the page does something
-  only if it has a known kind, the current load's number and values in range.
+  only if it has a known kind, the current load's number and values in range:
+  a page inside the page count and an offset inside the chapter's length.
   `Event::External` carries an `http`, `https` or `mailto` address and has
   opened nothing. Ask the reader first.
 - **A place survives reflow.** `Event::Place` gives the UTF-16 offset of the
   page's first character. `Landing::Offset` shows the page holding an offset
-  at any window size or type size.
-- **A chapter cannot run for ever.** A load or a call into the script that
-  takes longer than `Config::watchdog` (15 seconds) ends the web process, and
-  so does holding more than `Config::memory_mib` (1,024) while the process
-  still answers. `Event::Failed` says which, and the next `load` starts a new
-  process.
+  at any window size or type size. A page with no text on it, such as one
+  full-page picture, reports the offset of the first text after it, or the
+  chapter's length when no text follows, which `Landing::Offset` shows as the
+  last page. So a picture-only page in the middle of a chapter comes back as
+  the page after it. `Landing::Start` is the first page whatever is on it.
+- **A chapter cannot run for ever.** A load that takes longer than
+  `Config::watchdog` (15 seconds) ends the web process. So does each call
+  into the script, on a limit of its own, and so does holding more than
+  `Config::memory_mib` (1,024) while the process still answers.
+  `Event::Failed` says which, and the next `load` starts a new process. A
+  chapter the `Source` cannot give is `Event::Failed` at once, with the
+  source's own words.
 
 ## Side effects
 

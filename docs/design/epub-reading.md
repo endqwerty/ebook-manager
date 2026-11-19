@@ -193,8 +193,13 @@ could ask it for an address. The dead proxy is set on the session from the
 app's side and applies inside the network process, so such a request still
 goes to a closed local port. A book that both takes over the web process and
 gets past the proxy setting is the case this design does not stop. The reader
-host process would, and a defensive review of this boundary should say whether
-that case warrants it.
+host process would. A defensive review of task 3 found no way for a book or a
+misbehaving helper to run script, reach the network, read a file or steer the
+app, and judged this one case worth the reader host process, because the
+proxy setting is then the only thing between a taken-over web process and the
+network and nothing proves every request WebKit can make honours it. That is
+[its own issue](https://github.com/endqwerty/ebook-manager/issues/102),
+since it changes where the reader's window lives.
 
 ## Plan
 
@@ -435,7 +440,9 @@ If a step fails, no book opens and the window shows the error.
    `ebook://<token>/r/<id>` is a resource. The token is 128 random bits made
    when the window opens its book. The helper's `/c/…` and `/r/…` references
    resolve against the chapter's address, so they carry the token without the
-   helper knowing it. The handler accepts only its own token, parses the rest
+   helper knowing it. The handler answers a token only to the view it was
+   made for, and to no one once that view is gone. The scheme is registered
+   as no-access, so a chapter can load no other scheme. The handler parses the rest
    as one of the two forms with a decimal integer, and calls `read_content` or
    `read_resource` on a worker thread. Anything else is a 404. No part of a
    request becomes a file path.
@@ -485,8 +492,8 @@ Back arrive in task 5, and until then a footnote link is a jump.
 SEC-5 asks for limits on time and memory. A chapter is bounded two ways, and
 each covers the case the other misses.
 
-- **Time.** Every chapter load and every call into the script has 15 seconds
-  to answer. Past that the shell calls `terminate_web_process` and shows that
+- **Time.** Every chapter load has 15 seconds to become ready, and every
+  call into the script has 15 seconds of its own to answer. Past that the shell calls `terminate_web_process` and shows that
   the chapter took too long. This is what stops a chapter whose layout never
   finishes: a generated chapter of 200,000 paragraphs was ended this way.
 - **Memory.** WebKit samples a web process's memory once a second and ends it
@@ -579,6 +586,12 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   [browsing work's catalogue change](https://github.com/endqwerty/ebook-manager/pull/94)
   adds `last_read`, the time of saving, and `fraction` to that record. Task 3
   is built on it and fills both, with [the fraction read](#progress).
+- **A page with no text**, such as a full-page picture, has no offset of its
+  own. It saves as the first text after it, and as the chapter's length when
+  none follows, which restores as the last page. A picture-only page in the
+  middle of a chapter therefore reopens one page on. The shell opens a
+  chapter on its first page by asking for that, and not for offset 0, so a
+  chapter that begins with a picture begins there.
 - **To restore,** the script turns the offset into a `Range`, finds its
   column, and shows that page. The same text comes back after the font or the
   window changes. Its line on the page can differ.
@@ -604,7 +617,8 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   the scroll offset over the scrollable height. Showing a chapter's last page
   or the bottom of its scroll counts the whole chapter. A chapter that is not
   linear counts as the start of the next linear one, or as 1 after the last.
-  If every size is 0, each linear chapter weighs the same. Showing the end of
+  If every size is 0, each linear chapter weighs the same. A book with no
+  linear chapter reads 0. Showing the end of
   the last linear chapter stores exactly 1.
 
   This weighs by size where
@@ -704,15 +718,20 @@ view are in `apps/desktop/tests/view.rs`.
    `the_view_alone_blocks_scripts_requests_and_navigation`,
    `each_network_layer_blocks_alone`, `page_and_helper_agree_on_offsets`,
    `the_web_process_has_no_network_and_is_ended_past_its_limits`,
-   `two_views_share_one_process_without_a_crash`, and the core-dump count in
-   the test program's `main`.
+   `two_views_share_one_process_without_a_crash`,
+   `each_script_layer_blocks_alone`, `a_token_serves_only_its_own_view`,
+   `a_chapter_that_cannot_be_read_fails_at_once`, and the core-dump count in
+   the test program's `main`. The smoke run checks that closing the reader
+   ends its web process.
 8. The page's own script world has no message handler, and a message with the
    wrong load number or an out-of-range value changes nothing.
    `the_bridge_accepts_only_its_own_world_and_valid_messages`.
 9. A place saved in the middle of a long paragraph, after a character outside
    the basic plane, opens on the page holding the same character at another
    font size and window width. Until task 4 the test sets the size through the
-   same custom property the settings will use. `a_place_survives_reflow`.
+   same custom property the settings will use. `a_place_survives_reflow`. A
+   chapter opens on its first page and ends on its last when those pages hold
+   no text. `pages_without_text_keep_their_place`.
 10. A turn stops at a chapter's first and last page, a chapter opens on its
     last page or at an anchor when asked, and a chapter the book marks right to
     left turns and keeps its place. `turns_cross_chapters`,
@@ -830,7 +849,5 @@ Each is one pull request that ends in a check.
   often it is dropped.
 - Whether one helper process per picture is fast enough for a chapter with a
   hundred pictures. If not, `read_resource` takes a list.
-- Whether the case under [What WebKit's network process means for SEC-5](#what-would-show-this-is-wrong)
-  warrants the reader host process. A defensive review of task 3 decides.
 - How the web view's text reads under Orca. The smoke driver finds the
   reader's GTK controls through AT-SPI as today.

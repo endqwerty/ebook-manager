@@ -276,6 +276,28 @@ def size(title):
     return int(values["WIDTH"]), int(values["HEIGHT"])
 
 
+def web_processes(app):
+    """WebKit web processes descended from the app."""
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if not (entry / "comm").read_text().startswith("WebKitWebProces"):
+                continue
+            pid = int(entry.name)
+            for _ in range(12):
+                pid = int((Path("/proc") / str(pid) / "stat").read_text().rsplit(") ", 1)[1].split()[1])
+                if pid == app:
+                    found.append(entry.name)
+                    break
+                if pid <= 1:
+                    break
+        except (OSError, ValueError, IndexError):
+            continue
+    return found
+
+
 def keys(evidence):
     """Turn pages and toggle full screen from the keyboard, starting and ending in chapter one."""
     title = "The Lantern Atlas · Revised"
@@ -671,6 +693,12 @@ def run(binary, evidence, root):
             )
             click("Back to library")
             time.sleep(0.3)
+        # Closing the reader lets its view go, and the view's web process
+        # with it.
+        deadline = time.monotonic() + 10
+        while web_processes(proc.pid):
+            assert time.monotonic() < deadline, "the reader's web process outlived its window"
+            time.sleep(0.2)
         print("PASS chapter navigation and resume after process restart", flush=True)
         for expected in ("Book exported", "Already exported"):
             select_book("lantern")

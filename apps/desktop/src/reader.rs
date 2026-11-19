@@ -72,19 +72,22 @@ fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
             .map_err(|_| anyhow::anyhow!("Reader interrupted"))??;
             anyhow::ensure!(!book.chapters().is_empty(), "No readable chapters");
             let last = book.chapters().len() as u32 - 1;
-            let place = saved
-                .filter(|p| p.version_id == b.version_id)
-                .map_or((0, 0), |p| {
-                    if p.chapter > last {
-                        (last, 0)
-                    } else {
-                        (p.chapter, p.offset)
-                    }
-                });
+            // A book with no saved place opens on its first page, whatever
+            // is on it. A saved place opens the page holding its offset.
+            let place =
+                saved
+                    .filter(|p| p.version_id == b.version_id)
+                    .map_or((0, Landing::Start), |p| {
+                        if p.chapter > last {
+                            (last, Landing::Start)
+                        } else {
+                            (p.chapter, Landing::Offset(p.offset))
+                        }
+                    });
             Ok::<_, anyhow::Error>((Arc::new(book), place))
         }
         .await;
-        let (book, (chapter, offset)) = match result {
+        let (book, (chapter, landing)) = match result {
             Ok(x) => x,
             Err(e) => {
                 status.set_text(&format!("Couldn’t open book · {e:#}"));
@@ -104,9 +107,10 @@ fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
         let (ready, built) = async_channel::bounded(1);
         let (events, incoming) = async_channel::unbounded();
         // The view holds the sending end, so the loop below would outlive
-        // the window and keep the view and its web process with it.
+        // the window and keep the view and its web process with it. The
+        // window going off screen for good ends the loop.
         let closing = incoming.clone();
-        w.connect_destroy(move |_| {
+        w.connect_unrealize(move |_| {
             closing.close();
         });
         view::View::open(
@@ -133,7 +137,11 @@ fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
         layout.remove(&status);
         inset(&status, 0);
         let reading = Reading::build(&w, &layout, status, view, book, facts, b, store);
-        reading.load(chapter, Landing::Offset(offset));
+        reading.load(chapter, landing);
+        // Nothing below may keep the window alive: a window this future held
+        // would never be let go, and nor would the view inside it.
+        drop(layout);
+        drop(w);
         while let Ok(event) = incoming.recv().await {
             reading.event(event);
         }
@@ -243,7 +251,11 @@ struct Reading {
     status: gtk::Label,
     /// The chapter asked for, until it is showing.
     loading: Cell<Option<u32>>,
+    /// The place showing, for turning. Empty while a chapter loads.
     place: Cell<Option<Place>>,
+    /// The last place a chapter reported, for saving. A chapter that is
+    /// still loading, or fails, does not lose it.
+    confirmed: Cell<Option<Place>>,
     pending_save: Cell<Option<glib::SourceId>>,
     /// The window's own colours, replaced when the appearance changes.
     colours: gtk::CssProvider,
@@ -333,6 +345,7 @@ impl Reading {
             status,
             loading: Cell::new(None),
             place: Cell::new(None),
+            confirmed: Cell::new(None),
             pending_save: Cell::new(None),
             colours,
         });
@@ -347,7 +360,7 @@ impl Reading {
         let weak = Rc::downgrade(&reading);
         picker.connect_selected_notify(move |p| {
             if let Some(r) = weak.upgrade() {
-                let landing = r.arrival.take().unwrap_or(Landing::Offset(0));
+                let landing = r.arrival.take().unwrap_or(Landing::Start);
                 r.show(p.selected(), landing);
             }
         });
@@ -449,18 +462,20 @@ impl Reading {
                     return;
                 }
                 self.loading.set(None);
-                self.place.set(Some(Place {
+                let place = Place {
                     chapter,
                     offset,
                     page,
                     pages,
-                }));
+                };
+                self.place.set(Some(place));
+                self.confirmed.set(Some(place));
                 self.describe();
                 self.queue_save();
             }
             Event::Jump { chapter, anchor } => {
                 if (chapter as usize) < self.book.chapters().len() {
-                    self.load(chapter, anchor.map_or(Landing::Offset(0), Landing::Anchor));
+                    self.load(chapter, anchor.map_or(Landing::Start, Landing::Anchor));
                 }
             }
             Event::External(address) => self.offer(address),
@@ -595,7 +610,7 @@ impl Reading {
             }
             let chapters = reading.book.chapters().len() as u32;
             if by > 0 && place.chapter + 1 < chapters {
-                reading.load(place.chapter + 1, Landing::Offset(0));
+                reading.load(place.chapter + 1, Landing::Start);
             } else if by < 0 && place.chapter > 0 {
                 reading.load(place.chapter - 1, Landing::End);
             }
@@ -620,7 +635,7 @@ impl Reading {
     /// far through the book it is. This is the one function that knows the
     /// record's shape.
     fn position(&self) -> Option<ReadingPosition> {
-        let place = self.place.get()?;
+        let place = self.confirmed.get()?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()

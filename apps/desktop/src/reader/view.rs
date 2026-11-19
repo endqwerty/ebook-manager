@@ -92,6 +92,8 @@ pub trait Source {
 /// Where a chapter opens.
 #[derive(Clone, Debug)]
 pub enum Landing {
+    /// Its first page, whatever is on it.
+    Start,
     Offset(u32),
     Anchor(String),
     /// Its last page.
@@ -138,6 +140,8 @@ struct Load {
     chapter: u32,
     landing: Landing,
     ready: bool,
+    /// The chapter's text length, once the page has reported it.
+    length: u32,
 }
 
 struct Inner {
@@ -149,11 +153,10 @@ struct Inner {
     /// The one address `decide-policy` will let navigate, until it does.
     allowed: RefCell<Option<String>>,
     /// The custom properties every chapter opens with.
-    style: Rc<RefCell<Vec<(String, String)>>>,
+    style: RefCell<Vec<(String, String)>>,
+    source: Rc<dyn Source>,
     /// Ends a chapter load that never becomes ready.
-    watchdog: RefCell<Option<glib::SourceId>>,
-    /// Ends a call into the script that never answers.
-    call_watchdog: RefCell<Option<glib::SourceId>>,
+    watchdog: Rc<RefCell<Option<glib::SourceId>>>,
     on_event: Box<dyn Fn(Event)>,
 }
 
@@ -338,18 +341,7 @@ impl View {
         let token = random_token()?;
         let protect = config.protect;
 
-        let style = Rc::new(RefCell::new(Vec::new()));
         let context = shared_context(config.memory_mib);
-        BOOKS.with(|b| {
-            b.borrow_mut().insert(
-                token.clone(),
-                Served {
-                    source,
-                    policy: protect.content_policy,
-                    style: style.clone(),
-                },
-            )
-        });
 
         let session = webkit6::NetworkSession::new_ephemeral();
         if protect.proxy {
@@ -415,10 +407,15 @@ impl View {
             load: RefCell::new(None),
             counter: Cell::new(0),
             allowed: RefCell::new(None),
-            style,
-            watchdog: RefCell::new(None),
-            call_watchdog: RefCell::new(None),
+            style: RefCell::new(Vec::new()),
+            source,
+            watchdog: Rc::new(RefCell::new(None)),
             on_event,
+        });
+        // From here the scheme serves this view its book, and no other view.
+        BOOKS.with(|b| {
+            b.borrow_mut()
+                .insert(inner.token.clone(), Rc::downgrade(&inner))
         });
 
         {
@@ -479,7 +476,6 @@ impl View {
                 if let Some(inner) = weak.upgrade() {
                     let view = View(inner);
                     disarm(&view.0.watchdog);
-                    disarm(&view.0.call_watchdog);
                     view.0.load.replace(None);
                     let why = match reason {
                         webkit6::WebProcessTerminationReason::ExceededMemoryLimit => {
@@ -510,6 +506,7 @@ impl View {
             chapter,
             landing,
             ready: false,
+            length: 0,
         }));
         let address = format!("{SCHEME}://{}/c/{chapter}?l={number}", self.0.token);
         self.0.allowed.replace(Some(address.clone()));
@@ -557,15 +554,16 @@ impl View {
     }
 
     /// Run a function body in the app's script world and hand `done` its
-    /// result, or `None` when it failed. The watchdog covers the wait.
+    /// result, or `None` when it failed. Each call has its own time limit,
+    /// so one call answering never excuses another that has not.
     pub fn call(
         &self,
         body: &str,
         arguments: glib::VariantDict,
         done: impl FnOnce(Option<javascriptcore::Value>) + 'static,
     ) {
-        self.arm(&self.0.call_watchdog);
-        let weak = Rc::downgrade(&self.0);
+        let limit = Rc::new(RefCell::new(None));
+        self.arm(&limit);
         self.0.view.call_async_javascript_function(
             body,
             Some(&arguments.end()),
@@ -573,34 +571,33 @@ impl View {
             None,
             gio::Cancellable::NONE,
             move |result| {
-                if let Some(inner) = weak.upgrade() {
-                    disarm(&inner.call_watchdog);
-                }
+                disarm(&limit);
                 done(result.ok())
             },
         );
     }
 
-    /// End the web process if `slot`'s wait is not over in time.
-    fn arm(&self, slot: &RefCell<Option<glib::SourceId>>) {
+    /// End the web process if `slot` is not disarmed in time.
+    fn arm(&self, slot: &Rc<RefCell<Option<glib::SourceId>>>) {
         disarm(slot);
-        let for_call = std::ptr::eq(slot, &self.0.call_watchdog);
         let weak = Rc::downgrade(&self.0);
+        let fired = slot.clone();
         let timer = glib::timeout_add_local_once(self.0.config.watchdog, move || {
+            // This timer has fired and is gone, so it is forgotten, not removed.
+            fired.replace(None);
             if let Some(inner) = weak.upgrade() {
-                // This timer has fired and is gone. The other is removed.
-                let (fired, other) = if for_call {
-                    (&inner.call_watchdog, &inner.watchdog)
-                } else {
-                    (&inner.watchdog, &inner.call_watchdog)
-                };
-                fired.replace(None);
-                disarm(other);
                 // `web-process-terminated` reports it to the shell.
                 inner.view.terminate_web_process();
             }
         });
         slot.replace(Some(timer));
+    }
+
+    /// The chapter cannot be shown. Say so now rather than at the time limit.
+    fn fail(&self, why: String) {
+        disarm(&self.0.watchdog);
+        self.0.load.replace(None);
+        (self.0.on_event)(Event::Failed(why));
     }
 
     /// One message from the page. It is untrusted: only a known kind with
@@ -627,8 +624,8 @@ impl View {
             let s = v.to_str().to_string();
             (s.len() <= MAX_ADDRESS).then_some(s)
         };
-        let (chapter, current, ready) = match &*self.0.load.borrow() {
-            Some(load) => (load.chapter, load.number, load.ready),
+        let (chapter, current, ready, length) = match &*self.0.load.borrow() {
+            Some(load) => (load.chapter, load.number, load.ready, load.length),
             None => return,
         };
         if number("load") != Some(current) {
@@ -651,6 +648,7 @@ impl View {
                 let landing = match self.0.load.borrow_mut().as_mut() {
                     Some(load) => {
                         load.ready = true;
+                        load.length = length;
                         load.landing.clone()
                     }
                     None => return,
@@ -658,6 +656,7 @@ impl View {
                 (self.0.on_event)(Event::Ready { chapter, length });
                 let arguments = glib::VariantDict::new(None);
                 let body = match landing {
+                    Landing::Start => "return __reader.go({page: 0})",
                     Landing::Offset(offset) => {
                         arguments.insert("offset", offset.min(length));
                         "return __reader.go({offset})"
@@ -676,7 +675,7 @@ impl View {
                 else {
                     return;
                 };
-                if pages == 0 || page >= pages {
+                if pages == 0 || page >= pages || offset > length {
                     return;
                 }
                 (self.0.on_event)(Event::Place {
@@ -710,15 +709,9 @@ impl View {
     }
 }
 
-struct Served {
-    source: Rc<dyn Source>,
-    policy: bool,
-    style: Rc<RefCell<Vec<(String, String)>>>,
-}
-
 thread_local! {
-    /// What each open view may be served, by the token in its addresses.
-    static BOOKS: RefCell<std::collections::HashMap<String, Served>> = RefCell::new(Default::default());
+    /// The view each token in an `ebook:` address belongs to.
+    static BOOKS: RefCell<std::collections::HashMap<String, std::rc::Weak<Inner>>> = RefCell::new(Default::default());
     static CONTEXT: RefCell<Option<webkit6::WebContext>> = const { RefCell::new(None) };
 }
 
@@ -739,13 +732,18 @@ fn shared_context(memory_mib: u32) -> webkit6::WebContext {
                     .memory_pressure_settings(&pressure)
                     .build();
                 context.register_uri_scheme(SCHEME, serve);
+                // A chapter may load its own scheme and no other, whatever
+                // its markup and the layers above say.
+                if let Some(security) = context.security_manager() {
+                    security.register_uri_scheme_as_no_access(SCHEME);
+                }
                 context
             })
             .clone()
     })
 }
 
-fn disarm(slot: &RefCell<Option<glib::SourceId>>) {
+fn disarm(slot: &Rc<RefCell<Option<glib::SourceId>>>) {
     if let Some(timer) = slot.take() {
         timer.remove();
     }
@@ -754,7 +752,6 @@ fn disarm(slot: &RefCell<Option<glib::SourceId>>) {
 impl Drop for Inner {
     fn drop(&mut self) {
         disarm(&self.watchdog);
-        disarm(&self.call_watchdog);
         BOOKS.with(|b| b.borrow_mut().remove(&self.token));
     }
 }
@@ -769,16 +766,17 @@ fn serve(request: &webkit6::URISchemeRequest) {
     if parsed.scheme() != SCHEME {
         return refuse(request);
     }
-    // Only a view's own token names its book. Any other host is nothing.
-    let Some((source, policy, style)) = parsed.host().and_then(|host| {
-        BOOKS.with(|b| {
-            b.borrow()
-                .get(host.as_str())
-                .map(|s| (s.source.clone(), s.policy, s.style.clone()))
-        })
-    }) else {
+    // A token names its book only to the view it was made for. Any other
+    // host, and the right host from another view, is nothing.
+    let Some(inner) = parsed
+        .host()
+        .and_then(|host| BOOKS.with(|b| b.borrow().get(host.as_str()).and_then(|w| w.upgrade())))
+        .filter(|inner| request.web_view().as_ref() == Some(&inner.view))
+    else {
         return refuse(request);
     };
+    let policy = inner.config.protect.content_policy;
+    let source = inner.source.clone();
     let path = parsed.path();
     let request = request.clone();
     if let Some(chapter) = numbered(&path, "/c/") {
@@ -789,10 +787,21 @@ fn serve(request: &webkit6::URISchemeRequest) {
                     &request,
                     200,
                     "application/xhtml+xml",
-                    wrap(&document, &style.borrow()).into_bytes(),
+                    wrap(&document, &inner.style.borrow()).into_bytes(),
                     policy,
                 ),
-                Err(_) => respond(&request, 404, "text/plain", Vec::new(), policy),
+                Err(why) => {
+                    respond(&request, 404, "text/plain", Vec::new(), policy);
+                    // Only the chapter being loaded can fail the load.
+                    let loading = inner
+                        .load
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|l| !l.ready && l.chapter == chapter);
+                    if loading {
+                        View(inner).fail(why);
+                    }
+                }
             }),
         );
     } else if let Some(id) = numbered(&path, "/r/") {

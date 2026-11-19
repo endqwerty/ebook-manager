@@ -71,6 +71,8 @@
 	};
 
 	const pageOfOffset = (offset) => {
+		// The end of the text stands for a last page with no text on it.
+		if (offset >= length) return pages() - 1;
 		const at = locate(offset);
 		if (!at) return 0;
 		const range = document.createRange();

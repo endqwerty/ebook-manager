@@ -434,6 +434,10 @@ fn the_bridge_accepts_only_its_own_world_and_valid_messages() -> Outcome {
     send(&format!(
         "{{kind: 'place', load: {load}, offset: 1e12, page: 0, pages: 1}}"
     ))?;
+    // Past the end of the chapter's text, which is 14 units long.
+    send(&format!(
+        "{{kind: 'place', load: {load}, offset: 15, page: 0, pages: 1}}"
+    ))?;
     send(&format!(
         "{{kind: 'place', load: {load}, offset: '1', page: 0, pages: 1}}"
     ))?;
@@ -793,6 +797,123 @@ fn the_web_process_has_no_network_and_is_ended_past_its_limits() -> Outcome {
     Ok(())
 }
 
+/// Either layer that stops a book's script does so with the other off, and
+/// with both off the script runs, so the two checks can fail.
+fn each_script_layer_blocks_alone() -> Outcome {
+    let ran = |markup_off: bool, policy: bool| -> Result<String, Failed> {
+        let protect = Protect {
+            no_markup_scripts: markup_off,
+            content_policy: policy,
+            navigation: true,
+            filter: false,
+            proxy: true,
+        };
+        let stage = Stage::new(one(hostile("http://127.0.0.1:9")), |c| c.protect = protect)?;
+        stage.open(0, Landing::Start)?;
+        stage.app("return document.documentElement.getAttribute('data-ran')")
+    };
+    check!(
+        ran(true, false)? == "null",
+        "a script ran with markup scripts off"
+    );
+    check!(
+        ran(false, true)? == "null",
+        "a script ran under the content policy"
+    );
+    check!(
+        ran(false, false)? == "1",
+        "no script ran even unprotected, so the checks prove nothing"
+    );
+    Ok(())
+}
+
+/// The scheme gives a view its own book and nothing of another view's.
+fn a_token_serves_only_its_own_view() -> Outcome {
+    let first = Stage::new(one("<p>First.</p>".into()), |_| {})?;
+    first.open(0, Landing::Start)?;
+    let second = Stage::new(one("<p>Second.</p>".into()), |_| {})?;
+    second.open(0, Landing::Start)?;
+    let origin = |stage: &Stage| -> String {
+        let uri = stage.view.widget().uri().unwrap_or_default().to_string();
+        uri.split("/c/").next().unwrap_or_default().to_owned()
+    };
+    let width = |stage: &Stage, address: &str| {
+        stage.app(&format!("return await new Promise(done => {{ const i = new Image(); i.onload = () => done(i.naturalWidth); i.onerror = () => done(0); i.src = '{address}/r/1'; }})"))
+    };
+    check!(origin(&first) != origin(&second), "two views share a token");
+    check!(
+        width(&first, &origin(&first))? == "1",
+        "a view cannot load its own book's picture"
+    );
+    check!(
+        width(&first, &origin(&second))? == "0",
+        "a view loaded another view's picture"
+    );
+    check!(
+        width(&first, "ebook://unknown")? == "0",
+        "an unknown token was served"
+    );
+    // A closed view's token is forgotten.
+    let gone = origin(&second);
+    drop(second);
+    pause(Duration::from_millis(500));
+    check!(
+        width(&first, &gone)? == "0",
+        "a closed view's token is still served"
+    );
+    Ok(())
+}
+
+/// A chapter the source cannot give fails when the source says so, not at
+/// the time limit, and the next chapter opens.
+fn a_chapter_that_cannot_be_read_fails_at_once() -> Outcome {
+    let stage = Stage::new(one("<p>Here.</p>".into()), |_| {})?;
+    stage.events.borrow_mut().clear();
+    let started = Instant::now();
+    stage.view.load(7, Landing::Start);
+    let failed = stage.wait("failure", |e| matches!(e, Event::Failed(_)))?;
+    check!(
+        failed == Event::Failed("no such chapter".into()),
+        "{failed:?}"
+    );
+    check!(
+        started.elapsed() < Duration::from_secs(5),
+        "the failure waited for the time limit"
+    );
+    stage.open(0, Landing::Start)?;
+    Ok(())
+}
+
+/// Pages with no text on them: a chapter opens on its first page even when
+/// that page is only a picture, and its end is its last page.
+fn pages_without_text_keep_their_place() -> Outcome {
+    let markup = "<div style=\"height: 90vh\"></div><p id=\"t\">Text on the second page.</p><div style=\"height: 250vh\"></div>";
+    let stage = Stage::new(one(markup.into()), |_| {})?;
+    let (length, offset, page, pages) = stage.open(0, Landing::Start)?;
+    check!(pages >= 4, "the chapter has {pages} pages");
+    check!(
+        (page, offset) == (0, 0),
+        "Start opened page {page} at {offset}"
+    );
+    check!(stage.turn(1)?, "no turn from the first page");
+    check!(
+        stage.last_place().unwrap().1 == 1,
+        "a turn skipped the text page"
+    );
+    let (_, offset, page, _) = stage.open(0, Landing::End)?;
+    check!(page == pages - 1, "End opened page {page} of {pages}");
+    check!(
+        offset == length,
+        "a page after all the text reports {offset}, not the length {length}"
+    );
+    let (_, _, page, _) = stage.open(0, Landing::Offset(offset))?;
+    check!(
+        page == pages - 1,
+        "the end reopened on page {page} of {pages}"
+    );
+    Ok(())
+}
+
 /// A book through the real sandboxed helper, as the reader serves it.
 struct Helper(ebook_reader::Book);
 
@@ -1039,5 +1160,21 @@ const TESTS: &[Test] = &[
     (
         "page_and_helper_agree_on_offsets",
         page_and_helper_agree_on_offsets,
+    ),
+    (
+        "each_script_layer_blocks_alone",
+        each_script_layer_blocks_alone,
+    ),
+    (
+        "a_token_serves_only_its_own_view",
+        a_token_serves_only_its_own_view,
+    ),
+    (
+        "a_chapter_that_cannot_be_read_fails_at_once",
+        a_chapter_that_cannot_be_read_fails_at_once,
+    ),
+    (
+        "pages_without_text_keep_their_place",
+        pages_without_text_keep_their_place,
     ),
 ];

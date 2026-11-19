@@ -14,7 +14,8 @@ pub struct Weight {
 /// chapters. Showing a chapter's last page counts the whole chapter, so the
 /// end of the last linear chapter is exactly 1. A chapter that is not linear
 /// counts as the start of the next linear one, or as 1 after the last. When
-/// every size is 0 each linear chapter weighs the same.
+/// every size is 0 each linear chapter weighs the same. A book with no linear
+/// chapter has nothing to be part-way through, and reads 0.
 pub fn fraction(chapters: &[Weight], chapter: usize, page: u32, pages: u32) -> f32 {
     let even = chapters.iter().all(|c| !c.linear || c.size == 0);
     let weight = |c: &Weight| match (c.linear, even) {
