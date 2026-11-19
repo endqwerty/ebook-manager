@@ -88,11 +88,18 @@ its page in the same pull request.
 
 ## Design and review rounds
 
-Before starting round 4 on the same question, and after each further group of
-three rounds, ask what another round could change for a reader or implementer.
-Record the decision and the concrete check in the issue or PR. Continue when the
-answer affects the product, such as whether a reader's notes survive a file
-replacement. If only wording remains, finish the edit and move on.
+Count review rounds separately for each work item, including a spec drafted by
+a delegated worker. A round is one pass on that item, even if several reviewers
+take part. Carry the count through revisions and handoffs.
+
+Before rounds 4, 7, 10 and so on, pause review of that item. For example, if
+the import spec has had three rounds and the storage spec has had one, pause
+before sending the import spec out again. Storage can continue.
+
+The agent arranging the next review records in the issue or PR what another
+pass could change for a reader or implementer and how to check it. Continue
+if that check would guide a product decision. If only wording remains,
+finish the edit and move on.
 
 ## Backlog: GitHub issues
 
