@@ -6,6 +6,9 @@
 # gvfs or dconf. Those services crash when a short-lived bus closes under
 # them, and users must never see a crash.
 #
+# The display's scale is set to 1, so a window asked to be 900 wide is 900
+# wide whatever the desktop this runs from is set to.
+#
 #   apps/desktop/tests/private-session.sh cargo nextest run -p ebook-manager --test view
 set -eu
 dir=$(mktemp -d)
@@ -24,5 +27,5 @@ cat > "$dir/bus.conf" <<CONF
 </busconfig>
 CONF
 env -u XDG_CURRENT_DESKTOP -u HYPRLAND_INSTANCE_SIGNATURE -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
-  GIO_USE_VFS=local GSETTINGS_BACKEND=memory GDK_BACKEND=x11 NO_AT_BRIDGE=1 \
+  GIO_USE_VFS=local GSETTINGS_BACKEND=memory GDK_BACKEND=x11 NO_AT_BRIDGE=1 GDK_SCALE=1 GDK_DPI_SCALE=1 \
   dbus-run-session --config-file="$dir/bus.conf" -- xvfb-run -a -s "-screen 0 1280x900x24" "$@"
