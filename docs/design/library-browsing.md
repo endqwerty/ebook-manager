@@ -86,17 +86,20 @@ folder restores them without opening any EPUB.
 | Cover facts: average colour, spine colour, digest of the thumbnail | The helper. See [Covers](#covers). | No |
 
 Helper-supplied values live in `Book.imported` as today, and the reader's
-edits in the fields beside it. Every new field is optional. A journal entry
-written before this change lacks them and reads with them absent, the date
-added included, and such a book sorts last by date added. A replacement keeps
+edits in the fields beside it. Every new field is optional and is left out of
+the JSON when absent, so a record written before this change serialises to the
+same bytes and its sidecar keeps its name. A journal entry written before this
+change reads with the new fields absent, the date added included, and such a
+book sorts last by date added. A replacement keeps
 the reader's edits and the date added, as it keeps the title and authors
 today, and takes the new file's helper facts. A journal entry larger than the
 8 MiB that replay accepts is refused when it is written.
 
 `Change::Position` keeps its chapter and offset, which the reader resumes
 from, and gains the time of reading in UTC and a fraction read from 0 to 1.
-Saving the same chapter and offset again writes no new entry, whatever the
-time. The desktop reader computes the fraction as the linear chapters before
+Saving the same chapter, offset and fraction again writes no new entry,
+whatever the time. The fraction is part of that comparison because the end of
+a long last block changes the fraction and not the offset. The desktop reader computes the fraction as the linear chapters before
 this one plus the fraction of this chapter scrolled, over the number of linear
 chapters. A position in a chapter that is not linear counts as the start of
 the next linear one. A book is finished when the reader has shown the end of
@@ -128,11 +131,14 @@ writes `book`, `search` and the change counter in the same transaction as the
 journal row. A changed book is updated in place and never deleted and
 inserted again, so its `n` does not change while the catalogue file lives.
 
-`meta` also records a catalogue version. When the tables are missing or the
-version differs at open, the library empties `book`, `search` and `positions`
-and applies every row of the SQLite `journal` table again in order, in one
-transaction. That reads no files, and keeps pending rows, journal numbering
-and `sources`.
+`meta` also records a catalogue version. A catalogue file with no version or
+another version, which includes every catalogue written before this change,
+is renamed aside as `library.sqlite.old-<uuid>` and a new one is rebuilt from
+the portable folder, as when SQLite is missing. That loses what only SQLite
+held: changes not yet published and the source paths, so a changed file at a
+known path is no longer sent to review. The project has no users yet, and
+that is the reason this is acceptable. The old `books` table is not carried
+over.
 
 **Sort keys** are bytes that compare with `memcmp`, so SQLite sorts and
 indexes them with no callback.
@@ -175,8 +181,11 @@ used today. At open the library checks that the tip's file exists with the
 same bytes as its journal row and that the file after it does not exist. If
 both hold, it publishes any rows after the tip, as today's open does for
 pending changes, and returns. A library with no changes has no tip and passes
-when file 1 does not exist. Otherwise, or when SQLite is missing, it runs
-today's full replay from the files.
+when file 1 does not exist. Otherwise it runs today's `refresh`, which
+compares every file with its SQLite row, applies files SQLite lacks, and
+publishes rows that have no file, so a missing file never discards a
+committed change. A rebuild from the portable folder sets the tip to the last
+file it applied.
 
 A file changed or removed earlier in the chain is no longer noticed at open.
 `Library::refresh`, which the window keeps as Refresh library, still verifies
@@ -271,9 +280,10 @@ the helper's sandbox.
   item with the `cover-image` property, else the item named by the EPUB 2
   `cover` `meta`), limits its compressed size and its decoded pixels, decodes
   JPEG, PNG, GIF or WebP, draws transparency over white, and scales it to fit
-  within 256 by 384 by averaging areas. It refuses a cover over 20 MiB
-  compressed or over 40 million pixels decoded, and the helper's existing
-  memory and time limits apply. It returns raw RGB pixels with their width and height,
+  within 256 by 384 by averaging areas. It refuses a cover whose image file,
+  as unpacked from the EPUB, is over 20 MiB, or whose decoded size is over 40
+  million pixels. The helper's existing limits on unpacked bytes, reply size,
+  memory and time apply as they do to any request. It returns raw RGB pixels with their width and height,
   the average colour, and the spine colour: the most common colour, after
   rounding each channel to 5 bits, on the tenth of the image at the bound
   side, else on the whole image. The bound side is the left unless the
@@ -295,14 +305,46 @@ the helper's sandbox.
   managed EPUB in the background. It installs the result only if its digest
   equals the one in the record.
 - The word count and cover facts come from one helper request, the survey.
-  Import runs it after the metadata request. The record stores the survey
-  version that ran, 1 for now, whether or not a cover was found.
-  `Library::set_survey(id, version_id, facts)` stores the result only if the
-  book still has that version, and changes nothing else in the record. At
-  startup the desktop asks the catalogue, a page at a time, for books whose
-  survey version is absent or older, and surveys them one at a time on a
-  background thread. A book whose helper could not start is left unmarked and
-  tried at the next start.
+  The two results are independent: a cover that cannot be used leaves the
+  word count, and an unknown word count leaves the cover. The count is
+  unknown when any linear spine item could not be resolved, was skipped or
+  was truncated. A helper that times out, crashes or cannot start is an error
+  and not a result.
+- Import runs the survey after the metadata request and passes its facts in
+  with the metadata. The record stores the survey version that ran, 1 for
+  now, whether or not a cover was found. A survey that ended in an error
+  stores nothing and the book is imported without it.
+  `Library::set_survey(id, version_id, facts)` stores a later result only if
+  the book still has that version, and changes nothing else in the record.
+  `Library::unsurveyed(limit)` lists books whose survey version is absent or
+  older. At
+  startup the desktop asks for unsurveyed books a page at a time and surveys
+  them one at a time on a background thread. A book whose survey ended in an
+  error is left unmarked and tried at the next start.
+
+The types that cross between the crates, and who owns them:
+
+```rust
+// ebook-reader (pull request 2)
+pub struct SeriesMembership { pub name: String, pub position: Option<String> }
+pub struct Metadata { /* as today, and: */ pub series: Vec<SeriesMembership>,
+                      pub published: Option<String>, pub right_to_left: bool }
+pub struct Thumbnail { /* checked: width, height, RGB pixels */ }
+pub struct Survey { pub words: Option<u32>, pub cover: Option<SurveyedCover> }
+pub struct SurveyedCover { pub thumbnail: Thumbnail, pub average: Rgb, pub spine: Rgb }
+impl Reader { pub fn survey(&self, epub: &Path) -> Result<Survey, ReaderError>; }
+
+// ebook-library (pull request 1)
+pub struct ParsedMetadata { /* as today, and: */ pub author_sorts: Vec<Option<String>>,
+    pub series: Vec<(String, Option<String>)>, pub published: Option<String>,
+    pub language: Option<String>, pub right_to_left: bool, pub survey: Option<SurveyFacts> }
+pub struct SurveyFacts { pub version: u32, pub words: Option<u32>, pub cover: Option<CoverFacts> }
+pub struct CoverFacts { pub digest: String, pub average: u32, pub spine: u32 }
+```
+
+Neither crate depends on the other. The desktop converts one to the other in
+the third pull request, as it converts `Metadata` to `ParsedMetadata` today,
+computes the digest, and keeps the pixels to write the thumbnail.
 
 ### The Linux window
 
@@ -392,10 +434,10 @@ a catalogue of N made-up books through the same function that applies a
 journal change, in large transactions, without writing journal files. It
 varies title length and script, repeats authors, puts a third of the books in
 series, leaves some dates empty and repeats some sort keys. It records the
-published tip as the last generated change and marks every row published.
-The benchmark's catalogue therefore has no journal files, so its Open sample
-starts from a copy made before any open and runs with the tip check told to
-pass. That switch exists only under the `fixture` feature.
+published tip as the last generated change, marks every row published, and
+writes that one change's journal file. Open's tip check therefore passes
+through the production code, and the desktop can open the same folder. The
+folder is not a complete portable copy, and `refresh` on it reports a gap.
 
 A `scale` test binary, built in release, generates 100,000 and 1,000,000
 books and measures each sample below five times with the file cache warm. The
@@ -467,8 +509,12 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
     before. When a change was committed and the app stopped before its file
     was installed, then the next open installs it without Refresh.
     `portable_only_rebuild_restores_bytes_metadata_and_position` in
-    `tests/library.rs`, extended, and the two existing interrupted
-    publication tests there, which reopen without refreshing.
+    `tests/library.rs`, extended, and a new test there,
+    `reopen_alone_publishes_an_interrupted_import`, which interrupts an import
+    before and after its journal file is installed, reopens without calling
+    `refresh`, and checks the managed bytes, the source association, the
+    journal sequence and the sidecar. `a_record_from_before_keeps_its_sidecar`
+    replays a journal and an edited sidecar written in the earlier format.
 14. When a second copy of a known file, path or package identifier is
     imported into a large library, then the outcome is as today and the import
     lists no books. The existing import tests, and the `scale` binary's import
@@ -540,9 +586,10 @@ same time.
 1. **Catalogue and benchmark** (open). The record's new fields and
    `set_survey`, with nothing yet filling the helper-supplied ones, the
    catalogue tables, sort keys, fast open, indexed import lookups,
-   `BrowseReader`, `Library::book`, the fixture and the benchmark step. The
-   desktop is not changed, and `Library::search` stays for it until the third
-   pull request deletes it. Behaviour 1 to 14 and 16.
+   `BrowseReader`, `Library::book`, `unsurveyed`, the fixture and the
+   benchmark step. The desktop changes only where it must to compile, filling
+   new fields with empty values, and `Library::search` stays for it until the
+   third pull request deletes it. Behaviour 1 to 14 and 16.
    Closes [#28](https://github.com/endqwerty/ebook-manager/issues/28).
 2. **Helper facts and covers** (open). Everything under `crates/ebook-reader`.
    Behaviour 15.
