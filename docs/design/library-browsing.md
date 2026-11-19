@@ -311,8 +311,9 @@ the helper's sandbox.
   The two results are independent: a cover that cannot be used leaves the
   word count, and an unknown word count leaves the cover. The count is
   unknown when any linear spine item could not be resolved, was skipped or
-  was truncated. A spine item that is a picture adds no words, and picture
-  text alternatives are not counted. The cover is read first and the text
+  was truncated. A spine item that is a picture adds no words. A picture
+  standing on its own adds none either, and one inside a line of text counts
+  as its text alternative, as it reads. The cover is read first and the text
   takes what remains of the call's 64 MiB unpacking allowance, so a book whose
   cover and text exceed it has an unknown count. A protected book surveys as
   an unknown count and no cover, a result, so it is not asked again. A helper that times out, crashes or cannot start is an error

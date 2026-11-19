@@ -871,6 +871,12 @@ fn unusable_covers_leave_the_word_count() {
             b.extend_from_slice(&[0xAB; 64]);
             b
         }, "image/png"),
+        // The first half of a JPEG: its decoder would fill in the rest.
+        ("cut short", {
+            let mut b = striped(240, 360, ImageFormat::Jpeg);
+            b.truncate(b.len() / 2);
+            b
+        }, "image/jpeg"),
         ("svg", br#"<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900"/></svg>"#.to_vec(), "image/svg+xml"),
         // The cover is declared but its file is not in the book.
         ("missing", Vec::new(), "image/png"),
@@ -894,6 +900,24 @@ fn unusable_covers_leave_the_word_count() {
         survey_with(config(), &with_cover(&png, "c.png", "image/png", ""))
             .cover
             .is_some()
+    );
+}
+
+/// V4: a picture at the pixel limit and one pixel tall is scaled within the
+/// helper's memory, and the count comes back with it.
+#[test]
+fn a_very_wide_cover_at_the_pixel_limit_is_still_surveyed() {
+    let wide = image::GrayImage::from_pixel(40_000_000, 1, image::Luma([255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageLuma8(wide)
+        .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let s = survey_with(config(), &with_cover(&png, "wide.png", "image/png", ""));
+    assert_eq!(s.words, Some(3));
+    let cover = s.cover.expect("a cover");
+    assert_eq!(
+        (cover.thumbnail.width(), cover.thumbnail.height()),
+        (256, 1)
     );
 }
 

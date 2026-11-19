@@ -157,9 +157,10 @@ that take more than the package to find: a word count and a cover.
   characters containing a letter or digit, ended by whitespace or the end of
   a block, so `don't` and `well-known` are one word each and a dash alone is
   none. Each Han, kana or hangul character counts as half a word; the halves
-  of the whole book are added and rounded up once. Picture placeholders and
-  their text alternatives are not counted, and a reading-order item that is
-  a picture adds nothing. The count is unknown when a linear item names no
+  of the whole book are added and rounded up once. A picture that stands on
+  its own is not counted, nor is its text alternative. A picture inside a
+  line of text counts as its text alternative, as it reads, because that is how a decorated first letter spells its
+  word. A reading-order item that is a picture adds nothing. The count is unknown when a linear item names no
   manifest entry, is missing from the archive, is neither text nor a
   picture, cannot be decoded, passes a limit or is cut at the block limit
   (R9). Non-linear items are not read.
@@ -176,7 +177,8 @@ that take more than the package to find: a word count and a cover.
   all its columns.
 - **V4** There is no cover when none is declared, its file is missing, it is
   over 20 MiB unpacked, its header declares more than 40 million pixels, it
-  is another type such as SVG, it fails to decode, the decoder stops, or it
+  is another type such as SVG, it fails to decode, it is a JPEG that stops
+  before its end, the decoder stops, or it
   would need enlarging more than three times. The pixel count is checked from
   the header before any pixel is decoded.
 - **V5** The host accepts a cover only when both sides are at least 1, the
