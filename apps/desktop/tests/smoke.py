@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -457,6 +458,32 @@ def environment(root, **extra):
     )
 
 
+def launch_app(binary, env):
+    with (Path(env["HOME"]) / "app-stderr.log").open("a") as log:
+        return subprocess.Popen([binary], env=env, stderr=log)
+
+
+def check_diagnostics(root):
+    log = root / "app-stderr.log"
+    if not log.exists():
+        return
+    diagnostic = re.compile(
+        r"\b(?:Gtk|Gdk|Gsk|GLib(?:-GObject|-GIO)?|Adwaita)-(?:WARNING|CRITICAL|ERROR)\b"
+    )
+    # GTK 4.24 on X11 also reports this on main when a reader drop-down
+    # and its window repaint together. It is a duplicate frame timing report.
+    allowed = re.compile(
+        r"\bGdk-WARNING \*\*: \d{2}:\d{2}:\d{2}\.\d+: "
+        r"gdk_frame_timings_submitted\(\) called on submitted frame\.$"
+    )
+    unexpected = [
+        line for line in log.read_text(errors="replace").splitlines()
+        if diagnostic.search(line) and not allowed.search(line)
+    ]
+    assert not unexpected, "\n".join(unexpected)
+    print("PASS no unexpected GTK warnings or criticals from any app process", flush=True)
+
+
 def stop(proc):
     proc.terminate()
     assert proc.wait(timeout=10) in (0, -signal.SIGTERM), proc.returncode
@@ -480,7 +507,7 @@ def run(binary, evidence, root):
     originals = {p: hashlib.sha256(p.read_bytes()).digest() for p in books.iterdir()}
     proc = None
     try:
-        proc = subprocess.Popen([binary], env=env)
+        proc = launch_app(binary, env)
         find("No books yet")
         capture("Ebook Manager", evidence / "empty.png")
         focus("Ebook Manager")
@@ -613,7 +640,7 @@ def run(binary, evidence, root):
                 focus("Ebook Manager")
                 key("ctrl+w")
                 assert proc.wait(timeout=10) == 0
-            proc = subprocess.Popen([binary], env=env)
+            proc = launch_app(binary, env)
             find("Mira Vale")
             select_book("lantern")
             key("Return")
@@ -823,6 +850,12 @@ def sorting(evidence):
     return by_three
 
 
+def scroll_to_top():
+    wid = focus("Ebook Manager")
+    xd("mousemove", "--window", wid, 100, 300, "click", "--repeat", 20, 4)
+    xd("mousemove", 2, 2)
+
+
 def table_headers(by_three):
     """Sorts from the table's headers, hides and moves a column from a
     header's menu, and changes the cover size, with the keyboard alone."""
@@ -831,6 +864,8 @@ def table_headers(by_three):
     # another, so the pointer is put out of the way.
     xd("mousemove", 2, 2)
     key("ctrl+3")
+    expect_headers(["Title ³", "Author ²", "Series", "Date Added", "Progress"])
+    scroll_to_top()
     expect_titles(by_three, "the table's own sort")
     # Up from the first row is the first header. Return sorts by it alone.
     # Finding a book puts the focus in the table. With nothing selected a
@@ -861,11 +896,32 @@ def table_headers(by_three):
     expect_headers(["Author", "Title", "Date Added", "Progress"])
     print("PASS sorting, hiding and moving columns from the table's headers", flush=True)
 
+    def author_width():
+        author = find("Author", "filler")
+        return author.get_extents(Atspi.CoordType.WINDOW).width
+
+    def resize_column(command, expected):
+        key("Menu")
+        find("", "menu item")
+        key(*["Down"] * (8 if command == "Make Wider" else 9), "Return")
+        deadline = time.monotonic() + 5
+        while author_width() != expected:
+            assert time.monotonic() < deadline, (command, expected, author_width())
+            time.sleep(0.05)
+
+    # Author moved with its focused header.
+    width = author_width()
+    resize_column("Make Wider", width + 24)
+    resize_column("Make Narrower", width)
+    resize_column("Make Wider", width + 24)
+    print(f"PASS Author width from the keyboard: {width} → {width + 24} → {width} → {width + 24}", flush=True)
+
     # Large covers, from the main menu: the third of its items.
     key("F10")
     find("", "menu item")
     key("Down", "Down", "Return")
     key("ctrl+1")
+    scroll_to_top()
     expect_titles([CARTOGRAPHER], "the grid's own sort")
     # A row of 842 holds five covers of 128 and four of 160.
     deadline = time.monotonic() + 10
@@ -876,17 +932,29 @@ def table_headers(by_three):
     wid = focus("Ebook Manager")
     key("ctrl+3")
     expect_headers(["Author", "Title", "Date Added", "Progress"])
-    xd("windowsize", "--sync", wid, 560, 680)
+    select_book("glass")
+    key("Escape", "ctrl+Home", "ctrl+shift+a", "Up", "Menu")
+    find("", "menu item")
+    xd("windowsize", "--sync", wid, 639, 680)
     find("View", "button")
     find("Orchard · 1", "label")
     assert not headers(), headers()
-    xd("windowsize", "--sync", wid, 900, 680)
+    xd("windowsize", "--sync", wid, 640, 680)
     expect_headers(["Author", "Title", "Date Added", "Progress"])
+    assert size("Ebook Manager")[0] == 640, size("Ebook Manager")
+
+    xd("windowsize", "--sync", wid, 639, 680)
+    find("View", "button")
+    key("ctrl+2", "ctrl+3")
+    xd("windowsize", "--sync", wid, 900, 680)
+    find("Orchard · 1", "label")
+    assert not headers(), headers()
     key("ctrl+1")
-    print("PASS cover size, and the list in place of the table on a narrow window", flush=True)
+    print("PASS Table at 640, List at 639, and Ctrl+3 at 639 leaves the saved view alone", flush=True)
+    return width + 24
 
 
-def remembered():
+def remembered(author_width):
     """After a restart the view, each view's sort, the cover size and the
     table's columns are as they were left."""
     find(CARTOGRAPHER)
@@ -895,9 +963,12 @@ def remembered():
     assert first_row() == 4, first_row()
     key("ctrl+3")
     expect_headers(["Author", "Title", "Date Added", "Progress"])
+    scroll_to_top()
     expect_titles(["Tide Tables", CARTOGRAPHER], "the table's sort after a restart")
+    assert find("Author", "filler").get_extents(Atspi.CoordType.WINDOW).width == author_width
     key("ctrl+2")
     find("Orchard · 1", "label")
+    scroll_to_top()
     expect_titles([CARTOGRAPHER], "the list's sort after a restart")
     print("PASS the view, sorts, cover size and columns after a restart", flush=True)
 
@@ -944,7 +1015,7 @@ def covers(binary, evidence, root, proc):
         if look == "dark":
             # The folder is a cache: without it the covers are made again.
             shutil.rmtree(thumbs)
-        proc = subprocess.Popen([binary], env=environment(root, **extra))
+        proc = launch_app(binary, environment(root, **extra))
         try:
             find("A Field Guide to Tides")
             if look == "dark":
@@ -969,6 +1040,8 @@ def covers(binary, evidence, root, proc):
                 time.sleep(1.0)
                 capture("Ebook Manager", evidence / f"list-{look}.png")
                 key("ctrl+3")
+                expect_headers(["Title ³", "Author ²", "Series", "Date Added", "Progress"])
+                scroll_to_top()
                 expect_titles(by_three, "the table's sort")
                 time.sleep(1.0)
                 capture("Ebook Manager", evidence / f"table-{look}.png")
@@ -980,18 +1053,36 @@ def covers(binary, evidence, root, proc):
         "PASS covers and bindings in light, dark and more contrast, thumbnails made again",
         flush=True,
     )
-    proc = subprocess.Popen([binary], env=environment(root))
+    proc = launch_app(binary, environment(root))
     try:
         find("A Field Guide to Tides")
-        table_headers(by_three)
+        author_width = table_headers(by_three)
         # Closing the window saves the choices.
         focus("Ebook Manager")
         key("ctrl+w")
         assert proc.wait(timeout=10) == 0
-        proc = subprocess.Popen([binary], env=environment(root))
-        remembered()
+        proc = launch_app(binary, environment(root))
+        remembered(author_width)
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+
+        settings = root / "config/ebook-manager/settings.json"
+        data = json.loads(settings.read_text())
+        data["future"] = "preserve this file on an unchanged close"
+        original = json.dumps(data).encode()
+        settings.write_bytes(original)
+        before = settings.stat()
+        proc = launch_app(binary, environment(root))
+        find(CARTOGRAPHER)
+        focus("Ebook Manager")
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+        assert settings.read_bytes() == original
+        assert settings.stat().st_ino == before.st_ino
+        print("PASS closing with unchanged settings leaves the original file alone", flush=True)
     finally:
-        stop(proc)
+        if proc.poll() is None:
+            stop(proc)
 
 
 def desktop(body):
@@ -1021,6 +1112,7 @@ def desktop(body):
         manager.wait(timeout=10)
         proc.terminate()
         proc.wait(timeout=10)
+        check_diagnostics(Path(os.environ["HOME"]))
 
 
 def private_session(script, arguments):

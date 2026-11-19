@@ -65,14 +65,19 @@ def launch(binary, env):
     the look that read the first titles on screen ended. The titles were
     drawn between the two."""
     started = time.monotonic()
-    proc = subprocess.Popen([binary], env=env)
-    while True:
-        looked = time.monotonic()
-        titles = first_titles()
-        if titles:
-            return proc, looked - started, time.monotonic() - started, titles
-        assert looked - started < 30, "no titles after 30 seconds"
-        time.sleep(POLL)
+    proc = smoke.launch_app(binary, env)
+    try:
+        while True:
+            looked = time.monotonic()
+            titles = first_titles()
+            if titles:
+                return proc, looked - started, time.monotonic() - started, titles
+            assert looked - started < 30, "no titles after 30 seconds"
+            time.sleep(POLL)
+    except BaseException:
+        if proc.poll() is None:
+            stop(proc)
+        raise
 
 
 def cells():
@@ -103,6 +108,90 @@ def settled():
         last = now
         time.sleep(0.1)
     raise AssertionError(f"the list did not settle: {last}")
+
+
+def expect_view(number):
+    # All three GTK widgets have distinct accessible roles.
+    roles = {1: ("grid", "table"), 2: ("list",), 3: ("tree table", "tree grid")}
+    deadline = time.monotonic() + 10
+    seen = []
+    while time.monotonic() < deadline:
+        try:
+            for node in walk(application()):
+                if node.get_name() == "Books":
+                    role = node.get_role_name()
+                    if role in roles[number]:
+                        if number != 3:
+                            return node
+                        return next(child for child in walk(node) if child.get_role_name() == "list")
+                    seen = [role]
+        except GLib.Error:
+            pass
+        time.sleep(POLL)
+    raise AssertionError(f"view {number} did not appear: {seen}")
+
+
+def first_row_titles(body, number):
+    # SHOWING alone includes GTK's overscan. Compare the item bounds with
+    # the viewport and read the whole row even if its title is clipped.
+    frame = body.get_extents(Atspi.CoordType.WINDOW)
+    role = {1: "table cell", 2: "list item", 3: "table row"}[number]
+    rows = []
+    try:
+        for item in walk(body):
+            if item.get_role_name() != role or not item.get_state_set().contains(Atspi.StateType.SHOWING):
+                continue
+            bounds = item.get_extents(Atspi.CoordType.WINDOW)
+            if bounds.y + bounds.height <= frame.y or bounds.y >= frame.y + frame.height:
+                continue
+            for label in walk(item):
+                title = label.get_name() or ""
+                if label.get_role_name() == "label" and title.startswith("Book "):
+                    rows.append((bounds.y, bounds.x, title))
+                    break
+    except GLib.Error:
+        return []
+    first_y = min((row[0] for row in rows), default=None)
+    return [title for y, _, title in sorted(rows) if y == first_y]
+
+
+def view_switches():
+    """Scroll with focus outside the books and check all six transitions."""
+    wid = focus("Ebook Manager")
+    for source, target in [(2, 1), (1, 2), (2, 3), (3, 1), (1, 3), (3, 2)]:
+        key(f"ctrl+{source}")
+        body = expect_view(source)
+        add = find("Add", "toggle button")
+        bounds = add.get_extents(Atspi.CoordType.WINDOW)
+        smoke.xd("mousemove", "--window", wid, bounds.x + bounds.width // 2,
+                 bounds.y + bounds.height // 2, "click", 1)
+        find("Add", "menu")
+        key("Escape", "ctrl+shift+a")
+        before = first_row_titles(body, source)
+        smoke.xd("mousemove", "--window", wid, 120, 400, "click", "--repeat", 60, "--delay", 15, 5)
+        deadline = time.monotonic() + 10
+        while True:
+            now = first_row_titles(body, source)
+            if now and now != before:
+                break
+            assert time.monotonic() < deadline, (source, before, now)
+            time.sleep(POLL)
+        # Wait through the wheel animation before recording the first title.
+        time.sleep(0.3)
+        anchor = first_row_titles(body, source)[0]
+        key(f"ctrl+{target}")
+        body = expect_view(target)
+        deadline = time.monotonic() + 10
+        while True:
+            titles = first_row_titles(body, target)
+            # GTK grids scroll by whole rows. Check that the anchor is on
+            # the first row, including when it lands after the first slot.
+            if (anchor in titles if target == 1 else titles[:1] == [anchor]):
+                break
+            assert time.monotonic() < deadline, (source, target, anchor, titles)
+            time.sleep(POLL)
+        print(f"PASS view {source} → {target}: {anchor!r}, first shown {titles[0]!r}", flush=True)
+    key("ctrl+1")
 
 
 def small_epub(path, n):
@@ -165,6 +254,7 @@ def run(binary, fixture, root):
     try:
         find(f"{BOOKS:,} books")
         focus("Ebook Manager")
+        view_switches()
         # A quarter of the generated titles end in `atlas`.
         typed = time.monotonic()
         smoke.search("atlas")
