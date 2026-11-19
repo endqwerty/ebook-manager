@@ -152,7 +152,7 @@ async fn review(parent: &gtk::Window, source: &Path, books: Vec<Book>) -> Option
     }
 }
 
-async fn import(s: &Shelf, parent: &gtk::Window, path: PathBuf) -> Result<String> {
+async fn import(store: &store::Store, parent: &gtk::Window, path: PathBuf) -> Result<String> {
     let thumbnails = thumbs::folder(&data_folder());
     let candidate = gio::spawn_blocking(move || stage(path, &thumbnails))
         .await
@@ -161,8 +161,7 @@ async fn import(s: &Shelf, parent: &gtk::Window, path: PathBuf) -> Result<String
     let candidate = std::sync::Arc::new(candidate);
     loop {
         let c = candidate.clone();
-        match s
-            .store
+        match store
             .run(move |lib| lib.import(c.staged.path(), &c.source, &c.metadata, choice))
             .await?
         {
@@ -179,13 +178,13 @@ async fn import(s: &Shelf, parent: &gtk::Window, path: PathBuf) -> Result<String
     }
 }
 
-pub fn start(s: &Shelf, paths: Vec<PathBuf>) {
+pub fn start(window: &impl IsA<gtk::Window>, store: &store::Store, paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;
     }
     let d = gtk::Window::builder()
         .title("Import results")
-        .transient_for(&s.window)
+        .transient_for(window)
         .default_width(540)
         .default_height(390)
         .build();
@@ -211,7 +210,7 @@ pub fn start(s: &Shelf, paths: Vec<PathBuf>) {
     });
     d.set_deletable(false);
     d.present();
-    let s = s.clone();
+    let store = store.clone();
     glib::spawn_future_local(async move {
         let result = gio::spawn_blocking(move || discover(paths))
             .await
@@ -226,7 +225,7 @@ pub fn start(s: &Shelf, paths: Vec<PathBuf>) {
                     break;
                 }
                 progress.set_text(&format!("Importing {} of {}", index + 1, paths.len()));
-                let res = import(&s, &d, path.clone()).await.unwrap_or_else(|e| {
+                let res = import(&store, &d, path.clone()).await.unwrap_or_else(|e| {
                     publication_message(&e).unwrap_or_else(|| format!("Failed · {e:#}"))
                 });
                 list.append(&label(
@@ -249,7 +248,6 @@ pub fn start(s: &Shelf, paths: Vec<PathBuf>) {
         } else {
             "Import complete"
         });
-        s.reload();
         content.remove(&stop);
         let window = d.downgrade();
         content.append(&button("Done", move || {

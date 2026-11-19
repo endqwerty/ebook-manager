@@ -6,8 +6,7 @@ use std::{
     sync::Arc,
 };
 
-pub fn open(parent: &impl IsA<gtk::Window>, store: &store::Store, book: &Rc<Book>) {
-    let b = book;
+pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
     let w = gtk::Window::builder()
         .title(&b.title)
         .transient_for(parent)

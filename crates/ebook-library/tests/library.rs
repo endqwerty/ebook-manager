@@ -10,6 +10,20 @@ fn facts() -> ParsedMetadata {
         ..Default::default()
     }
 }
+/// Every book whose text matches, as full records in title order.
+fn search(l: &Library, text: &str) -> Result<Vec<Book>> {
+    let mut reader = l.browse_reader()?;
+    let query = BrowseQuery {
+        text: text.into(),
+        ..Default::default()
+    };
+    let view = reader.open(&query, &Cancel::default())?;
+    reader
+        .window(view.token, 0, view.count)?
+        .iter()
+        .map(|row| l.book(&row.id))
+        .collect()
+}
 fn add(l: &mut Library, path: &Path) -> Result<Book> {
     match l.import(path, path, &facts(), ImportChoice::Review)? {
         ImportOutcome::Added(b) => Ok(b),
@@ -166,8 +180,8 @@ fn portable_only_rebuild_restores_bytes_metadata_and_position() -> Result<()> {
         let mut l = Library::open(&root)?;
         l.refresh()?;
         assert_eq!(views(&l)?, before);
-        assert_eq!(l.search("dANA")?, vec![edited.clone()]);
-        assert_eq!(l.search("map")?.len(), 1);
+        assert_eq!(search(&l, "dANA")?, vec![edited.clone()]);
+        assert_eq!(search(&l, "map")?.len(), 1);
         assert_eq!(l.load_position(&b.id)?, Some(pos.clone()));
         assert_eq!(
             fs::read(l.managed_file(&b.id)?)?,
@@ -194,13 +208,13 @@ fn publication_interrupted_before_and_after_journal_install_retries_once() -> Re
             err.downcast_ref::<PublicationPending>().unwrap().book_id,
             b.id
         );
-        assert_eq!(l.search("Edited")?.len(), 1);
+        assert_eq!(search(&l, "Edited")?.len(), 1);
         drop(l);
         fs::remove_file(&dir)?;
         fs::rename(&away, &dir)?;
         let mut l = Library::open(&app)?;
         l.refresh()?;
-        assert_eq!(l.search("Edited")?[0].id, b.id);
+        assert_eq!(search(&l, "Edited")?[0].id, b.id);
         assert_eq!(fs::read_dir(app.join("portable/changes"))?.count(), 2);
     }
     Ok(())
@@ -219,7 +233,7 @@ fn refuses_symlinks_and_rejects_tampered_managed_bytes() -> Result<()> {
         l.import(&link, &stage, &facts(), ImportChoice::Review)
             .is_err()
     );
-    assert!(l.search("")?.is_empty());
+    assert!(search(&l, "")?.is_empty());
     let b = add(&mut l, &stage)?;
     let blob = l.managed_file(&b.id)?;
     fs::remove_file(&blob)?;
@@ -266,7 +280,7 @@ fn shared_identifier_does_not_hide_an_exact_version() -> Result<()> {
             matches!(l.import(&a,&a,&facts(),choice)?,ImportOutcome::Duplicate(found) if found==b)
         );
     }
-    assert_eq!(l.search("")?.len(), 2);
+    assert_eq!(search(&l, "")?.len(), 2);
     assert_eq!(l.load_position(&b.id)?, Some(p));
     Ok(())
 }
@@ -290,7 +304,7 @@ fn edited_sidecars_survive_revision_reuse_and_portable_restore() -> Result<()> {
     fs::create_dir(&fresh)?;
     fs::rename(app.join("portable"), fresh.join("portable"))?;
     let l = Library::open(&fresh)?;
-    assert_eq!(l.search("")?, vec![b]);
+    assert_eq!(search(&l, "")?, vec![b]);
     assert!(
         fresh
             .join("portable/sidecars")
@@ -324,7 +338,7 @@ fn retry_reports_the_committed_book_while_publication_is_pending() -> Result<()>
                 .clone(),
         );
     }
-    assert_eq!(ids, vec![l.search("")?[0].id.clone(); 2]);
+    assert_eq!(ids, vec![search(&l, "")?[0].id.clone(); 2]);
     fs::remove_file(&dir)?;
     l.refresh()?;
     drop(l);
