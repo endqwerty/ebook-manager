@@ -1,0 +1,23 @@
+# Reading an older Kindle book as EPUB
+
+A Linux desktop caller can request a reading copy of a supported, unprotected MOBI book. The first direction in [issue 37](https://github.com/endqwerty/ebook-manager/issues/37) produces a reflowable EPUB 3. A caller can offer it for import or mounted-folder export. The branch delivers the conversion engine. The coordinator owns the catalogue transaction and desktop entry point.
+
+## Calling the job
+
+Supply the managed source path, an opaque string identifying the source version, a fresh destination path, and optional catalogue title, authors, language and cover. Show the direction's loss description before starting. The caller retains the source version and hash and can serialize them together into the identity. The job echoes it verbatim. It takes one immutable snapshot of a bounded regular input file. The caller must resolve the path to the requested immutable library version.
+
+Start a job on a background thread. Observe its stage (preparing, converting, checking or publishing), request cancellation or wait for its result. Retrying starts another job with the same request. Cancellation observed before publication discards staging. Once publication wins the result is success. Two jobs for the same output name may race. At most one publishes. A successful result names the file and contains a serialisable report with the source identity, direction, converter version, byte size and observed losses. The caller persists the report with the derived version.
+
+## Input and output boundary
+
+One shape extends the existing reader helper to decode both formats and return blocks and image buffers to the host for packaging. That expands the reader protocol, currently limited to inert metadata and styled text. The selected shape puts decoding and writing together in a separate short-lived bubblewrap helper. The reader keeps its existing public contract and independently opens the staged EPUB. The converter sees only its own executable, runtime libraries and read-only job inputs. Descriptor closure, parent death, address-space, CPU, subprocess and output bounds follow the [reader isolation contract](../../specs/epub-reader-mvp.md). Failure to establish isolation ends the job before decoding. The host imposes a wall deadline and treats the helper's reply as untrusted.
+
+The decoder returns [ParsedBook](../../crates/ebook-convert/src/book.rs). Sections in reading order contain text paragraphs, headings and image references. Images carry a JPEG or PNG media type and an optional cover index identifies the cover. The decoder returns reasons for refusing protected, unsupported, malformed or oversized files. It describes dropped features in the losses list. The writer owns all EPUB paths, identifiers and markup. It XML-escapes text, checks image references and emits a navigation document, package, spine and the images. Catalogue values supplied by the caller override source metadata. Plain blocks preserve reading order while rich typography, source links, page positions and original markup may be lost. Generated identifiers and section names belong to the new publication. Annotation transfer remains open.
+
+Stage the output in the destination directory, reopen it through the existing sandboxed EPUB reader, and publish by an atomic no-clobber operation. A malformed reply, an unreadable output, cancellation, a pre-existing destination (including the source itself) or a helper failure must leave the source and any destination intact. A failed process can leave an unreferenced temporary file. The catalogue later links a successful output to its source and stores the settings and report together.
+
+## Evidence required
+
+A generated, redistributable input must become an EPUB that passes EPUBCheck and whose chapters the independent reader returns in order with expected words. Check source and catalogue metadata, cover bytes, loss reporting, early refusal, pre-publication cancellation and destination collisions. In a clean-context format review, compare the accepted input subset with allowlisted public format descriptions and actual samples. A representative unsupported input with silent text loss invalidates the chosen scope. A successful job whose output cannot be opened invalidates the publication contract.
+
+[CONV-1 to CONV-5 and EDIT-6 to EDIT-8](../requirements/06-conversion-editing.md) have partial coverage. Persistent queue and retry history, attachment to the same catalogue book, version comparison/restore, annotation mapping, AZW3 and reverse directions remain open. Kobo deferred, possible training recall.
