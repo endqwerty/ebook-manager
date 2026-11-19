@@ -7,9 +7,9 @@ mounted e-reader. Conversion, wireless sync and mobile apps are in the backlog.
 ## Run on Linux
 
 Install a recent stable Rust toolchain, a C compiler, pkg-config, GTK 4.12 or
-later, libadwaita 1.5 or later development files, Bubblewrap and Make. On Arch the system
-packages are `base-devel gtk4 libadwaita bubblewrap`. Ubuntu 24.04 uses
-`build-essential pkg-config libgtk-4-dev libadwaita-1-dev bubblewrap`.
+later, libadwaita 1.5 or later development files, Bubblewrap, Python 3 and Make. On Arch the system
+packages are `base-devel gtk4 libadwaita bubblewrap python`. CI on Ubuntu 26.04 uses
+`build-essential pkg-config libgtk-4-dev libadwaita-1-dev bubblewrap python3`.
 
 From the repository root:
 
@@ -19,7 +19,7 @@ make install
 ```
 
 The installer puts both the desktop app and its EPUB helper in `~/.local/bin`.
-The application menu entry uses `ebook-manager` on the session's PATH. For a
+The **Ebook Manager** menu entry opens the installed executable directly. For a
 development run, build all binaries together with
 `cargo build --workspace --bins --locked`, then run `target/debug/ebook-manager`.
 
@@ -38,6 +38,18 @@ Read the [desktop guide](apps/desktop/README.md) for the controls and the
 [library guide](crates/ebook-library/README.md) to back up and restore your
 books, edits and reading positions. The [EPUB reader guide](crates/ebook-reader/README.md)
 describes format support and the Linux sandbox.
+
+## Back up and restore
+
+Quit Ebook Manager, then copy the entire `portable` folder from
+`~/.local/share/ebook-manager/` to your backup. If you set `XDG_DATA_HOME`,
+the library is under `ebook-manager/` in that directory.
+
+To restore, quit the app. Move any existing `ebook-manager` data directory
+aside so you keep the old copy. Create a fresh directory of the same name
+and copy the backup's `portable` folder into it. Check that the books are at
+`ebook-manager/portable/books/`. Launch Ebook Manager to rebuild the shelf,
+then open a book to check your edits and reading position.
 
 ## Project
 

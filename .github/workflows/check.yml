@@ -42,15 +42,15 @@ jobs:
         with:
           tool: nextest@0.9.152
 
-      - name: Build the application and helper
-        run: cargo build --workspace --bins --locked
+      - name: Install the release application and helper
+        run: make install PREFIX="$RUNNER_TEMP/ebook-manager"
 
       - name: Run the workspace tests
         run: dbus-run-session -- xvfb-run -a cargo nextest run --workspace --locked --profile ci --no-fail-fast
 
       - name: Import, read, restart and export from the desktop
         id: desktop
-        run: /usr/bin/python3 apps/desktop/tests/smoke.py target/debug/ebook-manager "$RUNNER_TEMP/desktop-evidence"
+        run: /usr/bin/python3 apps/desktop/tests/smoke.py "$RUNNER_TEMP/ebook-manager/bin/ebook-manager" "$RUNNER_TEMP/desktop-evidence"
 
       - name: Exercise mounted FAT32 card export
         id: card
