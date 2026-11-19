@@ -169,7 +169,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
 - `LIB-70` (core) The app starts and searches fast at 100,000 books and stays usable
   at 1,000,000. Proposed targets on an ordinary laptop: the window shows the library
   within 2 seconds of launch, and a quick search answers within 100 milliseconds. It never reads every file at start. Reports of existing tools slowing
-  or failing start at about 20,000 books.
+  or failing start at about 20,000 books. The catalogue meets its open and search targets at both tested sizes. Desktop launch and interactive search remain open until the window uses the paged model. [Catalogue benchmark](../design/library-browsing.md#the-benchmark)
 - `LIB-71` (core) The grid scrolls smoothly at any size, with covers drawn from
   cached thumbnails.
 - `LIB-72` (core) No long job blocks the window: import, conversion, metadata fetch,

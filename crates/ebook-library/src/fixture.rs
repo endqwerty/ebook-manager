@@ -90,9 +90,9 @@ pub fn generate(path: &Path, count: u32) -> Result<()> {
 pub fn lookup(lib: &Library, i: u32) -> Result<Vec<Book>> {
     Ok(lib
         .import_candidates(
-            format!("source-{i}").as_bytes(),
+            format!("source-{}", i - 1).as_bytes(),
             &format!("{i:064x}"),
-            Some(&format!("package-{i}")),
+            Some(&format!("package-{}", i - 2)),
         )?
         .1)
 }

@@ -123,11 +123,29 @@ fn run(count: u32) -> Result<()> {
         check(&v, &resort);
         let i = count - 1;
         let found = timed!("import", fixture::lookup(&lib, i)?);
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].id, fixture::id(i));
+        let mut found_ids: Vec<_> = found.into_iter().map(|b| b.id).collect();
+        found_ids.sort();
+        assert_eq!(
+            found_ids,
+            [fixture::id(i - 2), fixture::id(i - 1), fixture::id(i)]
+        );
     }
     for (name, mut values) in samples {
         values.sort_by(f64::total_cmp);
+        let limits = match name {
+            "open" => [300., 3500.],
+            "shelf" => [150., 1500.],
+            "window" => [2., 3.],
+            "resort" => [400., 5000.],
+            "import" => [1., 1.],
+            _ => [85., 800.],
+        };
+        let limit = limits[usize::from(count == 1_000_000)];
+        anyhow::ensure!(
+            values[2] <= limit,
+            "{count} {name} median {} ms exceeds {limit} ms",
+            values[2]
+        );
         println!(
             "{count} {name} {:.3} [{:.3}, {:.3}] ms",
             values[2], values[0], values[4]
