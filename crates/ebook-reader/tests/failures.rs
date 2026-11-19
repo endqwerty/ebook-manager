@@ -405,12 +405,12 @@ fn memory_and_time_limits_stop_the_helper() {
         .open(&heavy)
         .and_then(|b| b.read_chapter(0))
         .unwrap_err();
-    // The helper exits on its own rather than aborting, so the desktop's
-    // crash reporter does not see a crash for a book that is merely too big.
+    // The helper exits instead of aborting, so the desktop reports no crash
+    // for a book that is merely too big.
     match &err {
         ReaderError::HelperFailed { detail } => {
             assert!(detail.starts_with("exit status: 4;"), "{detail}");
-            assert!(detail.contains("out of memory"), "{detail}");
+            assert!(detail.contains("memory allocation"), "{detail}");
         }
         other => panic!("{other:?}"),
     }
@@ -769,6 +769,42 @@ fn helper_is_built_with_overflow_checks() {
         String::from_utf8_lossy(&out.stdout)
     );
     assert!(out.stdout.is_empty());
+}
+
+/// F7: no way the helper can fail is a crash. Every signal that would dump
+/// core, and a stack overflow, ends it with exit status 4 instead.
+#[test]
+fn fatal_signals_end_the_helper_without_a_crash() {
+    let fatal = [
+        libc::SIGABRT,
+        libc::SIGSEGV,
+        libc::SIGBUS,
+        libc::SIGILL,
+        libc::SIGFPE,
+        libc::SIGTRAP,
+        libc::SIGSYS,
+        libc::SIGQUIT,
+        libc::SIGXCPU,
+        libc::SIGXFSZ,
+    ];
+    let cases = fatal
+        .iter()
+        .map(|s| s.to_string())
+        .chain(["stack".to_owned()]);
+    for case in cases {
+        let out = Command::new(HELPER)
+            .args(["fatal-probe", &case])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "{case}: {:?} {stderr}",
+            out.status
+        );
+        assert!(stderr.contains("helper: stopped"), "{case}: {stderr}");
+    }
 }
 
 /// F6: a ZIP64 archive with the longest possible comment is counted by its

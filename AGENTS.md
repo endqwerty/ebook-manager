@@ -198,24 +198,29 @@ type, shadows and motion. Its three companion pages cover
 for your screen before designing or building it in any shell. If a screen needs to break one of its rules, change the page in the same
 pull request and say why.
 
-## Tests on the shared desktop: no crash reports
+## Crashes: users never see one
 
-Agents run builds and tests on the same Linux desktop that Daniel uses. The
-desktop records every process that a signal ends (an abort, a segfault, a kill
-by a resource limit) and shows a crash notice. A test that makes such a process
-die on purpose sends him one notice per run, from every agent that runs it.
+A crash is one of the worst things a user can experience, so no part of the app
+may crash: not the window, not a helper process, not a converter. A crash here
+means a process that ends by a signal that dumps core, such as an abort, a
+segfault, a stack overflow or a CPU or file-size limit. The system records it
+and the desktop shows a crash notice. A process stopped deliberately with
+`SIGKILL` or `SIGTERM` leaves no record. Requirement `SEC-10` covers files that
+break a parser.
 
-- A process that a test makes fail on purpose must end with an exit code and a
-  message, not a signal. The reader helper exits with status 4 when it runs out
-  of memory ([helper.rs](crates/ebook-reader/src/bin/helper.rs)). Design any new
-  limit the same way: catch the failure, or ignore the signal (for example
-  `SIGXFSZ`, so a write past the file-size limit returns an error), and exit.
-- When a change adds or alters a failure test, count `coredumpctl list
+- Expected failures, such as a limit being hit or a broken file, end with an
+  error the caller can show, never a signal. A process that runs untrusted input
+  must also turn a fatal signal into an ordinary exit. The reader helper does
+  both: [helper.rs](crates/ebook-reader/src/bin/helper.rs) exits with status 4
+  on any such signal, and a test raises each one.
+- Agents run builds and tests on the desktop Daniel uses, so a test that crashes
+  a process sends him one crash notice per run, from every agent that runs it.
+  When a change adds or alters a failure test, count `coredumpctl list
   --no-pager -q` lines before and after one run. A new record is a bug in the
-  test or the code, so fix it before pushing.
-- An exploratory probe that may crash, such as a native call from a script or
-  a headless browser, is fine once when the crash is what you're studying.
-  Don't put it in a loop or a test, and name the crash in your reply.
+  code or the test. Fix it before pushing.
+- An exploratory probe that may crash, such as a native call from a script or a
+  headless browser, can run once when the crash is what you're studying. Don't
+  put it in a loop or a test, and mention the crash in your reply.
 
 ## Tests and CI: Mainworthy
 
