@@ -239,17 +239,17 @@ fn next_page_top(
     Some(if y > top { y } else { top + height })
 }
 
-/// The top of the page before the one starting at `top`: one page up, moved
-/// down to the next line start so the page begins on a whole line and still
-/// reaches the line that was at the top.
-fn previous_page_top(lines: impl IntoIterator<Item = (i32, i32)>, top: i32, height: i32) -> i32 {
-    let target = top - height;
-    lines
-        .into_iter()
-        .map(|(y, _)| y)
-        .find(|y| *y >= target)
+/// The top of the page before the one showing from `top`: it starts on a
+/// whole line and ends with the last line above the first whole line now
+/// showing, so a line cut by `top` is whole on it. `lines` must reach one
+/// line past `top`.
+fn previous_page_top(lines: &[(i32, i32)], top: i32, height: i32) -> i32 {
+    let tops = || lines.iter().map(|(y, _)| *y);
+    let edge = tops().find(|y| *y >= top).unwrap_or(top);
+    tops()
+        .find(|y| *y >= edge - height)
         .filter(|y| *y < top)
-        .unwrap_or(target)
+        .unwrap_or(top - height)
 }
 
 fn position_error(w: &gtk::Window, e: &anyhow::Error) {
@@ -389,7 +389,8 @@ impl View {
                 }
             }
             Turn::Back => {
-                let target = previous_page_top(self.lines(top - height, top), top, height);
+                let target =
+                    previous_page_top(&self.lines(top - height, top + height), top, height);
                 // Show the margin above the first line, as the chapter opens.
                 a.set_value(if target <= first {
                     a.lower()
@@ -612,19 +613,27 @@ mod tests {
     #[test]
     fn the_previous_page_starts_on_a_whole_line_and_reaches_the_old_top() {
         // One 50-pixel page above 100 would start at 50, inside line 2.
-        let top = previous_page_top(lines(10), 100, 50);
+        let top = previous_page_top(&lines(10), 100, 50);
         assert_eq!(top, 60);
         assert!(top + 50 >= 100);
-        assert_eq!(previous_page_top(lines(10), 100, 60), 40);
+        assert_eq!(previous_page_top(&lines(10), 100, 60), 40);
+    }
+
+    #[test]
+    fn a_line_cut_at_the_top_is_whole_on_the_previous_page() {
+        // The page starts at 65, inside the line from 60 to 80.
+        let top = previous_page_top(&lines(10), 65, 50);
+        assert_eq!(top, 40);
+        assert!(top + 50 >= 80);
     }
 
     #[test]
     fn paging_back_past_the_first_line_stops_at_the_top_of_the_chapter() {
-        assert_eq!(previous_page_top(lines(10), 20, 50), 0);
+        assert_eq!(previous_page_top(&lines(10), 20, 50), 0);
     }
 
     #[test]
     fn a_line_taller_than_the_page_still_goes_back() {
-        assert_eq!(previous_page_top([(0, 200)], 100, 50), 50);
+        assert_eq!(previous_page_top(&[(0, 200)], 100, 50), 50);
     }
 }

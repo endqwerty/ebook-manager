@@ -155,6 +155,14 @@ def keys(evidence):
     assert page("page-2-again.png") == second
     press("Prior")
     assert page("page-1-again.png") == first
+    press("space")
+    assert page("page-2-again.png") == second
+    press("Right")
+    assert page("page-3.png")[0] > second[0]
+    press("Left")
+    assert page("page-2-again.png") == second
+    press("shift+space")
+    assert page("page-1-again.png") == first
     shown, turns = first, 0
     while True:
         press("Right")
