@@ -78,7 +78,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   smooth at 100,000 books.
 - `LIB-27` (core) Bulk edit with a preview of every change and undo.
 - `LIB-28` (core) Every action is reachable from the keyboard. This is a common
-  complaint about existing tools. Done for the Linux library window, including column widths. Every command [has a key](../../specs/desktop-mvp.md#commands-and-keys), and the smoke check drives it with the keyboard alone. The import report's buttons are reached with Tab.
+  complaint about existing tools. Done for the Linux library window, including column widths. Every command [has a key](../../specs/desktop-mvp.md#commands-and-keys), and the smoke check exercises keyboard commands. The desktop checks also resize the window and scroll with the wheel. The import report's buttons are reached with Tab.
 
 ## Importing
 

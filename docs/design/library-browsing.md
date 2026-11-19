@@ -516,14 +516,16 @@ flowchart LR
 - **List** is a `GtkListView` and **Table** a `GtkColumnView`, as
   [their sections](interface-views.md#list) describe. A click on a table
   header changes the model's sort. The table never sorts rows itself. The
-  table is offered only when the window is at least 640 wide. One view is
+  table is offered only when the window content is at least 640 wide. One view is
   built at a time over the model, and a view built anew goes on screen when
   the model has its books, so the old one can still say where the reader is.
   GTK's column headers take no keyboard focus, so the table gives it to
   them: Up from the first row reaches a header, the arrows move along them,
   Return and Control+Return sort, and the Menu key opens the header's menu.
-  Show, hide, move and width commands update the live columns while GTK
-  keeps the header and its menu alive. Width commands step by 24 within
+  Show, hide, move and width commands update the live columns. Book and
+  column context menus are owned by an overlay around the window content.
+  A cell or header supplies the pointing rectangle. The window dismisses
+  menus before a model swap or layout replacement and when the width changes. Width commands step by 24 within
   the same saved-width limits as a drag.
   A list row's separator is the app's own line in the platform's border
   colour, because the platform's runs under the cover. The view switch uses
@@ -536,9 +538,12 @@ flowchart LR
   because this shell has no touch target yet.
 - **A sort the reader asks for** starts at the book they were on, if one is
   selected or focused, and otherwise at the top. Switching layouts keeps
-  selection and book focus and places the previous top book in the first
-  visible row. In the grid that row can also contain earlier books. The
-  scroll position stays within the end of the catalogue.
+  selection and keeps the previous top book in the first visible row. If
+  that position would hide the focused book, the view scrolls to show it.
+  In the grid that row can also contain earlier books. The scroll position
+  stays within the end of the catalogue. The reason for placement belongs
+  to the pending open and its follow-up, so skipping a placement cannot
+  affect the next sort.
 - **Shelf** is a custom scrollable widget. It asks for the `ShelfStrip` once
   per view, packs rows for its width (a new row when the next spine does not
   fit, and at each group start), and stores each row's first rank and y

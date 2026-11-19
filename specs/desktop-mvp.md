@@ -2,7 +2,7 @@
 
 ## Acceptance walk-through
 
-Use an empty XDG data directory and generated EPUBs. Start the app, add a folder containing a multi-chapter EPUB, an exact duplicate, a revised copy and an invalid file. Check each result and resolve the revision. Switch between the grid, the list and the table and sort each. Search by typing, then edit the title, author, sort title, author sort name, series and position from the keyboard and find the new values. Read chapter two, close the application, reopen the same book and check its reading position. Send the book to a folder twice and compare the exported bytes to the imported EPUB. Keep the source files intact throughout. [`smoke.py`](../apps/desktop/tests/smoke.py) does this with the keyboard, and [`scale.py`](../apps/desktop/tests/scale.py) uses 100,000 generated books to check launch, scroll position when switching views, search, jumping to the last row, and background imports.
+Use an empty XDG data directory and generated EPUBs. Start the app, add a folder containing a multi-chapter EPUB, an exact duplicate, a revised copy and an invalid file. Check each result and resolve the revision. Switch between the grid, the list and the table and sort each. Search by typing, then edit the title, author, sort title, author sort name, series and position from the keyboard and find the new values. Read chapter two, close the application, reopen the same book and check its reading position. Send the book to a folder twice and compare the exported bytes to the imported EPUB. Keep the source files intact throughout. [`smoke.py`](../apps/desktop/tests/smoke.py) exercises the keyboard commands and window resizes, and [`scale.py`](../apps/desktop/tests/scale.py) uses 100,000 generated books to check launch, scroll position when switching views, search, jumping to the last row, and background imports.
 
 ## The library window
 
@@ -18,7 +18,7 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 
 - A list row is a small cover, the title, the author, and the series with the book's place in it. At its trailing edge is the percentage read, a check mark for a finished book, or, when the list is sorted by a date, that date. The cover is 40, 48 or 60 wide with the cover size.
 - The table has a column for each fact: Title, Author, Series, Date Added and Progress to start with, and Date Published and Last Read to add. Title has a small cover and cannot be removed. A column's width can be dragged, and a header dragged to another place.
-- The table is offered when the window is at least 640 wide. Under that the view switch is a menu without it, and a window set to the table shows the list. When the system's text size is one and a half times or more, a window set to the grid shows the list. Neither changes the choice.
+- The table is offered when the window content is at least 640 wide. Under that the view switch is a menu without it, and a window set to the table shows the list. When the system's text size is one and a half times or more, a window set to the grid shows the list. Neither changes the choice.
 - From the first row, Up reaches the table's headers. On a header, Left and Right move along them, Return sorts by that column and again turns the sort round, Control+Return adds the column as the next sort key or turns that key round, and the Menu key or Shift+F10 opens the header's menu. Down returns to the books. A click and a Control+click do what Return and Control+Return do. A second and third key show a small 2 and 3 in their headers.
 - A header's menu shows and hides columns, moves its column toward the start or the end, and offers **Make Wider** and **Make Narrower** in steps of 24.
 
@@ -30,7 +30,7 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 
 ## Remembered choices
 
-- The view, each view's sort, the cover size, and the table's columns with their order and widths are kept in `settings.json` in the app's config folder and are as they were left after a restart. Each view's sort falls back independently and unknown column entries are skipped. Closing the window leaves the settings file alone when the saved choices match the current ones.
+- The view, each view's sort, the cover size, and the table's columns with their order and widths are kept in `settings.json` in the app's config folder and are as they were left after a restart. Each view's sort falls back independently and unknown column entries are skipped. Fractional saved widths round to the nearest pixel. Closing the window leaves the settings file alone when the saved choices match the current ones.
 
 ## Search
 
@@ -53,7 +53,7 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 | Refresh library | F5, Ctrl+R, or the main menu |
 | Close | Ctrl+W, Ctrl+Q |
 
-- A command acts on the books selected when it is given, whatever is selected by the time it runs. Every key acts on the selection, Return included: when the focused book is not the selected one, Return reads the selected one. Read and Edit need exactly one selected book, and Send to device takes any number. A book's menu acts on that book and leaves the selection alone.
+- A command acts on the books selected when it is given, whatever is selected by the time it runs. Every key acts on the selection, Return included: when the focused book is not the selected one, Return reads the selected one. Read and Edit need exactly one selected book, and Send to device takes any number. A book's menu acts on that book and leaves the selection alone. Book and column menus close before a view is replaced or when the window width changes.
 - Refresh library checks every journal file against the catalogue and finishes any change that was saved but not published.
 
 ## Import
@@ -81,4 +81,4 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 ## Large libraries
 
 - The window asks for books in pages of 128 and creates rows only for what is on screen, so scrolling and drawing cost the same in a library of any size. Opening a view still puts every book in order, and a search reads every book's text. At 100,000 books those take about 0.06 and 0.03 seconds, off the window's thread.
-- With 100,000 generated books the first titles can be read through the accessibility tree a quarter of a second after the process starts, against a limit of 2 seconds. All six switches between Grid, List and Table keep the previous top book in the first visible row. A search is answered as the reader types, and Ctrl+End shows the last rows. `scale.py` checks these and the import behaviour above.
+- With 100,000 generated books the first titles can be read through the accessibility tree a quarter of a second after the process starts, against a limit of 2 seconds. All six switches between Grid, List and Table keep the focused book visible, or keep the previous top book in the first visible row when focus is outside the books. A search is answered as the reader types, and Ctrl+End shows the last rows. `scale.py` checks these and the import behaviour above.

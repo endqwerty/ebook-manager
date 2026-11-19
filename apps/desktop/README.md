@@ -33,7 +33,7 @@ python3 apps/desktop/tests/smoke.py \
   target/release/ebook-manager /tmp/ebook-desktop-smoke
 ```
 
-The scale check starts the app against 100,000 generated books. It measures the time to the first readable titles over five starts, checks the scroll position when switching between views, searches, jumps to the last row, and imports 400 generated EPUBs while checking that the list refreshes at most once a second and keeps its place.
+The scale check starts the app against 100,000 generated books. It measures the time to the first readable titles over five starts, checks scroll position and visible keyboard focus when switching between views, searches, jumps to the last row, and imports 400 generated EPUBs while checking that the list refreshes at most once a second and keeps its place.
 
 ```sh
 cargo build --release -p ebook-library --features fixture --bin fixture
