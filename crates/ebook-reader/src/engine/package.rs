@@ -62,7 +62,7 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
     let opf_path = rootfiles
         .iter()
         .filter(|r| {
-            r.attr("media-type").map_or(true, |m| m.trim() == "application/oebps-package+xml")
+            r.attr("media-type").is_none_or(|m| m.trim() == "application/oebps-package+xml")
         })
         .chain(rootfiles.iter())
         .filter_map(|r| r.attr("full-path"))
@@ -113,7 +113,7 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
             spine.push(SpineItem {
                 path: item.path.clone(),
                 media_type: item.media_type.clone(),
-                linear: itemref.attr("linear").map_or(true, |l| l.trim() != "no"),
+                linear: itemref.attr("linear").is_none_or(|l| l.trim() != "no"),
             });
         }
     }
@@ -207,7 +207,7 @@ fn read_metadata(package: &Element) -> Metadata {
                 s
             });
         let author = Author { name, sort_name };
-        if role.as_deref().map_or(true, |r| r.trim().eq_ignore_ascii_case("aut")) {
+        if role.as_deref().is_none_or(|r| r.trim().eq_ignore_ascii_case("aut")) {
             authors.push(author.clone());
         }
         all.push(author);
