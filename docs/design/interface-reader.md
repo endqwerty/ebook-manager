@@ -79,8 +79,8 @@ Four are built in. The reader can add their own.
   serif, the platform's sans serif, a face made for dyslexic readers, and any
   fonts the reader loaded.
 - The default is Literata on every platform, so a book looks the same on each
-  of the reader's devices. It needs the same licence check as the library's
-  bundled serif.
+  of the reader's devices. Its licence is checked under
+  [LIC-1](../requirements/10-constraints.md#licences-of-parts).
 - Size is a stepper with twelve steps from 0.8 to 2.5 times the default. The
   stepper shows a small and a large letter A and has no number.
 
