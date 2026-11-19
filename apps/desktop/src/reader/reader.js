@@ -218,6 +218,10 @@
 			return at ? at[0].data.charAt(at[1]) : "";
 		},
 		length: () => length,
+		// The place showing now, as "offset,page,pages", or "" before the
+		// landing. A turn asked for earlier has happened by the time this
+		// answers, because calls are answered in the order they were made.
+		where: () => (ready && landed ? [place(), page(), pages()].join(",") : ""),
 	};
 	Object.defineProperty(window, "__reader", { value: Object.freeze(api) });
 

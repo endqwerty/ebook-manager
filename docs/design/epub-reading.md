@@ -602,6 +602,10 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   its page count. The shell opens a
   chapter on its first page by asking for that, and not for offset 0, so a
   chapter that begins with a picture begins there.
+- **On leaving,** the shell asks the page where it is before it saves. The
+  page answers after any turn already asked for, so a turn made the instant
+  before closing is the place saved. A page that does not answer within a
+  second is not waited for, and the last reported place is saved.
 - **To restore,** the script turns the offset into a `Range`, finds its
   column, and shows that page. The same text comes back after the font or the
   window changes. Its line on the page can differ.

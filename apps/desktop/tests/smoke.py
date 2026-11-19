@@ -693,6 +693,17 @@ def run(binary, evidence, root):
             )
             click("Back to library")
             time.sleep(0.3)
+        # A turn made in the instant before leaving is the place saved.
+        click("Read")
+        find("Page 4 of", contains=True)
+        xd("key", "Right")
+        click("Back to library")
+        time.sleep(0.5)
+        click("Read")
+        find("Page 5 of", contains=True)
+        click("Back to library")
+        time.sleep(0.3)
+        print("PASS a page turned just before leaving is where the book reopens", flush=True)
         # Closing the reader lets its view go, and the view's web process
         # with it.
         deadline = time.monotonic() + 10

@@ -153,6 +153,8 @@ fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
 /// What the helper said about a chapter beyond its markup.
 #[derive(Clone, Copy, Default)]
 struct Facts {
+    /// The length of the chapter's text, as the helper counted it.
+    length: u32,
     right_to_left: bool,
     /// Something in the chapter could not be shown.
     partial: bool,
@@ -175,6 +177,7 @@ impl Source for BookSource {
                     facts.borrow_mut().insert(
                         index,
                         Facts {
+                            length: content.length,
                             right_to_left: content.right_to_left,
                             partial: content.truncated || !content.warnings.is_empty(),
                         },
@@ -394,15 +397,43 @@ impl Reading {
             if let Some(timer) = r.pending_save.take() {
                 timer.remove();
             }
-            let Some(position) = r.position() else {
+            if r.confirmed.get().is_none() {
                 return glib::Propagation::Proceed;
-            };
+            }
             let w = w.clone();
-            let store = r.store.clone();
-            let id = r.model.id.clone();
+            let r = r.clone();
             w.set_sensitive(false);
             glib::spawn_future_local(async move {
-                let result = store.save_position(id, position).await;
+                // A turn made a moment ago may not have reported its place
+                // yet. Ask the page, which answers after that turn. A page
+                // that does not answer within a second is not waited for.
+                let (asked, answer) = async_channel::bounded(1);
+                r.view.current(move |now| {
+                    let _ = asked.send_blocking(now);
+                });
+                let now =
+                    glib::future_with_timeout(std::time::Duration::from_secs(1), answer.recv())
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .flatten();
+                if let (Some((offset, page, pages)), Some(place)) = (now, r.place.get()) {
+                    r.confirmed.set(Some(Place {
+                        chapter: place.chapter,
+                        offset,
+                        page,
+                        pages,
+                    }));
+                }
+                // The window is closing: nothing more is saved after this.
+                if let Some(timer) = r.pending_save.take() {
+                    timer.remove();
+                }
+                let Some(position) = r.position() else {
+                    w.destroy();
+                    return;
+                };
+                let result = r.store.save_position(r.model.id.clone(), position).await;
                 w.set_sensitive(true);
                 match result {
                     Ok(()) => w.destroy(),
@@ -456,9 +487,20 @@ impl Reading {
 
     fn event(self: &Rc<Self>, event: Event) {
         match event {
-            Event::Ready { chapter, .. } => {
+            Event::Ready { chapter, length } => {
                 if self.loading.get() == Some(chapter) {
                     self.view.widget().grab_focus();
+                }
+                // The page and the helper count the same text. If they ever
+                // differ, places still work, since the page makes and reads
+                // its own, but search results would land off. Say so.
+                let counted = self.facts.borrow().get(&chapter).map(|f| f.length);
+                if counted.is_some_and(|c| c != length) {
+                    glib::g_warning!(
+                        "ebook-manager",
+                        "chapter {chapter}: the page counts {length} units of text, the helper {}",
+                        counted.unwrap_or_default()
+                    );
                 }
             }
             Event::Place {

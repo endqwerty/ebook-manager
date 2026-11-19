@@ -528,6 +528,45 @@ impl View {
         );
     }
 
+    /// The place showing now, as (offset, page, pages), asked of the page
+    /// itself, or `None` when no chapter has landed or the page does not
+    /// answer. It is answered after any turn already asked for, so it is the
+    /// place to save when the reader leaves.
+    pub fn current(&self, done: impl FnOnce(Option<(u32, u32, u32)>) + 'static) {
+        let Some((number, length)) = self
+            .0
+            .load
+            .borrow()
+            .as_ref()
+            .filter(|l| l.ready)
+            .map(|l| (l.number, l.length))
+        else {
+            return done(None);
+        };
+        let weak = Rc::downgrade(&self.0);
+        self.call(
+            "return __reader.where()",
+            glib::VariantDict::new(None),
+            move |value| {
+                // Checked like any message from the page.
+                let still = weak
+                    .upgrade()
+                    .is_some_and(|i| i.load.borrow().as_ref().is_some_and(|l| l.number == number));
+                let parsed = value.filter(|v| v.is_string() && still).and_then(|v| {
+                    let text = v.to_str();
+                    let mut parts = text.split(',').map(|p| p.parse::<u32>().ok());
+                    let place = (parts.next()??, parts.next()??, parts.next()??);
+                    (parts.next().is_none()
+                        && place.0 <= length
+                        && place.2 > 0
+                        && place.1 < place.2)
+                        .then_some(place)
+                });
+                done(parsed)
+            },
+        );
+    }
+
     /// Set CSS custom properties on the page, keeping the reading place.
     /// They also apply to every chapter opened afterwards. Names are `--`
     /// and lower-case letters; anything else is ignored.
