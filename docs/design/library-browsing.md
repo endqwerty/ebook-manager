@@ -236,10 +236,22 @@ SQLite connection and can move to another thread. It holds one view at a time.
 
 `open` does all its reading in one read transaction, so the order, the filter
 and the first page see one state of the catalogue, and it records that state's
-change counter in the view. `window`, `locate` and `shelf` each read in their
-own transaction and first compare the counter. If the catalogue has changed
-they fail with `StaleView`, and the shell opens the query again. A row number
-`n` is stable, so nothing else can go wrong between calls.
+change counter in the view. `changed` compares the counter and is the signal
+to open the query again.
+
+A view stays readable after the catalogue changes. `window`, `locate` and
+`shelf` each read in their own transaction and refuse only a token that is
+not the reader's current view. Between reopens a view shows current rows at
+the ranks they had when it opened, and a book added since is absent until the
+next `open`. This is safe because rows are fetched by the private row number
+`n`, which never moves to another book, and a row is never deleted: a rank
+can show values newer than the order, and never a different book. An import
+writes in a stream, and a view that a write made unusable could never be
+read on a large library, where a write always lands before an open returns.
+
+Deleting a book will break this. A view can then hold a row number that no
+longer exists, and `window`, `locate` and `shelf` will have to tolerate a
+missing row.
 
 `open` works in two steps, and keeps the result of the first between calls.
 
@@ -536,8 +548,10 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 8. When a view is replaced, then a call with the old token fails with
    `StaleView`. `an_old_token_is_refused`.
 9. When a book is imported, edited or read after a view opened, then `changed`
-   reports true and a reopened view shows the new values in the right place.
-   `a_reopened_view_reflects_changes`.
+   reports true, the open view still returns its books at their ranks with
+   their new values and without the added book, and a reopened view shows
+   the new order. `a_reopened_view_reflects_changes`. A write after `open`
+   does not stop `locate`. `a_write_after_open_does_not_stop_locate`.
 10. When `locate` is given IDs, then it returns each book's rank, and none for
     a book the filter hides. `locate_finds_books_by_id`.
 11. When the first sort key is Author, Series or a date, then `shelf` returns

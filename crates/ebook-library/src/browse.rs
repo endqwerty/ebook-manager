@@ -253,13 +253,14 @@ impl BrowseReader {
         token: ViewToken,
         op: impl FnOnce(&Connection, &View) -> Result<T>,
     ) -> Result<T> {
-        let tx = self.db.unchecked_transaction()?;
-        let count = counter(&tx)?;
+        // A view stays readable after the catalogue changes: its rows are
+        // fetched by row number, which never moves to another book.
         let view = self
             .view
             .as_ref()
-            .filter(|v| v.token == token && v.counter == count)
+            .filter(|v| v.token == token)
             .ok_or(StaleView)?;
+        let tx = self.db.unchecked_transaction()?;
         op(&tx, view)
     }
     pub fn changed(&mut self) -> Result<bool> {
@@ -319,6 +320,10 @@ fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfSt
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let n = r.get::<_, u32>(0)? as usize;
+        // A book added since the view opened is not in it.
+        if n > max {
+            break;
+        }
         if let Some(words) = r.get::<_, Option<u32>>(1)? {
             sizes[n] = (16 + ((u64::from(words) + 6000) / 12000)).min(48) as u8;
         }

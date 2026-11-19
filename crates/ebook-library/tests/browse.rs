@@ -243,19 +243,26 @@ fn an_old_token_is_refused() -> Result<()> {
 #[test]
 fn a_reopened_view_reflects_changes() -> Result<()> {
     let mut s = Shelf::new()?;
-    let v = s.view("", &[])?;
     let b = s.add(meta("Before"))?;
+    s.add(meta("Middle"))?;
+    let old = s.view("", &[(Field::Author, false)])?;
+    assert!(!s.reader.changed()?);
+    s.lib.edit(&b.id, "Zebra", &[])?;
+    s.add(meta("Added"))?;
     assert!(s.reader.changed()?);
-    assert!(s.reader.locate(v.token, &[]).unwrap_err().is::<StaleView>());
-    let old = s.view("", &[])?;
-    s.lib.edit(&b.id, "After", &[])?;
-    assert!(
-        s.reader
-            .window(old.token, 0, 1)
-            .unwrap_err()
-            .is::<StaleView>()
+    // The view is still readable. It shows current values at the ranks the
+    // books had when it opened, and not the book added since.
+    let rows = s.reader.window(old.token, 0, 10)?;
+    assert_eq!(
+        rows.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(),
+        ["Zebra", "Middle"]
     );
-    assert_eq!(titles(s.view("", &[])?), ["After"]);
+    assert_eq!(s.reader.shelf(old.token)?.thickness.len(), 2);
+    assert_eq!(
+        titles(s.view("", &[])?),
+        ["Added", "Middle", "Zebra"],
+        "a reopened view has the new order"
+    );
     s.lib.save_position(
         &b.id,
         &ReadingPosition {
@@ -267,7 +274,20 @@ fn a_reopened_view_reflects_changes() -> Result<()> {
         },
     )?;
     assert!(s.reader.changed()?);
-    assert_eq!(s.view("", &[])?.first[0].progress, Some(0.5));
+    assert_eq!(s.view("zebra", &[])?.first[0].progress, Some(0.5));
+    Ok(())
+}
+#[test]
+fn a_write_after_open_does_not_stop_locate() -> Result<()> {
+    let mut s = Shelf::new()?;
+    let a = s.add(meta("A"))?;
+    let b = s.add(meta("B"))?;
+    let v = s.view("", &[])?;
+    let later = s.add(meta("Aa"))?;
+    assert_eq!(
+        s.reader.locate(v.token, &[b.id, later.id, a.id])?,
+        [Some(1), None, Some(0)]
+    );
     Ok(())
 }
 #[test]
