@@ -165,8 +165,9 @@ to the reader.
   files, no core dump and no further processes or threads, and does not run
   if a limit cannot be set. Where the application already runs under a lower
   ceiling, that ceiling is kept. Because the helper cannot start another
-  process,
-  the address-space limit bounds the whole sandbox. The host stops the sandbox after 15
+  process, the address-space limit bounds the whole sandbox. The helper is
+  built so that arithmetic overflow stops it instead of wrapping, and a test
+  checks the built helper for that. The host stops the sandbox after 15
   seconds of wall-clock time. A helper stopped by any of these is reported and
   the next call works.
 - **F8** If the file's size or modification time changes after a book is
