@@ -245,18 +245,17 @@ fn next_page_top(
 /// chapter above its margin. `lines` must reach one line past `top`.
 fn previous_page_top(lines: &[(i32, i32)], start: i32, top: i32, height: i32) -> i32 {
     let tops = || lines.iter().map(|(y, _)| *y);
-    let edge = tops()
-        .find(|y| *y >= top)
-        .or_else(|| {
-            lines
-                .last()
-                .map(|(y, h)| y + h)
-                .filter(|bottom| *bottom > top)
-        })
-        .unwrap_or(top);
+    let edge = tops().find(|y| *y >= top).unwrap_or(i32::MAX);
+    // The page must reach the bottom of the last line above that one. The
+    // space between paragraphs below it can fall off the page.
+    let reach = lines
+        .iter()
+        .take_while(|(y, _)| *y < edge)
+        .last()
+        .map_or(top, |(y, h)| y + h);
     std::iter::once(start)
         .chain(tops())
-        .find(|y| *y >= edge - height)
+        .find(|y| *y >= reach - height)
         .filter(|y| *y < top)
         .unwrap_or(top - height)
 }
@@ -644,6 +643,14 @@ mod tests {
         let top = previous_page_top(&lines(10), -24, 45, 50);
         assert_eq!(top, 20);
         assert!(top + 50 >= 60);
+    }
+
+    #[test]
+    fn the_space_between_paragraphs_does_not_cost_the_first_page_its_margin() {
+        // Lines of 23 pixels, 31 apart. Sixteen fit from the margin in 516,
+        // and the next page starts with the seventeenth at 496.
+        let spaced: Vec<_> = (0..40).map(|n| (n * 31, 23)).collect();
+        assert_eq!(previous_page_top(&spaced, -24, 496, 516), -24);
     }
 
     #[test]
