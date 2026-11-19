@@ -496,6 +496,14 @@ def run(binary, evidence, root):
         capture("Ebook Manager", evidence / "no-match.png")
         key("Escape")
         find("1 book")
+        # A dead key and its letter go through the search field's input
+        # method, from a closed search.
+        xd("key", "--delay", "100", "dead_acute", "e")
+        time.sleep(0.5)
+        field = find("Search library", "entry")
+        assert field.get_state_set().contains(Atspi.StateType.SHOWING)
+        assert Atspi.Text.get_text(field, 0, -1) == "é", Atspi.Text.get_text(field, 0, -1)
+        key("Escape")
         select_book("mira")
         find("The Lantern Atlas")
         key("F2")

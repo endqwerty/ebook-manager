@@ -2,7 +2,7 @@
 //! the books, with every command as an action on the window.
 use super::*;
 use crate::{
-    browse::{Anchors, BookListModel, Hooks, Query, Replaced, Status},
+    browse::{Anchors, BookListModel, Hooks, Placed, Query, Status},
     thumbs::Thumbs,
     views::{self, BookCell, Shared, grid},
 };
@@ -13,15 +13,6 @@ use std::cell::Cell;
 
 /// The medium cover width.
 const COVER: i32 = 128;
-
-/// Where the view was when its replacement was asked for.
-#[derive(Clone, Copy, Default)]
-struct Place {
-    /// Where the first book on screen started, from the top of the view.
-    top_offset: f32,
-    /// A book held the keyboard focus.
-    focused: bool,
-}
 
 type Command = Box<dyn Fn(&Rc<Library>)>;
 
@@ -41,9 +32,8 @@ struct Library {
     search: gtk::SearchEntry,
     no_match: adw::StatusPage,
     failed: adw::StatusPage,
-    place: Cell<Place>,
-    /// Counts replacements, so a late scroll correction can tell it is stale.
-    replaced: Cell<u64>,
+    /// Counts placements, so a late scroll correction can tell it is stale.
+    placed: Cell<u64>,
     surveying: Cell<bool>,
 }
 
@@ -107,7 +97,7 @@ impl Library {
     }
 
     fn refresh_actions(&self) {
-        let selected = self.model.selection().size();
+        let selected = self.model.selected_count();
         for (name, enabled) in [
             ("read", selected == 1),
             ("edit", selected == 1),
@@ -123,56 +113,55 @@ impl Library {
         }
     }
 
-    /// The books to find again in the view about to open.
+    /// Where the reader is in the books on screen.
     fn anchors(&self) -> Anchors {
         let focused = views::focused_cell(&self.scrolled);
         let top = views::top_cell(&self.scrolled);
-        self.place.set(Place {
-            top_offset: top.as_ref().map_or(0.0, |(_, offset)| *offset),
-            focused: focused.is_some(),
-        });
         let id = |cell: &BookCell| Some(cell.book()?.row()?.id.clone());
         Anchors {
             current: focused
                 .as_ref()
                 .and_then(id)
-                .or_else(|| Some(self.model.selected_one()?.row()?.id.clone())),
+                .or_else(|| self.model.selected_one()),
             top: top.as_ref().and_then(|(cell, _)| id(cell)),
+            top_offset: top.as_ref().map_or(0.0, |(_, offset)| *offset),
+            focused: focused.is_some(),
         }
     }
 
     /// Puts the reader back where they were in the view that has just
     /// replaced the last: on the book they were on if it is still there,
     /// else at the first book that was on screen, else at the top.
-    fn restore(self: &Rc<Self>, replaced: &Replaced) {
-        let place = self.place.get();
-        let serial = self.replaced.get() + 1;
-        self.replaced.set(serial);
-        if let Some(rank) = replaced.current {
-            if place.focused || !replaced.background {
+    fn restore(self: &Rc<Self>, placed: &Placed) {
+        let was = &placed.anchors;
+        let serial = self.placed.get() + 1;
+        self.placed.set(serial);
+        if let Some(rank) = placed.current {
+            if was.focused || !placed.background {
                 self.grid.scroll_to(rank, gtk::ListScrollFlags::FOCUS, None);
             }
             // The book that held the keyboard focus went with the old view.
-            if place.focused {
+            if was.focused {
                 self.grid.grab_focus();
             }
             // A change the reader did not ask for leaves the page where it was.
-            if !replaced.background {
+            if !placed.background {
                 return;
             }
         }
-        let Some(rank) = replaced.top else { return };
+        let Some(rank) = placed.top else { return };
         self.grid.scroll_to(rank, gtk::ListScrollFlags::NONE, None);
         // `scroll_to` only brings the book on screen. Once the grid has laid
         // itself out, move it to where it was.
         let weak = Rc::downgrade(self);
         let frames = Cell::new(0);
+        let top_offset = was.top_offset;
         self.grid.add_tick_callback(move |_, _| {
             let Some(library) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
             frames.set(frames.get() + 1);
-            if library.replaced.get() != serial || frames.get() > 10 {
+            if library.placed.get() != serial || frames.get() > 10 {
                 return glib::ControlFlow::Break;
             }
             if frames.get() < 2 {
@@ -186,7 +175,7 @@ impl Library {
                 return glib::ControlFlow::Continue;
             };
             let adjustment = library.scrolled.vadjustment();
-            adjustment.set_value(adjustment.value() + f64::from(bounds.y() - place.top_offset));
+            adjustment.set_value(adjustment.value() + f64::from(bounds.y() - top_offset));
             glib::ControlFlow::Break
         });
     }
@@ -204,31 +193,20 @@ impl Library {
         self.model.set_query(query);
     }
 
-    /// Runs `command` with the ID and title of each selected book, once
-    /// their rows have loaded.
-    fn with_selection(
-        self: &Rc<Self>,
-        command: impl FnOnce(&Rc<Self>, Vec<(String, String)>) + 'static,
-    ) {
-        let selected = self.model.selected();
+    /// Runs `command` with the ID of each selected book.
+    fn with_selection(self: &Rc<Self>, command: impl FnOnce(&Rc<Self>, Vec<String>) + 'static) {
         let library = self.clone();
         glib::spawn_future_local(async move {
-            let mut books = vec![];
-            for book in selected {
-                // The list was replaced before this row arrived, so the
-                // place no longer stands for a book.
-                let Some(row) = book.loaded_row().await else {
-                    notice(
-                        &library.window,
-                        "The list changed",
-                        "The book was still loading when the list changed. Select it again.",
-                    );
-                    return;
-                };
-                books.push((row.id.clone(), row.title.clone()));
-            }
-            if !books.is_empty() {
-                command(&library, books);
+            match library.model.selected().await {
+                Some(books) if !books.is_empty() => command(&library, books),
+                Some(_) => {}
+                // A selected row was still loading when the list was
+                // replaced, so its place no longer stands for a book.
+                None => notice(
+                    &library.window,
+                    "The list changed",
+                    "A selected book was still loading when the list changed. Select it again.",
+                ),
             }
         });
     }
@@ -263,7 +241,7 @@ impl Library {
 
     /// Copies each book's EPUB to a folder the reader chooses, such as one
     /// on a mounted e-reader.
-    fn send(self: &Rc<Self>, books: Vec<(String, String)>) {
+    fn send(self: &Rc<Self>, books: Vec<String>) {
         let library = self.clone();
         choose(
             &self.window,
@@ -281,9 +259,10 @@ impl Library {
                         .run(move |lib| {
                             books
                                 .iter()
-                                .map(|(id, title)| {
+                                .map(|id| {
+                                    let title = lib.book(id)?.title;
                                     let source = lib.managed_file(id)?;
-                                    Ok(ebook_device::export_epub(&source, &folder, title)?)
+                                    Ok(ebook_device::export_epub(&source, &folder, &title)?)
                                 })
                                 .collect::<Result<Vec<_>>>()
                         })
@@ -412,13 +391,13 @@ impl Library {
         simple(
             "read",
             Box::new(|library| {
-                library.with_selection(|library, mut books| library.read(books.remove(0).0))
+                library.with_selection(|library, mut books| library.read(books.remove(0)))
             }),
         );
         simple(
             "edit",
             Box::new(|library| {
-                library.with_selection(|library, mut books| library.edit(books.remove(0).0))
+                library.with_selection(|library, mut books| library.edit(books.remove(0)))
             }),
         );
         simple(
@@ -427,17 +406,41 @@ impl Library {
         );
         on_book("read-book", |library, id| library.read(id));
         on_book("edit-book", |library, id| library.edit(id));
-        on_book("send-book", |library, id| {
-            let library = library.clone();
-            glib::spawn_future_local(async move {
-                let found = id.clone();
-                match library.store.run(move |lib| lib.book(&found)).await {
-                    Ok(book) => library.send(vec![(id, book.title)]),
-                    Err(e) => notice(&library.window, "Couldn’t export", &format!("{e:#}")),
-                }
-            });
-        });
+        on_book("send-book", |library, id| library.send(vec![id]));
     }
+}
+
+/// Whether a key moves about or commands something, and so is not text
+/// for the search field. With the search field focused and not yet on
+/// screen, Space and the editing keys are text too.
+fn commands(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType, in_field: bool) -> bool {
+    use glib::translate::IntoGlib;
+    use gtk::gdk::{Key, ModifierType};
+    let held = ModifierType::CONTROL_MASK | ModifierType::ALT_MASK | ModifierType::SUPER_MASK;
+    if modifiers.intersects(held) {
+        return true;
+    }
+    let moves = matches!(
+        key,
+        Key::Escape
+            | Key::Return
+            | Key::KP_Enter
+            | Key::ISO_Enter
+            | Key::Tab
+            | Key::ISO_Left_Tab
+            | Key::Up
+            | Key::Down
+            | Key::Left
+            | Key::Right
+            | Key::Home
+            | Key::End
+            | Key::Page_Up
+            | Key::Page_Down
+            | Key::Menu
+            | Key::Insert
+    ) || (Key::F1.into_glib()..=Key::F35.into_glib()).contains(&key.into_glib());
+    let edits = matches!(key, Key::space | Key::BackSpace | Key::Delete);
+    moves || (edits && !in_field)
 }
 
 fn books_exported(count: usize) -> String {
@@ -571,8 +574,7 @@ pub fn open(app: &adw::Application) {
             search: search.clone(),
             no_match: status_page("No books match"),
             failed: status_page("The library could not be opened"),
-            place: Cell::default(),
-            replaced: Cell::new(0),
+            placed: Cell::new(0),
             surveying: Cell::new(false),
         }
     });
@@ -640,7 +642,11 @@ pub fn open(app: &adw::Application) {
     window.set_content(Some(&frame));
 
     library.install_actions();
-    let (for_anchors, for_replaced) = (Rc::downgrade(&library), Rc::downgrade(&library));
+    let (for_anchors, for_changed, for_place) = (
+        Rc::downgrade(&library),
+        Rc::downgrade(&library),
+        Rc::downgrade(&library),
+    );
     model.set_hooks(Hooks {
         anchors: Box::new(move || {
             for_anchors
@@ -648,18 +654,20 @@ pub fn open(app: &adw::Application) {
                 .map(|library| library.anchors())
                 .unwrap_or_default()
         }),
-        replaced: Box::new(move |replaced| {
-            let Some(library) = for_replaced.upgrade() else {
+        changed: Box::new(move || {
+            let Some(library) = for_changed.upgrade() else {
                 return;
             };
             library.refresh_state();
-            if let Some(replaced) = replaced {
-                library.restore(replaced);
-                // Books imported before covers were read get theirs now,
-                // after the window has shown what it has.
-                if !library.surveying.replace(true) {
-                    library.thumbs.survey_unsurveyed();
-                }
+            // Books imported before covers were read get theirs once the
+            // window has shown what it has.
+            if library.model.status() == Status::Ready && !library.surveying.replace(true) {
+                library.thumbs.survey_unsurveyed();
+            }
+        }),
+        place: Box::new(move |placed| {
+            if let Some(library) = for_place.upgrade() {
+                library.restore(placed);
             }
         }),
     });
@@ -737,54 +745,67 @@ pub fn open(app: &adw::Application) {
         }
     });
     // Typing anywhere but in a text field goes to the search field, and
-    // opens the search if it is closed. The window does this itself and
-    // does not leave it to the search bar, which passes keys on only while
-    // it is closed: a key typed after the one that opened it, and before
-    // its field had the focus, was lost.
+    // opens the search if it is closed. The window passes the keys on
+    // itself. GTK's search bar and search field pass on only the key that
+    // opens the search, and the field, which takes the focus at once, takes
+    // keys only when it is on screen a frame later: a key typed in between
+    // was lost. Every press and release goes through the field's own key
+    // handling, and so through its input method, so a dead key or a
+    // composed letter starts a search as a plain one does. Only the keys
+    // that move about or command something are left where they are.
     let typing = gtk::EventControllerKey::new();
     typing.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let weak = Rc::downgrade(&library);
-    typing.connect_key_pressed(move |typing, key, _, modifiers| {
-        use gtk::gdk::ModifierType;
-        let Some(library) = weak.upgrade() else {
-            return glib::Propagation::Proceed;
-        };
-        let focus = gtk::prelude::GtkWindowExt::focus(&library.window);
-        let in_text = focus
-            .as_ref()
-            .is_some_and(|focus| focus.is::<gtk::Text>() || focus.is::<gtk::TextView>());
-        // On a book or a button, Space is that widget's own key.
-        let printable = key
-            .to_unicode()
-            .is_some_and(|c| !c.is_control() && (c != ' ' || in_text))
-            && !modifiers.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK);
-        let field = {
-            let mut child = library.search.first_child();
-            while child.as_ref().is_some_and(|c| !c.is::<gtk::Text>()) {
-                child = child.and_then(|c| c.next_sibling());
-            }
-            child
-        };
-        match field {
-            // The field takes the focus at once, and takes keys only when
-            // it is on screen, a frame later. Until then they are passed
-            // to it here.
-            Some(field) if printable && (!in_text || !field.is_mapped()) => {
-                library.search_bar.set_search_mode(true);
-                if !typing.forward(&field) {
-                    return glib::Propagation::Proceed;
+    let pass = {
+        let weak = Rc::downgrade(&library);
+        move |typing: &gtk::EventControllerKey, key: gtk::gdk::Key, modifiers| {
+            let library = weak.upgrade()?;
+            let field = {
+                let mut child = library.search.first_child();
+                while child.as_ref().is_some_and(|c| !c.is::<gtk::Text>()) {
+                    child = child.and_then(|c| c.next_sibling());
                 }
-                // Taking the focus the ordinary way would select what has
-                // been typed, and the next key would replace it.
-                if let Some(text) = field.downcast_ref::<gtk::Text>()
-                    && !text.has_focus()
-                {
-                    text.grab_focus_without_selecting();
+                child.and_downcast::<gtk::Text>()?
+            };
+            let focus = gtk::prelude::GtkWindowExt::focus(&library.window);
+            let in_field = focus.as_ref() == Some(field.upcast_ref());
+            let in_text = focus
+                .as_ref()
+                .is_some_and(|focus| focus.is::<gtk::Text>() || focus.is::<gtk::TextView>());
+            // Once the search is open and its field is on screen with the
+            // focus, the field needs no help. While the search is closed
+            // the field can still hold the focus, unseen, and then its
+            // keys come this way so that they open the search. Another
+            // text field keeps its own keys.
+            let ready = in_field && field.is_mapped() && library.search_bar.is_search_mode();
+            if ready || (in_text && !in_field) {
+                return None;
+            }
+            (!commands(key, modifiers, in_field) && typing.forward(&field))
+                .then_some((library, field))
+        }
+    };
+    let pressed = pass.clone();
+    typing.connect_key_pressed(move |typing, key, _, modifiers| {
+        match pressed(typing, key, modifiers) {
+            Some((library, field)) => {
+                // The search opens when there is text. A dead key gives
+                // none yet, and moving the focus now would make the input
+                // method forget it.
+                if !field.text().is_empty() {
+                    library.search_bar.set_search_mode(true);
+                    // Taking the focus the ordinary way would select what
+                    // has been typed, and the next key would replace it.
+                    if !field.has_focus() {
+                        field.grab_focus_without_selecting();
+                    }
                 }
                 glib::Propagation::Stop
             }
-            _ => glib::Propagation::Proceed,
+            None => glib::Propagation::Proceed,
         }
+    });
+    typing.connect_key_released(move |typing, key, _, modifiers| {
+        pass(typing, key, modifiers);
     });
     window.add_controller(typing);
     // Down leaves the search field for the books it found.
@@ -794,7 +815,7 @@ pub fn open(app: &adw::Application) {
         Some(library) if key == gtk::gdk::Key::Down && library.model.n_items() > 0 => {
             // Arriving from the search field selects, as moving between
             // books with the arrow keys does.
-            if library.model.selection().is_empty() {
+            if library.model.selected_count() == 0 {
                 let to = gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT;
                 library.grid.scroll_to(0, to, None);
             }

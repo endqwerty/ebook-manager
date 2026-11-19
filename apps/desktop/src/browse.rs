@@ -4,7 +4,8 @@
 //! (a search and a sort) and for pages of that view, and never waits: an
 //! item is handed out at once and filled in when its page arrives. Books
 //! are tracked across views by ID, because a rank means nothing once the
-//! view is replaced.
+//! view is replaced. The selection is a set of book IDs for that reason,
+//! and a new view is shown without finding the selected books in it.
 mod worker;
 
 use crate::store::Store;
@@ -13,12 +14,12 @@ use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use gtk4 as gtk;
 use std::{
     cell::{Cell, OnceCell, RefCell},
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     rc::Rc,
     sync::mpsc,
     time::{Duration, Instant},
 };
-use worker::{Reply, Request};
+use worker::{Reply, Request, Why};
 
 /// Rows come from the read thread in pages of this many.
 pub const PAGE: u32 = 128;
@@ -33,17 +34,22 @@ pub struct Query {
     pub sort: Vec<SortTerm>,
 }
 
-/// The books the window wants found again in the next view.
+/// Where the reader is in the view on screen.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Anchors {
     /// The book commands act on: the focused one, else the selected one.
     pub current: Option<String>,
     /// The first book on screen.
     pub top: Option<String>,
+    /// Where that book starts, from the top of the view.
+    pub top_offset: f32,
+    /// A book holds the keyboard focus.
+    pub focused: bool,
 }
 
-/// Where the anchors are in the view that has just replaced the last.
-pub struct Replaced {
+/// Where the reader was, and where those books are in the view now shown.
+pub struct Placed {
+    pub anchors: Anchors,
     pub current: Option<u32>,
     pub top: Option<u32>,
     /// The catalogue changed under the reader, who asked for nothing.
@@ -56,21 +62,18 @@ pub enum Status {
     #[default]
     Loading,
     Ready,
-    /// No view could be opened. The text says why.
+    /// No view can be read. The text says why.
     Failed(String),
 }
 
-type OnReplaced = dyn Fn(Option<&Replaced>);
-
 /// How the window takes part in replacing a view.
 pub struct Hooks {
-    /// Asked when a view has opened and is about to be shown, so the
-    /// answer is where the reader is then and not where they were when the
-    /// view was asked for.
+    /// Where the reader is at this moment.
     pub anchors: Box<dyn Fn() -> Anchors>,
-    /// Told after the model has swapped views, with where the anchors went,
-    /// and with nothing when no view could be opened.
-    pub replaced: Box<OnReplaced>,
+    /// The books or the status changed.
+    pub changed: Box<dyn Fn()>,
+    /// Put the reader back where they were.
+    pub place: Box<dyn Fn(&Placed)>,
 }
 
 mod object {
@@ -147,57 +150,30 @@ impl BookObject {
     }
 }
 
-/// The IDs of selected books, by rank. The selection itself is a bitset of
-/// ranks, which mean nothing in the next view, and a page that held a
-/// selected book can leave the cache before the view is replaced.
-#[derive(Default)]
-struct Chosen(HashMap<u32, String>);
-
-impl Chosen {
-    /// Takes the ID of each selected book among `rows`, and forgets books
-    /// no longer selected.
-    fn remember<'a>(
-        &mut self,
-        selected: impl Fn(u32) -> bool,
-        rows: impl Iterator<Item = (u32, &'a str)>,
-    ) {
-        self.0.retain(|rank, _| selected(*rank));
-        for (rank, id) in rows {
-            if selected(rank) {
-                self.0.entry(rank).or_insert_with(|| id.to_owned());
-            }
-        }
-    }
-    /// The selected books in view order.
-    fn ids(&self) -> Vec<String> {
-        let mut ranked: Vec<_> = self.0.iter().collect();
-        ranked.sort();
-        ranked.into_iter().map(|(_, id)| id.clone()).collect()
-    }
-}
-
 /// An open the read thread has been asked for.
 struct Opening {
     serial: u64,
     cancel: Cancel,
     background: bool,
-    /// The view it made, waiting for its books to be found.
-    arrived: Option<Arrived>,
+    /// The view it made, waiting for the reader's place to be found in it.
+    arrived: Option<(OpenView, Anchors)>,
 }
 
-struct Arrived {
-    view: OpenView,
-    /// What was asked to be found in it.
-    asked: Asked,
-    /// How many times the reader had moved on by the time the answer came.
-    again: u32,
-}
-
-/// Where the reader is: the selected books and the window's anchors.
-#[derive(Clone, PartialEq)]
-struct Asked {
-    selected: Vec<String>,
-    anchors: Anchors,
+/// Why the read thread was asked where some books are.
+enum Locating {
+    /// A view has opened, and will be shown when this is answered.
+    Place { serial: u64 },
+    /// The reader moved while their place was being found. The view is
+    /// shown, and this is where they had moved to. `since` is where the
+    /// new view stood when it was asked.
+    Follow {
+        token: ViewToken,
+        anchors: Anchors,
+        since: Anchors,
+        background: bool,
+    },
+    /// Which of the selected books the view holds at all.
+    Prune { token: ViewToken, ids: Vec<String> },
 }
 
 struct State {
@@ -205,6 +181,8 @@ struct State {
     serial: u64,
     opening: Option<Opening>,
     view: Option<ViewToken>,
+    /// The view on screen can no longer be read, and another is on its way.
+    lost: bool,
     count: u32,
     status: Status,
     pages: HashMap<u32, Vec<Rc<BrowseRow>>>,
@@ -212,8 +190,13 @@ struct State {
     recent: VecDeque<u32>,
     requested: HashSet<u32>,
     live: HashMap<u32, glib::WeakRef<BookObject>>,
-    selection: gtk::Bitset,
-    chosen: Chosen,
+    /// The selected books, by ID.
+    selected: HashSet<String>,
+    /// Places selected before their rows arrived. Each becomes an ID in
+    /// `selected` when its row does.
+    pending: BTreeSet<u32>,
+    locating: HashMap<u64, Locating>,
+    tag: u64,
     /// The catalogue changed while a view was opening.
     dirty: bool,
     last_refresh: Option<Instant>,
@@ -227,19 +210,28 @@ impl Default for State {
             serial: 0,
             opening: None,
             view: None,
+            lost: false,
             count: 0,
             status: Status::Loading,
             pages: HashMap::new(),
             recent: VecDeque::new(),
             requested: HashSet::new(),
             live: HashMap::new(),
-            selection: gtk::Bitset::new_empty(),
-            chosen: Chosen::default(),
+            selected: HashSet::new(),
+            pending: BTreeSet::new(),
+            locating: HashMap::new(),
+            tag: 0,
             dirty: false,
             last_refresh: None,
             refresh_waiting: false,
         }
     }
+}
+
+fn ranks(bits: &gtk::Bitset) -> impl Iterator<Item = u32> {
+    gtk::BitsetIter::init_first(bits)
+        .into_iter()
+        .flat_map(|(iter, first)| std::iter::once(first).chain(iter))
 }
 
 impl State {
@@ -249,7 +241,16 @@ impl State {
             .get((rank % PAGE) as usize)
             .cloned()
     }
-    fn store_page(&mut self, page: u32, rows: Vec<BrowseRow>) {
+    /// Keeps a page, and returns whether any of its books is selected.
+    fn store_page(&mut self, page: u32, rows: Vec<BrowseRow>) -> bool {
+        let mut any = false;
+        for (n, row) in rows.iter().enumerate() {
+            let rank = page * PAGE + n as u32;
+            if self.pending.remove(&rank) {
+                self.selected.insert(row.id.clone());
+            }
+            any |= self.selected.contains(&row.id);
+        }
         self.pages
             .insert(page, rows.into_iter().map(Rc::new).collect());
         self.recent.push_back(page);
@@ -258,33 +259,54 @@ impl State {
                 self.pages.remove(&old);
             }
         }
-        self.remember_selected();
+        any
     }
-    /// Notes the ID of every selected book whose row is in memory.
-    fn remember_selected(&mut self) {
-        let selection = &self.selection;
-        self.chosen.remember(
-            |rank| selection.contains(rank),
-            self.pages.iter().flat_map(|(page, rows)| {
-                rows.iter()
-                    .enumerate()
-                    .map(move |(n, row)| (page * PAGE + n as u32, row.id.as_str()))
-            }),
-        );
+    /// Whether the book at a place is selected: by its ID once its row is
+    /// in memory, and until then by the place.
+    fn is_selected(&self, rank: u32) -> bool {
+        match self.row(rank) {
+            Some(row) => self.selected.contains(&row.id),
+            None => self.pending.contains(&rank),
+        }
+    }
+    /// The selected places among those whose rows are in memory, and the
+    /// places selected before their rows came.
+    fn selection(&self) -> Vec<u32> {
+        let mut places: Vec<u32> = self.pending.iter().copied().collect();
+        if !self.selected.is_empty() {
+            for (page, rows) in &self.pages {
+                for (n, row) in rows.iter().enumerate() {
+                    if self.selected.contains(&row.id) {
+                        places.push(page * PAGE + n as u32);
+                    }
+                }
+            }
+        }
+        places
+    }
+    fn tag(&mut self, why: Locating) -> u64 {
+        self.tag += 1;
+        self.locating.insert(self.tag, why);
+        self.tag
+    }
+    /// The places still waiting for a row.
+    fn waiting(&self) -> Vec<BookObject> {
+        self.live
+            .values()
+            .filter_map(|weak| weak.upgrade())
+            .filter(|place| !place.loaded())
+            .collect()
     }
     /// Empties the view, and returns the places that were waiting for a
     /// row with how many items there were.
     fn clear(&mut self) -> (Vec<BookObject>, u32) {
-        let left = self
-            .live
-            .drain()
-            .filter_map(|(_, weak)| weak.upgrade())
-            .collect();
+        let left = self.waiting();
+        self.live.clear();
         self.pages.clear();
         self.recent.clear();
         self.requested.clear();
-        self.selection = gtk::Bitset::new_empty();
-        self.chosen = Chosen::default();
+        self.pending.clear();
+        self.lost = false;
         (left, std::mem::take(&mut self.count))
     }
 }
@@ -293,7 +315,12 @@ mod imp {
     use super::*;
     #[derive(Default)]
     pub struct BookListModel {
-        pub(super) requests: OnceCell<mpsc::Sender<Request>>,
+        pub(super) store: OnceCell<Store>,
+        /// The way to the read thread, while there is one.
+        pub(super) requests: RefCell<Option<mpsc::Sender<Request>>>,
+        /// Counts read threads, so the end of an old one is not taken for
+        /// the end of its replacement.
+        pub(super) started: Cell<u64>,
         pub(super) state: RefCell<State>,
         pub(super) hooks: RefCell<Option<Rc<Hooks>>>,
     }
@@ -321,17 +348,27 @@ mod imp {
             }
             let row = state.row(position);
             let page = position / PAGE;
-            if row.is_none()
-                && let Some(token) = state.view
-                && state.requested.insert(page)
-            {
-                self.send(Request::Page { token, page });
-            }
-            let object = BookObject::new(position, row);
+            let object = BookObject::new(position, row.clone());
             if state.live.len() > 4096 {
                 state.live.retain(|_, weak| weak.upgrade().is_some());
             }
             state.live.insert(position, object.downgrade());
+            // A lost view gives no more rows. Its replacement will.
+            let lost = state.lost;
+            let ask = match state.view {
+                Some(token) if row.is_none() && !lost => state
+                    .requested
+                    .insert(page)
+                    .then_some(Request::Page { token, page }),
+                _ => None,
+            };
+            drop(state);
+            if row.is_none() && lost {
+                object.leave();
+            }
+            if let Some(request) = ask {
+                self.send(request);
+            }
             Some(object.upcast())
         }
     }
@@ -341,7 +378,8 @@ mod imp {
         pub(super) fn send(&self, request: Request) {
             let sent = self
                 .requests
-                .get()
+                .borrow()
+                .as_ref()
                 .is_some_and(|requests| requests.send(request).is_ok());
             if !sent {
                 let weak = self.obj().downgrade();
@@ -353,14 +391,37 @@ mod imp {
             }
         }
 
-        /// Applies a change to the selection and reports the span it touched.
-        fn select(&self, change: impl FnOnce(&gtk::Bitset, u32)) -> bool {
+        /// Changes which places are selected and reports the span touched.
+        fn select(&self, clear: bool, add: &gtk::Bitset, remove: &gtk::Bitset) -> bool {
             let span = {
                 let mut state = self.state.borrow_mut();
-                let before = state.selection.copy();
-                change(&state.selection, state.count);
-                before.difference(&state.selection);
-                state.remember_selected();
+                let before = bits(&state.selection());
+                if clear {
+                    state.selected.clear();
+                    state.pending.clear();
+                }
+                for rank in ranks(remove) {
+                    match state.row(rank) {
+                        Some(row) => {
+                            state.selected.remove(&row.id);
+                        }
+                        None => {
+                            state.pending.remove(&rank);
+                        }
+                    }
+                }
+                let count = state.count;
+                for rank in ranks(add).filter(|rank| *rank < count) {
+                    match state.row(rank) {
+                        Some(row) => {
+                            state.selected.insert(row.id.clone());
+                        }
+                        None => {
+                            state.pending.insert(rank);
+                        }
+                    }
+                }
+                before.difference(&bits(&state.selection()));
                 (!before.is_empty()).then(|| (before.minimum(), before.maximum()))
             };
             if let Some((first, last)) = span {
@@ -369,50 +430,58 @@ mod imp {
             true
         }
     }
+    fn bits(places: &[u32]) -> gtk::Bitset {
+        let bits = gtk::Bitset::new_empty();
+        for place in places {
+            bits.add(*place);
+        }
+        bits
+    }
+    fn range(position: u32, n_items: u32) -> gtk::Bitset {
+        let bits = gtk::Bitset::new_empty();
+        bits.add_range(position, n_items);
+        bits
+    }
     impl SelectionModelImpl for BookListModel {
         fn is_selected(&self, position: u32) -> bool {
-            self.state.borrow().selection.contains(position)
+            self.state.borrow().is_selected(position)
         }
         fn selection_in_range(&self, _position: u32, _n_items: u32) -> gtk::Bitset {
-            self.state.borrow().selection.copy()
+            bits(&self.state.borrow().selection())
         }
         fn select_item(&self, position: u32, unselect_rest: bool) -> bool {
-            self.select(|selection, _| {
-                if unselect_rest {
-                    selection.remove_all();
-                }
-                selection.add(position);
-            })
+            self.select(
+                unselect_rest,
+                &range(position, 1),
+                &gtk::Bitset::new_empty(),
+            )
         }
         fn select_range(&self, position: u32, n_items: u32, unselect_rest: bool) -> bool {
-            self.select(|selection, _| {
-                if unselect_rest {
-                    selection.remove_all();
-                }
-                selection.add_range(position, n_items);
-            })
+            self.select(
+                unselect_rest,
+                &range(position, n_items),
+                &gtk::Bitset::new_empty(),
+            )
         }
         fn select_all(&self) -> bool {
-            self.select(|selection, count| selection.add_range(0, count))
+            let count = self.state.borrow().count;
+            self.select(false, &range(0, count), &gtk::Bitset::new_empty())
         }
         fn unselect_all(&self) -> bool {
-            self.select(|selection, _| selection.remove_all())
+            self.select(true, &gtk::Bitset::new_empty(), &gtk::Bitset::new_empty())
         }
         fn unselect_item(&self, position: u32) -> bool {
-            self.select(|selection, _| {
-                selection.remove(position);
-            })
+            self.select(false, &gtk::Bitset::new_empty(), &range(position, 1))
         }
         fn unselect_range(&self, position: u32, n_items: u32) -> bool {
-            self.select(|selection, _| selection.remove_range(position, n_items))
+            self.select(false, &gtk::Bitset::new_empty(), &range(position, n_items))
         }
         fn set_selection(&self, selected: &gtk::Bitset, mask: &gtk::Bitset) -> bool {
-            self.select(|selection, _| {
-                let chosen = selected.copy();
-                chosen.intersect(mask);
-                selection.subtract(mask);
-                selection.union(&chosen);
-            })
+            let add = selected.copy();
+            add.intersect(mask);
+            let remove = mask.copy();
+            remove.subtract(selected);
+            self.select(false, &add, &remove)
         }
     }
     // One section: the whole view.
@@ -427,23 +496,37 @@ glib::wrapper! {
 impl BookListModel {
     pub fn new(store: Store) -> Self {
         let model: Self = glib::Object::new();
+        let _ = model.imp().store.set(store);
+        model.start();
+        model
+    }
+
+    /// Starts a read thread and listens for its replies.
+    fn start(&self) {
+        let Some(store) = self.imp().store.get().cloned() else {
+            return;
+        };
+        let started = self.imp().started.get() + 1;
+        self.imp().started.set(started);
         let (requests, received) = mpsc::channel();
         let (send, replies) = async_channel::unbounded();
         std::thread::spawn(move || worker::serve(store, received, send));
-        let _ = model.imp().requests.set(requests);
-        let weak = model.downgrade();
+        self.imp().requests.replace(Some(requests));
+        let weak = self.downgrade();
         glib::spawn_future_local(async move {
             while let Ok(reply) = replies.recv().await {
                 let Some(model) = weak.upgrade() else { return };
                 model.handle(reply);
             }
-            // The read thread ended, which it does not do while it is asked
-            // for anything.
-            if let Some(model) = weak.upgrade() {
+            // The thread ended, which it does not do while the model
+            // lives. Try Again starts another.
+            if let Some(model) = weak.upgrade()
+                && model.imp().started.get() == started
+            {
+                model.imp().requests.replace(None);
                 model.lose("The library reader has stopped.".into());
             }
         });
-        model
     }
 
     pub fn set_hooks(&self, hooks: Hooks) {
@@ -451,6 +534,16 @@ impl BookListModel {
     }
     fn hooks(&self) -> Option<Rc<Hooks>> {
         self.imp().hooks.borrow().clone()
+    }
+    fn changed(&self) {
+        if let Some(hooks) = self.hooks() {
+            (hooks.changed)();
+        }
+    }
+    fn anchors(&self) -> Anchors {
+        self.hooks()
+            .map(|hooks| (hooks.anchors)())
+            .unwrap_or_default()
     }
 
     pub fn status(&self) -> Status {
@@ -472,15 +565,14 @@ impl BookListModel {
         self.open(false);
     }
 
-    /// Tries again to open the library after it could not be read.
+    /// Tries again to open the library after it could not be read, with a
+    /// new read thread if the last one stopped.
     pub fn retry(&self) {
-        {
-            let mut state = self.imp().state.borrow_mut();
-            state.status = Status::Loading;
+        if self.imp().requests.borrow().is_none() {
+            self.start();
         }
-        if let Some(hooks) = self.hooks() {
-            (hooks.replaced)(None);
-        }
+        self.imp().state.borrow_mut().status = Status::Loading;
+        self.changed();
         self.open(false);
     }
 
@@ -536,43 +628,10 @@ impl BookListModel {
                 serial: state.serial,
                 query: state.query.clone(),
                 cancel,
-                only_if_changed: background,
+                // A view that is lost is opened again whatever the
+                // catalogue says.
+                only_if_changed: background && !state.lost,
             }
-        };
-        self.imp().send(request);
-    }
-
-    /// Where the reader is now: what is selected, and the window's anchors.
-    fn asked(&self) -> Asked {
-        let anchors = self
-            .hooks()
-            .map(|hooks| (hooks.anchors)())
-            .unwrap_or_default();
-        Asked {
-            selected: self.imp().state.borrow().chosen.ids(),
-            anchors,
-        }
-    }
-
-    /// Asks the read thread where the reader's books are in the view that
-    /// has just opened.
-    fn locate(&self, view: OpenView, again: u32) {
-        let asked = self.asked();
-        let request = {
-            let mut state = self.imp().state.borrow_mut();
-            let Some(opening) = state.opening.as_mut() else {
-                return;
-            };
-            let mut ids = asked.selected.clone();
-            ids.push(asked.anchors.current.clone().unwrap_or_default());
-            ids.push(asked.anchors.top.clone().unwrap_or_default());
-            let request = Request::Locate {
-                serial: opening.serial,
-                token: view.token,
-                ids,
-            };
-            opening.arrived = Some(Arrived { view, asked, again });
-            request
         };
         self.imp().send(request);
     }
@@ -587,19 +646,29 @@ impl BookListModel {
         state.opening.take()
     }
 
-    fn opening(&self, serial: u64) -> bool {
-        let state = self.imp().state.borrow();
-        state.opening.as_ref().is_some_and(|o| o.serial == serial)
+    /// Asks where the reader's two books are in a view.
+    fn locate(&self, token: ViewToken, anchors: &Anchors, why: Locating) {
+        let tag = self.imp().state.borrow_mut().tag(why);
+        self.imp().send(Request::Locate {
+            tag,
+            token,
+            ids: vec![
+                anchors.current.clone().unwrap_or_default(),
+                anchors.top.clone().unwrap_or_default(),
+            ],
+        });
     }
 
-    /// Replaces what the model holds with a view whose books have been found.
-    fn swap(&self, opening: Opening, view: OpenView, asked: &Asked, ranks: &[Option<u32>]) {
+    /// Replaces what the model holds with a view that has opened. The
+    /// selection is by ID and needs nothing found: each row says whether
+    /// its book is selected as it arrives.
+    fn swap(&self, view: OpenView, background: bool) {
         let (left, before) = {
             let mut state = self.imp().state.borrow_mut();
             state.view = Some(view.token);
             state.status = Status::Ready;
             // The interval runs from when a refresh is shown.
-            if opening.background {
+            if background {
                 state.last_refresh = Some(Instant::now());
             }
             state.clear()
@@ -609,34 +678,49 @@ impl BookListModel {
         }
         // Two signals, not one. Given a removal and an addition together,
         // a GTK list asks for every added item to see whether a row it is
-        // showing can stay: 100,000 calls. Between the two the model is
-        // empty in every answer it gives: no items and nothing selected.
+        // showing can stay: 100,000 calls. Between the two the model has
+        // no items, and so nothing selected.
         self.items_changed(0, before, 0);
-        {
+        let prune = {
             let mut state = self.imp().state.borrow_mut();
             state.count = view.count;
-            for (id, rank) in asked.selected.iter().zip(ranks) {
-                if let Some(rank) = rank {
-                    state.selection.add(*rank);
-                    state.chosen.0.insert(*rank, id.clone());
-                }
-            }
             state.store_page(0, view.first);
-        }
-        self.items_changed(0, 0, view.count);
-        let replaced = Replaced {
-            current: ranks[asked.selected.len()],
-            top: ranks[asked.selected.len() + 1],
-            background: opening.background,
+            // A selected book the view does not hold leaves the selection.
+            // Asking which those are can only remove what is not there, so
+            // its answer is safe whenever it comes.
+            (!state.selected.is_empty()).then(|| {
+                let ids: Vec<String> = state.selected.iter().cloned().collect();
+                let tag = state.tag(Locating::Prune {
+                    token: view.token,
+                    ids: ids.clone(),
+                });
+                Request::Locate {
+                    tag,
+                    token: view.token,
+                    ids,
+                }
+            })
         };
-        if let Some(hooks) = self.hooks() {
-            (hooks.replaced)(Some(&replaced));
+        self.items_changed(0, 0, view.count);
+        if let Some(request) = prune {
+            self.imp().send(request);
         }
-        self.settle();
+        self.changed();
     }
 
-    /// The view can no longer be read. The window shows why, and every
-    /// place waiting for its row is told it will not come.
+    fn place(&self, anchors: Anchors, ranks: &[Option<u32>], background: bool) {
+        if let Some(hooks) = self.hooks() {
+            (hooks.place)(&Placed {
+                anchors,
+                current: ranks.first().copied().flatten(),
+                top: ranks.get(1).copied().flatten(),
+                background,
+            });
+        }
+    }
+
+    /// No view can be read. The window shows why, and every place waiting
+    /// for its row is told it will not come.
     fn lose(&self, message: String) {
         let (left, before) = {
             let mut state = self.imp().state.borrow_mut();
@@ -645,6 +729,7 @@ impl BookListModel {
             }
             state.view = None;
             state.status = Status::Failed(message);
+            state.locating.clear();
             state.clear()
         };
         for place in left {
@@ -653,86 +738,189 @@ impl BookListModel {
         if before > 0 {
             self.items_changed(0, before, 0);
         }
-        if let Some(hooks) = self.hooks() {
-            (hooks.replaced)(None);
+        self.changed();
+    }
+
+    /// The view on screen can no longer be read. Its loaded rows stay, the
+    /// places waiting for rows are told none will come, and the query is
+    /// opened again.
+    fn view_lost(&self) {
+        let (left, opening) = {
+            let mut state = self.imp().state.borrow_mut();
+            state.lost = true;
+            state.requested.clear();
+            (state.waiting(), state.opening.is_some())
+        };
+        for place in left {
+            place.leave();
+        }
+        if !opening {
+            self.open(false);
         }
     }
 
     fn handle(&self, reply: Reply) {
         match reply {
             Reply::Opened { serial, view } => {
-                if self.opening(serial) {
-                    self.locate(view, 0);
-                }
-            }
-            Reply::Located { serial, ranks } => {
-                if !self.opening(serial) {
-                    return;
-                }
-                let now = self.asked();
-                let arrived = {
+                // Its place is found before it is shown, so the window
+                // does not show the top of it first.
+                let anchors = self.anchors();
+                let token = view.token;
+                {
                     let mut state = self.imp().state.borrow_mut();
-                    state.opening.as_mut().and_then(|o| o.arrived.take())
-                };
-                let Some(arrived) = arrived else { return };
-                // The reader scrolled or selected while their books were
-                // being found. Find them again, a few times at most.
-                if arrived.asked != now && arrived.again < 3 {
-                    self.locate(arrived.view, arrived.again + 1);
-                    return;
+                    match state.opening.as_mut() {
+                        Some(opening) if opening.serial == serial => {
+                            opening.arrived = Some((view, anchors.clone()));
+                        }
+                        // A later open replaced this one.
+                        _ => return,
+                    }
                 }
-                if let Some(opening) = self.finish(serial) {
-                    self.swap(opening, arrived.view, &arrived.asked, &ranks);
-                }
+                self.locate(token, &anchors, Locating::Place { serial });
             }
+            Reply::Located { tag, ranks } => self.located(tag, Ok(ranks)),
+            Reply::NotLocated { tag, why } => self.located(tag, Err(why)),
             Reply::Unchanged { serial } => {
                 if self.finish(serial).is_some() {
                     self.settle();
                 }
             }
+            Reply::Cancelled => {}
             Reply::Failed { serial, message } => {
                 if self.finish(serial).is_none() {
                     return;
                 }
-                // A view that is open stays readable when its refresh
+                // A view that is still readable stays when its refresh
                 // fails, and the next change to the catalogue tries again.
-                if self.imp().state.borrow().view.is_none() {
+                let none = {
+                    let state = self.imp().state.borrow();
+                    state.view.is_none() || state.lost
+                };
+                if none {
                     self.lose(message);
                 }
                 self.settle();
             }
             Reply::Page { token, page, rows } => {
-                let arrived: Vec<_> = {
+                let (arrived, selected) = {
                     let mut state = self.imp().state.borrow_mut();
+                    // A page of a view the model has replaced.
                     if state.view != Some(token) {
                         return;
                     }
                     state.requested.remove(&page);
-                    state.store_page(page, rows);
-                    (page * PAGE..(page + 1) * PAGE)
+                    let selected = state.store_page(page, rows);
+                    let arrived: Vec<_> = (page * PAGE..(page + 1) * PAGE)
                         .filter_map(|rank| {
                             Some((state.live.get(&rank)?.upgrade()?, state.row(rank)?))
                         })
-                        .collect()
+                        .collect();
+                    (arrived, selected)
                 };
                 for (object, row) in arrived {
                     object.fill(row);
                 }
-            }
-            Reply::Lost { token, message } => {
-                let (current, arriving) = {
-                    let state = self.imp().state.borrow();
-                    let arriving = state
-                        .opening
-                        .as_ref()
-                        .and_then(|o| o.arrived.as_ref())
-                        .is_some_and(|arrived| arrived.view.token == token);
-                    (state.view == Some(token), arriving)
-                };
-                if current || arriving {
-                    self.lose(message);
+                // Books selected in an earlier view show as selected now
+                // that their rows say which they are.
+                if selected {
+                    self.selection_changed(page * PAGE, PAGE);
                 }
             }
+            Reply::NoPage { token, why, .. } => {
+                // For a view the model has replaced there is nothing to
+                // do. For the one on screen, it is lost, whatever the
+                // reason: another view took its place in the reader, or it
+                // could not be read.
+                if self.imp().state.borrow().view != Some(token) {
+                    return;
+                }
+                if let Why::Failed(message) = why {
+                    glib::g_warning!(
+                        "ebook-manager",
+                        "The books shown could not be read: {message}"
+                    );
+                }
+                self.view_lost();
+            }
+        }
+    }
+
+    /// The read thread has said where some books are, or that it cannot.
+    fn located(&self, tag: u64, ranks: Result<Vec<Option<u32>>, Why>) {
+        let why = self.imp().state.borrow_mut().locating.remove(&tag);
+        match why {
+            Some(Locating::Place { serial }) => {
+                let Some(opening) = self.finish(serial) else {
+                    return;
+                };
+                let Some((view, asked)) = opening.arrived else {
+                    return;
+                };
+                // The reader's view is another already, so this one could
+                // not be read once shown. The query is opened again.
+                if matches!(ranks, Err(Why::NotCurrent)) {
+                    self.open(opening.background);
+                    return;
+                }
+                let token = view.token;
+                let now = self.anchors();
+                self.swap(view, opening.background);
+                match ranks {
+                    Ok(ranks) if now == asked => self.place(asked, &ranks, opening.background),
+                    // The reader moved while their place was being found,
+                    // so that place is stale and is not applied. Where they
+                    // are now is found once more.
+                    _ => {
+                        let since = self.anchors();
+                        let follow = Locating::Follow {
+                            token,
+                            anchors: now.clone(),
+                            since,
+                            background: opening.background,
+                        };
+                        self.locate(token, &now, follow);
+                    }
+                }
+                self.settle();
+            }
+            Some(Locating::Follow {
+                token,
+                anchors,
+                since,
+                background,
+            }) => {
+                // If the reader has moved again, the view stays where they
+                // put it.
+                let showing = self.imp().state.borrow().view == Some(token);
+                if let Ok(ranks) = ranks
+                    && showing
+                    && self.anchors() == since
+                {
+                    self.place(anchors, &ranks, background);
+                }
+            }
+            Some(Locating::Prune { token, ids }) => {
+                let Ok(ranks) = ranks else { return };
+                let removed = {
+                    let mut state = self.imp().state.borrow_mut();
+                    if state.view != Some(token) {
+                        return;
+                    }
+                    let before = state.selected.len();
+                    for (id, rank) in ids.iter().zip(&ranks) {
+                        if rank.is_none() {
+                            state.selected.remove(id);
+                        }
+                    }
+                    before != state.selected.len()
+                };
+                // None of them was on screen, so no row changes its look.
+                // The commands that count the selection are told.
+                if removed {
+                    self.changed();
+                }
+            }
+            None => {}
         }
     }
 
@@ -744,51 +932,109 @@ impl BookListModel {
         }
     }
 
-    /// The first selected place.
-    pub fn selected_one(&self) -> Option<BookObject> {
-        let rank = {
-            let state = self.imp().state.borrow();
-            (!state.selection.is_empty()).then(|| state.selection.minimum())?
-        };
-        self.item(rank).and_downcast()
+    /// How many books are selected.
+    pub fn selected_count(&self) -> u64 {
+        let state = self.imp().state.borrow();
+        (state.selected.len() + state.pending.len()) as u64
     }
 
-    /// The selected places, in view order.
-    pub fn selected(&self) -> Vec<BookObject> {
-        let ranks: Vec<u32> = {
-            let state = self.imp().state.borrow();
-            gtk::BitsetIter::init_first(&state.selection)
+    /// The selected book, when there is one and only one.
+    pub fn selected_one(&self) -> Option<String> {
+        let state = self.imp().state.borrow();
+        (state.selected.len() == 1 && state.pending.is_empty())
+            .then(|| state.selected.iter().next().cloned())
+            .flatten()
+    }
+
+    /// The IDs of the selected books. A place selected before its row
+    /// arrived is waited for. `None` when the view went first, and the
+    /// place no longer stands for a book.
+    pub async fn selected(&self) -> Option<Vec<String>> {
+        let waiting: Vec<BookObject> = {
+            let pending: Vec<u32> = self.imp().state.borrow().pending.iter().copied().collect();
+            pending
                 .into_iter()
-                .flat_map(|(iter, first)| std::iter::once(first).chain(iter))
+                .filter_map(|rank| self.item(rank).and_downcast())
                 .collect()
         };
-        ranks
-            .into_iter()
-            .filter_map(|rank| self.item(rank).and_downcast())
-            .collect()
+        for place in waiting {
+            place.loaded_row().await?;
+        }
+        Some(self.imp().state.borrow().selected.iter().cloned().collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Chosen;
+    use super::*;
 
-    #[test]
-    fn a_selected_book_is_known_by_id_after_its_page_leaves_memory() {
-        let mut chosen = Chosen::default();
-        let selected = |rank: u32| rank == 3 || rank == 200;
-        // The page holding rank 3 is in memory, and the book is selected.
-        chosen.remember(selected, [(2, "b"), (3, "c")].into_iter());
-        // That page is dropped and another loads.
-        chosen.remember(selected, [(200, "x"), (201, "y")].into_iter());
-        assert_eq!(chosen.ids(), ["c", "x"]);
+    fn row(id: &str) -> BrowseRow {
+        BrowseRow {
+            id: id.into(),
+            version_id: String::new(),
+            title: id.into(),
+            authors: String::new(),
+            author_sort: None,
+            series: None,
+            added: None,
+            published: None,
+            last_read: None,
+            progress: None,
+            cover: None,
+            cover_rgb: None,
+            spine_rgb: None,
+            right_to_left: false,
+        }
+    }
+
+    fn state(count: u32) -> State {
+        State {
+            count,
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn a_book_no_longer_selected_is_forgotten() {
-        let mut chosen = Chosen::default();
-        chosen.remember(|rank| rank == 3, [(3, "c")].into_iter());
-        chosen.remember(|_| false, std::iter::empty());
-        assert!(chosen.ids().is_empty());
+    fn a_selected_book_is_selected_wherever_the_next_view_puts_it() {
+        let mut state = state(300);
+        state.store_page(0, vec![row("a"), row("b")]);
+        state.selected.insert("b".into());
+        assert!(state.is_selected(1) && !state.is_selected(0));
+        // Another view: nothing is found or carried over by rank. The
+        // book says it is selected when its row arrives at its new place.
+        state.clear();
+        state.count = 300;
+        assert!(!state.is_selected(1));
+        assert!(state.store_page(1, vec![row("x"), row("b")]));
+        assert!(state.is_selected(PAGE + 1));
+        assert_eq!(state.selection(), [PAGE + 1]);
+    }
+
+    #[test]
+    fn a_selected_book_stays_selected_when_its_page_leaves_memory() {
+        let mut state = state(100_000);
+        state.store_page(0, vec![row("a")]);
+        state.selected.insert("a".into());
+        for page in 1..=CACHED_PAGES as u32 {
+            state.store_page(page, vec![row(&format!("p{page}"))]);
+        }
+        assert!(state.row(0).is_none(), "the first page was dropped");
+        assert!(state.selected.contains("a"));
+        // When the page is read again the book is selected as before.
+        assert!(state.store_page(0, vec![row("a")]));
+        assert!(state.is_selected(0));
+    }
+
+    #[test]
+    fn a_place_selected_before_its_row_arrives_becomes_that_book() {
+        let mut state = state(1000);
+        state.pending.insert(700);
+        assert!(state.is_selected(700));
+        let page = 700 / PAGE;
+        let rows = (0..PAGE).map(|n| row(&format!("r{n}"))).collect();
+        assert!(state.store_page(page, rows));
+        assert!(state.pending.is_empty());
+        assert!(state.selected.contains(&format!("r{}", 700 % PAGE)));
+        assert!(state.is_selected(700));
     }
 }

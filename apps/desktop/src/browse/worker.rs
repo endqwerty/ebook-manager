@@ -1,6 +1,7 @@
 //! The read thread. It owns the `BrowseReader` and answers the model's
-//! requests in order. Every request gets one answer, except one that a
-//! newer open has made pointless, whose answer is the newer open's.
+//! requests in order: one reply to every request, with what was asked for
+//! or with the reason it cannot be given. It never drops one. What a reason
+//! means is the model's to decide.
 use super::{PAGE, Query};
 use crate::store::Store;
 use ebook_library::{
@@ -17,9 +18,9 @@ pub enum Request {
         /// Answer `Unchanged` when the open view still matches the catalogue.
         only_if_changed: bool,
     },
-    /// Where these books are in the view the open with this serial made.
+    /// Where these books are in a view. `tag` comes back with the answer.
     Locate {
-        serial: u64,
+        tag: u64,
         token: ViewToken,
         ids: Vec<String>,
     },
@@ -29,32 +30,47 @@ pub enum Request {
     },
 }
 
+/// Why a view's rows or ranks could not be given.
+#[derive(Debug)]
+pub enum Why {
+    /// The view is not the reader's any more: a later open replaced it.
+    NotCurrent,
+    /// The view could not be read, and the text says why.
+    Failed(String),
+}
+
+/// One for every request, whatever became of it.
 pub enum Reply {
     Opened {
         serial: u64,
         view: OpenView,
     },
-    Located {
-        serial: u64,
-        ranks: Vec<Option<u32>>,
-    },
     Unchanged {
         serial: u64,
     },
-    /// The open failed. The view before it, if any, is still readable.
+    /// The open failed. The reader's view is the one it had before.
     Failed {
         serial: u64,
         message: String,
+    },
+    /// A newer open made this one pointless before it finished.
+    Cancelled,
+    Located {
+        tag: u64,
+        ranks: Vec<Option<u32>>,
+    },
+    NotLocated {
+        tag: u64,
+        why: Why,
     },
     Page {
         token: ViewToken,
         page: u32,
         rows: Vec<BrowseRow>,
     },
-    /// The view can no longer be read, and the text says why.
-    Lost {
+    NoPage {
         token: ViewToken,
-        message: String,
+        why: Why,
     },
 }
 
@@ -101,6 +117,15 @@ fn open(reader: &mut BrowseReader, query: &Query, cancel: &Cancel) -> anyhow::Re
     reader.open(&query, cancel)
 }
 
+fn why(error: Option<anyhow::Error>) -> Why {
+    match error {
+        Some(e) if e.is::<StaleView>() => Why::NotCurrent,
+        Some(e) => Why::Failed(format!("{e:#}")),
+        None => Why::Failed("The library is not open.".into()),
+    }
+}
+
+/// Answers each request with exactly one reply, until either channel closes.
 pub fn serve(
     store: Store,
     requests: mpsc::Receiver<Request>,
@@ -127,31 +152,23 @@ pub fn serve(
                 match opened {
                     Ok(Some(view)) => Reply::Opened { serial, view },
                     Ok(None) => Reply::Unchanged { serial },
-                    // A newer open replaced this one, and its reply follows.
-                    Err(e) if e.is::<Cancelled>() => continue,
+                    Err(e) if e.is::<Cancelled>() => Reply::Cancelled,
                     Err(e) => Reply::Failed {
                         serial,
                         message: format!("{e:#}"),
                     },
                 }
             }
-            Request::Locate { serial, token, ids } => {
+            Request::Locate { tag, token, ids } => {
                 match reader
                     .reader
                     .as_mut()
                     .map(|reader| reader.locate(token, &ids))
                 {
-                    Some(Ok(ranks)) => Reply::Located { serial, ranks },
-                    // A newer open replaced the view, and its reply follows.
-                    Some(Err(e)) if e.is::<StaleView>() => continue,
-                    // The view is shown without its books found.
-                    Some(Err(e)) if !e.is::<CatalogueReplaced>() => Reply::Located {
-                        serial,
-                        ranks: vec![None; ids.len()],
-                    },
-                    lost => Reply::Lost {
-                        token,
-                        message: lost_message(lost.and_then(Result::err)),
+                    Some(Ok(ranks)) => Reply::Located { tag, ranks },
+                    failed => Reply::NotLocated {
+                        tag,
+                        why: why(failed.and_then(Result::err)),
                     },
                 }
             }
@@ -162,11 +179,9 @@ pub fn serve(
                     .map(|reader| reader.window(token, page * PAGE, PAGE))
                 {
                     Some(Ok(rows)) => Reply::Page { token, page, rows },
-                    // A newer open replaced the view, and its reply follows.
-                    Some(Err(e)) if e.is::<StaleView>() => continue,
-                    lost => Reply::Lost {
+                    failed => Reply::NoPage {
                         token,
-                        message: lost_message(lost.and_then(Result::err)),
+                        why: why(failed.and_then(Result::err)),
                     },
                 }
             }
@@ -175,10 +190,6 @@ pub fn serve(
             return;
         }
     }
-}
-
-fn lost_message(error: Option<anyhow::Error>) -> String {
-    error.map_or_else(|| "The library is not open.".into(), |e| format!("{e:#}"))
 }
 
 #[cfg(test)]
@@ -218,21 +229,42 @@ mod tests {
                 serial: 0,
             }
         }
-        fn open(&mut self) -> Reply {
+        fn ask(&mut self, query: Query, cancel: Cancel) -> Reply {
             self.serial += 1;
             self.requests
                 .send(Request::Open {
                     serial: self.serial,
-                    query: Query::default(),
-                    cancel: Cancel::default(),
+                    query,
+                    cancel,
                     only_if_changed: false,
                 })
                 .unwrap();
             self.replies.recv_blocking().unwrap()
         }
+        fn open(&mut self) -> Reply {
+            self.ask(Query::default(), Cancel::default())
+        }
+        /// An open that fails: a sort cannot name a field twice.
+        fn open_badly(&mut self) -> Reply {
+            let term = ebook_library::SortTerm {
+                field: ebook_library::Field::Title,
+                descending: false,
+            };
+            let query = Query {
+                text: String::new(),
+                sort: vec![term, term],
+            };
+            self.ask(query, Cancel::default())
+        }
         fn page(&self, token: ViewToken) -> Reply {
             self.requests
                 .send(Request::Page { token, page: 0 })
+                .unwrap();
+            self.replies.recv_blocking().unwrap()
+        }
+        fn locate(&self, token: ViewToken, ids: Vec<String>) -> Reply {
+            self.requests
+                .send(Request::Locate { tag: 7, token, ids })
                 .unwrap();
             self.replies.recv_blocking().unwrap()
         }
@@ -257,7 +289,11 @@ mod tests {
         // The catalogue file goes, as when it is being rebuilt.
         std::fs::rename(app.join("library.sqlite"), app.join("aside")).unwrap();
         match thread.page(view.token) {
-            Reply::Lost { token, message } => {
+            Reply::NoPage {
+                token,
+                why: Why::Failed(message),
+                ..
+            } => {
                 assert_eq!(token, view.token);
                 assert!(!message.is_empty());
             }
@@ -284,35 +320,100 @@ mod tests {
     }
 
     #[test]
-    fn locating_in_a_view_a_newer_open_replaced_is_left_to_the_newer_open() {
+    fn a_page_of_a_view_replaced_behind_a_failed_open_is_answered() {
+        // The window shows A. B opens and is replaced before the window
+        // takes it, and C fails to open, so the window still shows A. The
+        // reader's view is B: a page of A is not served, and is answered.
         let folder = tempfile::tempdir().unwrap();
         let app = folder.path().join("app");
         add(&app, "First");
         let mut thread = Thread::start(&app);
-        let old = opened(thread.open());
-        let new = opened(thread.open());
-        thread
-            .requests
-            .send(Request::Locate {
-                serial: 1,
-                token: old.token,
-                ids: vec![old.first[0].id.clone()],
-            })
-            .unwrap();
-        thread
-            .requests
-            .send(Request::Locate {
-                serial: 2,
-                token: new.token,
-                ids: vec![new.first[0].id.clone(), "missing".into()],
-            })
-            .unwrap();
-        // The only answer is the one for the newer view.
-        match thread.replies.recv_blocking().unwrap() {
-            Reply::Located { serial, ranks } => {
-                assert_eq!((serial, ranks), (2, vec![Some(0), None]));
+        let a = opened(thread.open());
+        let b = opened(thread.open());
+        assert!(matches!(thread.open_badly(), Reply::Failed { .. }));
+        assert!(matches!(
+            thread.page(a.token),
+            Reply::NoPage {
+                why: Why::NotCurrent,
+                ..
             }
-            _ => panic!("expected the newer view's books"),
+        ));
+        assert!(matches!(
+            thread.locate(a.token, vec![]),
+            Reply::NotLocated {
+                tag: 7,
+                why: Why::NotCurrent
+            }
+        ));
+        // The failed open left the reader's own view readable.
+        assert!(matches!(thread.page(b.token), Reply::Page { .. }));
+        assert!(matches!(
+            thread.locate(b.token, vec![b.first[0].id.clone(), "missing".into()]),
+            Reply::Located { tag: 7, ranks } if ranks == [Some(0), None]
+        ));
+    }
+
+    #[test]
+    fn every_request_gets_exactly_one_reply_whatever_came_before() {
+        let folder = tempfile::tempdir().unwrap();
+        let app = folder.path().join("app");
+        add(&app, "First");
+        let mut thread = Thread::start(&app);
+        let mut tokens = vec![];
+        // A fixed seed, so a failure can be run again.
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |below: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        for step in 0..400 {
+            match next(5) {
+                0 => tokens.push(opened(thread.open()).token),
+                1 => assert!(
+                    matches!(thread.open_badly(), Reply::Failed { .. }),
+                    "step {step}"
+                ),
+                2 => {
+                    let cancel = Cancel::default();
+                    cancel.cancel();
+                    assert!(
+                        matches!(thread.ask(Query::default(), cancel), Reply::Cancelled),
+                        "step {step}"
+                    );
+                }
+                _ if tokens.is_empty() => {}
+                kind => {
+                    // Any view ever opened: the last is the reader's, and
+                    // every earlier one is not.
+                    let token = tokens[next(tokens.len() as u64) as usize];
+                    let current = token == *tokens.last().unwrap();
+                    let reply = if kind == 3 {
+                        thread.page(token)
+                    } else {
+                        thread.locate(token, vec![])
+                    };
+                    let served = matches!(reply, Reply::Page { .. } | Reply::Located { .. });
+                    let refused = matches!(
+                        reply,
+                        Reply::NoPage {
+                            why: Why::NotCurrent,
+                            ..
+                        } | Reply::NotLocated {
+                            why: Why::NotCurrent,
+                            ..
+                        }
+                    );
+                    assert!(
+                        if current { served } else { refused },
+                        "step {step}: a request for a {} view",
+                        if current { "current" } else { "replaced" }
+                    );
+                }
+            }
+            // One reply to each request, and no more.
+            assert!(thread.replies.is_empty(), "step {step}: a second reply");
         }
     }
 }
