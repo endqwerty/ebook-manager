@@ -349,13 +349,13 @@ impl Library {
         };
         if let Some(b) = duplicate {
             self.store_blob(tmp, b)?;
-            self.publish().context(PublicationPending {
-                book_id: b.id.clone(),
-            })?;
             self.db.execute(
                 "INSERT OR REPLACE INTO sources VALUES(?,?)",
                 params![key, b.id],
             )?;
+            self.publish().context(PublicationPending {
+                book_id: b.id.clone(),
+            })?;
             return Ok(ImportOutcome::Duplicate(b.clone()));
         }
         if !candidates.is_empty() && matches!(choice, ImportChoice::Review) {

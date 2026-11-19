@@ -226,9 +226,10 @@ fn retry_reports_the_committed_book_while_publication_is_pending() -> Result<()>
     fs::remove_dir(&dir)?;
     fs::write(&dir, b"occupied")?;
     let mut ids = Vec::new();
-    for _ in 0..2 {
+    let alias = d.path().join("second-source.epub");
+    for source in [&stage, &alias] {
         let err = l
-            .import(&stage, &stage, &facts(), ImportChoice::Review)
+            .import(&stage, source, &facts(), ImportChoice::Review)
             .unwrap_err();
         ids.push(
             err.downcast_ref::<PublicationPending>()
@@ -240,5 +241,16 @@ fn retry_reports_the_committed_book_while_publication_is_pending() -> Result<()>
     assert_eq!(ids, vec![l.search("")?[0].id.clone(); 2]);
     fs::remove_file(&dir)?;
     l.refresh()?;
+    drop(l);
+    let mut l = Library::open(&app)?;
+    fs::write(&stage, b"corrected bytes at second source")?;
+    let unidentified = ParsedMetadata {
+        identifier: None,
+        ..facts()
+    };
+    let outcome = l.import(&stage, &alias, &unidentified, ImportChoice::Review)?;
+    assert!(
+        matches!(outcome, ImportOutcome::NeedsReview(books) if books.len()==1 && books[0].id==ids[0])
+    );
     Ok(())
 }
