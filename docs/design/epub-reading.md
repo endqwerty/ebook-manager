@@ -308,15 +308,17 @@ itself. It never copies source bytes.
   namespace is not recognised. The first attribute to produce a written name
   wins. Values are written in double quotes with `&`, `<`, `>` and `"` escaped,
   a tab or line end as a space, the characters left out of text left out, and
-  at most 1,024 characters, or 256 for an `id`. With `>` escaped, `<` and `>`
+  at most 1,024 characters. An `id` longer than 256 characters is left out
+  whole. With `>` escaped, `<` and `>`
   in the markup only open and close tags, which lets the host count the text
   without parsing.
   `style`, `srcset`, every `on…` name and everything else is left out. Inline
   `style` returns in task 4 through the CSS sanitiser.
 - **Links.** `a href` that resolves to a reading-order item, by the resolver
   `engine/run.rs` already uses for `Link::Internal`, becomes
-  `href="/c/<chapter>#<anchor>"`, or `/c/<chapter>` with no anchor. The anchor
-  is cut at 256 characters, like an `id`, and percent-encoded once. Whoever
+  `href="/c/<chapter>#<anchor>"`, or `/c/<chapter>` with no anchor or one longer
+  than 256 characters. Cutting a long name would make two that share a start
+  into one target. The anchor is percent-encoded once. Whoever
   follows the link decodes it once. An `http`,
   `https` or `mailto` address is written as `data-external="<address>"` with no
   `href`, so the helper's output holds nothing a click can follow outside the
@@ -355,7 +357,9 @@ length of 18 and the remote-references warning.
 
 **Reply checks.** `host.rs` refuses a `ChapterContent` whose `length` is not
 the UTF-16 length of the text in its `markup`, which it counts by skipping
-tags and the three text entities. It renumbers `index`, brings a chapter
+tags and the three text entities. Markup with anything else in it, such as a
+comment or a CDATA section, is refused, so nothing can hide text from the
+count. It renumbers `index`, brings a chapter
 `size` down to the chapter limit, and strips control characters from `title`
 and `language`. It does not parse `markup` further. The view is the check on
 markup. It refuses a

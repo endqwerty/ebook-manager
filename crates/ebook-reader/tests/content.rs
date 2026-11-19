@@ -467,6 +467,12 @@ fn malformed_content_and_resource_replies_are_refused() {
         ("scalar", "<p>a\u{1F600}</p>", 2),
         ("unclosed", "<p>x</p", 1),
         ("entity", "<p>&nbsp;</p>", 1),
+        ("cdata", "<p><![CDATA[x]]></p>", 0),
+        ("comment", "<p><!-- x -->y</p>", 1),
+        ("instruction", "<p><?x y?>z</p>", 1),
+        ("doctype", "<!DOCTYPE p><p>z</p>", 1),
+        ("nested", "<p <b>>z</p>", 1),
+        ("upper", "<P>z</P>", 1),
     ] {
         match fake(name, &content(markup, length)).read_content(0) {
             Err(ReaderError::HelperFailed { .. }) => {}

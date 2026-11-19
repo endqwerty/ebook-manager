@@ -213,8 +213,8 @@ and not this crate's.
   `a abbr address article aside b bdi bdo blockquote br caption cite code col colgroup dd del details dfn div dl dt em figcaption figure footer h1 h2 h3 h4 h5 h6 header hgroup hr i img ins kbd li main mark nav ol p pre q rp rt ruby s samp section small span strong sub summary sup table tbody td tfoot th thead time tr u ul var wbr`.
   Only these attributes are written: `id`, `class`, `lang` (also from
   `xml:lang`), `dir`, `title`, `alt`, `colspan`, `rowspan`, `start`, `value`,
-  and `epub:type` as `data-epub-type`, each value cut at 1,024 characters and
-  an `id` at 256. In a value `&`, `<`, `>` and `"` are escaped, so `<` and `>`
+  and `epub:type` as `data-epub-type`, each value cut at 1,024 characters. An
+  `id` longer than 256 characters is left out whole. In a value `&`, `<`, `>` and `"` are escaped, so `<` and `>`
   in the markup only ever open and close a tag. Any other element is left out
   and its content kept. With 400 elements open, a further one is left out the
   same way, and a picture there is replaced by its text alternative.
@@ -227,7 +227,7 @@ and not this crate's.
   a picture of the book becomes that picture. Other `svg` and
   `math` add the unsupported-content warning. A link to a place in the book
   is `href="/c/<chapter>#<anchor>"`, or `href="/c/<chapter>"` when it names no
-  anchor. The anchor is cut at 256 characters, as an `id` is, and then
+  anchor or names one longer than 256 characters. The anchor is
   percent-encoded once. An
   `http`, `https` or `mailto` link has no `href` and carries its address in
   `data-external`. Any other link has neither. A picture that is a PNG, JPEG,
@@ -262,7 +262,10 @@ and not this crate's.
   Any other item that is not a text document gives empty markup and the
   unsupported-content warning. A chapter index past the end and a changed
   file are refused as for R1 to R9 (F4, F8). The host counts the text in the
-  markup it receives and refuses a reply whose length is not that count. The
+  markup it receives and refuses a reply whose length is not that count, or
+  whose markup holds anything but the helper's own tags, text and three
+  entities: a comment, a CDATA section, a processing instruction or a
+  declaration is refused. The
   title is the contents label, else the text of the first heading alone, else
   the document title. The language is the
   chapter's own, else the package's first. Right-to-left is set by

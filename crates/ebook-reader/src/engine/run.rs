@@ -324,7 +324,12 @@ fn content(
     drop(bytes);
     let chapters = package.chapter_index();
     let link = |href: &str| match resolve_link(&chapters, &item.path, href)? {
-        Link::Internal(t) => Some(markup::Href::Chapter(t.chapter, t.anchor)),
+        Link::Internal(t) => {
+            // `resolve_link` cuts a long anchor for the block reader. Markup
+            // gets the whole anchor, and leaves out one that is too long.
+            let whole = paths::resolve(&item.path, href.trim()).and_then(|l| l.fragment);
+            Some(markup::Href::Chapter(t.chapter, whole))
+        }
         Link::External(address) => Some(markup::Href::External(address)),
     };
     let picture = |reference: &str| resource::resolve(&pictures, &item.path, reference);

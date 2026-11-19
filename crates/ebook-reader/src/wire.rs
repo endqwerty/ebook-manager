@@ -37,15 +37,25 @@ pub struct WireResource {
 const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// The UTF-16 length of the text in markup the helper wrote, or `None` when
-/// the text is not in the helper's form. That form makes this exact without
-/// parsing: `<` only starts a tag, `>` only ends one, and the only entities
-/// in text are `&amp;`, `&lt;` and `&gt;`.
+/// the markup is not in the helper's form. That form makes this exact without
+/// parsing: `<` only starts a tag, which is `<name`, `</name` with a
+/// lower-case name, `>` only ends one, and the only entities in text are
+/// `&amp;`, `&lt;` and `&gt;`. Comments, CDATA sections, processing
+/// instructions and declarations are not in that form, so they are refused
+/// and cannot hide text from the count.
 pub fn markup_text_units(markup: &str) -> Option<u32> {
     let mut units = 0u32;
     let mut rest = markup;
     while let Some(c) = rest.chars().next() {
         match c {
-            '<' => rest = &rest[rest.find('>')? + 1..],
+            '<' => {
+                let tag = &rest[1..rest.find('>')?];
+                let name = tag.strip_prefix('/').unwrap_or(tag);
+                if !name.starts_with(|c: char| c.is_ascii_lowercase()) || tag.contains('<') {
+                    return None;
+                }
+                rest = &rest[tag.len() + 2..];
+            }
             '>' => return None,
             '&' => {
                 let entity = ["&amp;", "&lt;", "&gt;"]

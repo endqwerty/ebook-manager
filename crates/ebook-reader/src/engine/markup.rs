@@ -41,8 +41,8 @@ pub struct Resolver<'a> {
 
 const MAX_DEPTH: usize = 400;
 const MAX_VALUE_CHARS: usize = 1024;
-/// An `id` and a link's anchor are cut at the same length, so a long one
-/// still names its target.
+/// An `id` or a link's anchor longer than this is left out whole. Cutting
+/// one would make two long names that share a start into one target.
 const MAX_ANCHOR_CHARS: usize = 256;
 
 /// Written as elements. Everything else is left out and its content kept,
@@ -394,8 +394,8 @@ impl Writer<'_> {
             match attr(attrs, "href").and_then(|h| (self.resolve.link)(h)) {
                 Some(Href::Chapter(chapter, anchor)) => {
                     let mut href = format!("/c/{chapter}");
-                    if let Some(mut anchor) = anchor {
-                        truncate_chars(&mut anchor, MAX_ANCHOR_CHARS);
+                    let anchor = anchor.filter(|a| a.chars().count() <= MAX_ANCHOR_CHARS);
+                    if let Some(anchor) = anchor {
                         href.push('#');
                         href.push_str(&percent_encode(&anchor));
                     }
@@ -436,12 +436,10 @@ impl Writer<'_> {
                 continue;
             }
             seen.push(name);
-            let limit = if name == "id" {
-                MAX_ANCHOR_CHARS
-            } else {
-                MAX_VALUE_CHARS
-            };
-            write_attr(&mut self.out, name, value, limit);
+            if name == "id" && value.chars().count() > MAX_ANCHOR_CHARS {
+                continue;
+            }
+            write_attr(&mut self.out, name, value, MAX_VALUE_CHARS);
         }
     }
 
@@ -798,17 +796,28 @@ mod tests {
     }
 
     #[test]
-    fn a_long_anchor_is_cut_on_a_character_in_both_places() {
-        let name = "\u{1F600}".repeat(300);
-        let s = run(&format!(
-            r#"<body><p id="{name}">t</p><a href="ch2.xhtml#{name}">x</a></body>"#
-        ));
-        let (_, attrs, _) = parse(&s.markup);
-        let id = &attrs.iter().find(|(k, _)| k == "id").unwrap().1;
-        let href = &attrs.iter().find(|(k, _)| k == "href").unwrap().1;
-        assert_eq!(id.chars().count(), 256);
-        let encoded: String = id.bytes().map(|b| format!("%{b:02X}")).collect();
-        assert_eq!(href, &format!("/c/1#{encoded}"));
+    fn a_long_anchor_is_whole_or_absent() {
+        let attrs_for = |name: &str| {
+            let s = run(&format!(
+                r#"<body><p id="{name}">t</p><a href="ch2.xhtml#{name}">x</a></body>"#
+            ));
+            parse(&s.markup).1
+        };
+        // At the limit the id and the link are whole and match.
+        let name = "\u{1F600}".repeat(MAX_ANCHOR_CHARS);
+        let attrs = attrs_for(&name);
+        let encoded: String = name.bytes().map(|b| format!("%{b:02X}")).collect();
+        assert_eq!(
+            attrs,
+            [
+                ("id".to_owned(), name.clone()),
+                ("href".to_owned(), format!("/c/1#{encoded}"))
+            ]
+        );
+        // Past it there is no id, and the link leads to the chapter. Cutting
+        // would make two long names that share a start into one target.
+        let attrs = attrs_for(&format!("{name}x"));
+        assert_eq!(attrs, [("href".to_owned(), "/c/1".to_owned())]);
     }
 
     #[test]

@@ -108,7 +108,8 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   attribute, no style, no frame, form control or embedded object, and no
   address other than `/c/<chapter>#<anchor>`, `/r/<id>` and the inert
   `data-external`. The host does not parse it again, but it counts the text
-  and refuses a reply whose `length` is not that count. It is still the book's
+  and refuses a reply whose `length` is not that count or whose markup holds
+  a comment, CDATA section, processing instruction or declaration. It is still the book's
   content, so show it only where no script runs and nothing else loads, and
   serve it as `application/xhtml+xml` so no parser repairs it into something
   else. `styles` is always empty for now.
