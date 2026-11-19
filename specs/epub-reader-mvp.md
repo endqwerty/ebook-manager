@@ -267,8 +267,9 @@ and not this crate's.
   is text with `&amp;`, `&lt;` and `&gt;` as its only entities, and tags
   written as `<name attr="value">`, `<name attr="value"/>` and `</name>`,
   with only the elements and attributes of C1, no attribute twice, `href`
-  only on `a` and only as `/c/<n>` or `/c/<n>#<anchor>`, `src` only on `img`
-  and only as `/r/<n>`, and double-quoted values that hold no `<`, `>` or
+  and `data-external` only on `a`, alone or together, `href` only as
+  `/c/<digits>` with an optional `#` and unreserved or `%` characters, `src`
+  only on `img` and only as `/r/<digits>`, and double-quoted values that hold no `<`, `>` or
   `"`. A comment, a CDATA section, a processing instruction, a declaration,
   a namespace declaration, a character reference or a carriage return is
   refused. So is any other control character, except a tab or a line feed

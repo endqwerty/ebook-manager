@@ -361,8 +361,9 @@ the text in it. `markup_text_units` in `wire.rs` checks the form and counts
 in one pass. The form is text with the three entities, and tags written as
 `<name attr="value">`, the same ending in `/>`, and `</name>`, with names
 from the same two lists the sanitiser writes from, no attribute twice, `href`
-only on `a` as `/c/<n>` with an optional `#<anchor>`, and `src` only on `img`
-as `/r/<n>`. So the host, which parses nothing, still refuses a reply that
+and `data-external` only on `a`, `href` as `/c/<digits>` with an optional `#`
+and unreserved or `%` characters, and `src` only on `img` as `/r/<digits>`.
+This is a pattern and not proof the sanitiser wrote the reply. So the host, which parses nothing, still refuses a reply that
 names a script, a handler or an outside address to load, whatever a
 misbehaving helper sends. A comment, a CDATA section, a character reference
 or a carriage return is outside the form, so nothing can hide text from the

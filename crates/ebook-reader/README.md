@@ -106,11 +106,14 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   returns well-formed XML built from an allow-list of elements and
   attributes (C1 and C2 in the spec). It holds no script, no handler
   attribute, no style, no frame, form control or embedded object, and no
-  address other than `/c/<chapter>#<anchor>`, `/r/<id>` and the inert
-  `data-external`. The host does not parse it again, but it checks
-  that every element, attribute, address and entity is one the helper
-  writes, written the way the helper writes it, counts the text, and refuses
-  a reply that fails either. It does not
+  address other than `/c/<chapter>` with an optional `#<anchor>`, `/r/<id>`
+  and the inert `data-external`. The host does not parse it again. It checks
+  that every element and attribute name is one the helper writes, that each
+  `href` is `/c/<digits>` with an optional `#` and unreserved or `%`
+  characters, that each `src` is `/r/<digits>`, and that the tags and
+  entities are written in the helper's syntax. It counts the text, and
+  refuses a reply that fails any of these. That is a pattern, not a proof
+  that the helper wrote the reply: `/c/00#%` passes it. It does not
   check that tags are balanced. An `id` or a link's anchor longer than 256
   characters is left out. It is still the book's
   content, so show it only where no script runs and nothing else loads, and
