@@ -542,14 +542,18 @@ impl View {
                 let mut body = String::new();
                 let mut offsets = vec![];
                 let mut at = 0;
+                // A newline after the last block would add an empty line, and
+                // a short window's last page would show only that.
                 for block in chapter.blocks {
+                    if !offsets.is_empty() {
+                        body.push('\n');
+                        at += 1;
+                    }
                     offsets.push(at);
                     for span in block.spans {
                         at += span.text.chars().count() as i32;
                         body.push_str(&span.text);
                     }
-                    body.push('\n');
-                    at += 1;
                 }
                 Ok((body, offsets, partial))
             })
