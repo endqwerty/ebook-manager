@@ -24,6 +24,8 @@ use std::collections::{HashMap, HashSet};
 pub enum Event {
     /// The reader asked for another search or sort.
     Query(Query),
+    /// Open the same query again, for a view built anew.
+    Reopen,
     /// The catalogue may have changed.
     Refresh,
     /// Try Again, from the error state.
@@ -275,6 +277,7 @@ impl Core {
                     self.open(false, &mut effects);
                 }
             }
+            Event::Reopen => self.open(false, &mut effects),
             Event::Retry => {
                 if matches!(self.phase, Phase::Error { .. }) {
                     self.open(false, &mut effects);

@@ -638,6 +638,12 @@ impl BookListModel {
         self.run(Event::Retry);
     }
 
+    /// Opens the same search and sort again, for a view that has been built
+    /// anew and has to be put where the last one was.
+    pub fn reopen(&self) {
+        self.run(Event::Reopen);
+    }
+
     /// The write thread finished a job, which may have changed a book. The
     /// view is refreshed for it at most once a second.
     pub fn catalogue_changed(&self) {

@@ -14,8 +14,17 @@
   background: var(--window-bg-color);
 }
 /* Books sit directly on the window. */
-gridview.books {
+.books,
+columnview.books > listview {
   background: none;
+}
+listview.books > row {
+  padding: 0;
+}
+/* A list row's line starts at the text's edge, not under the cover. */
+.book-row-text {
+  padding: 12px 24px 12px 0;
+  border-bottom: 1px solid var(--border-color);
 }
 gridview.books > child {
   padding: 6px;

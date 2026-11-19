@@ -1,18 +1,18 @@
 //! The library window: the header bar, the search bar, the screen title and
 //! the books, with every command as an action on the window.
+mod controls;
+
 use super::*;
 use crate::{
     browse::{Anchors, BookListModel, Hooks, Placed, Query, Status},
+    settings::{Settings, SortField, ViewKind},
     thumbs::Thumbs,
-    views::{self, BookCell, Shared, grid},
+    views::{self, BookCell, Shared, View, grid, list, table},
 };
 use ebook_device::ExportOutcome;
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use std::cell::Cell;
-
-/// The medium cover width.
-const COVER: i32 = 128;
+use std::cell::{Cell, RefCell};
 
 type Command = Box<dyn Fn(&Rc<Library>)>;
 
@@ -25,7 +25,19 @@ struct Library {
     /// As wide as the books' area and no taller than nothing: it reports
     /// each change of width, which a scrolled window does not.
     width: gtk::DrawingArea,
-    grid: gtk::GridView,
+    /// The view on screen: the saved choice, or the list standing in for it.
+    view: RefCell<Option<(ViewKind, View)>>,
+    /// The window is under 640 wide, where the table is not offered.
+    narrow: Cell<bool>,
+    settings: RefCell<Settings>,
+    settings_file: PathBuf,
+    saving: Cell<bool>,
+    /// The view is to be built anew when the model next has its books.
+    rebuild: Cell<bool>,
+    /// The view on screen was built since the reader was last placed.
+    rebuilt: Cell<bool>,
+    sorted_by: Rc<Cell<SortField>>,
+    controls: controls::Controls,
     pages: gtk::Stack,
     count: gtk::Label,
     search_bar: gtk::SearchBar,
@@ -119,7 +131,9 @@ impl Library {
     /// Where the reader is in the books on screen.
     fn anchors(&self) -> Anchors {
         let focused = views::focused_cell(&self.scrolled);
-        let top = views::top_cell(&self.scrolled);
+        let top = self
+            .with_view(|view| views::top_cell(&view.body()))
+            .flatten();
         let id = |cell: &BookCell| Some(cell.book()?.row()?.id.clone());
         Anchors {
             current: focused
@@ -137,30 +151,34 @@ impl Library {
     /// else at the first book that was on screen, else at the top.
     fn restore(self: &Rc<Self>, placed: &Placed) {
         let was = &placed.anchors;
+        let rebuilt = self.rebuilt.take();
         let serial = self.placed.get() + 1;
         self.placed.set(serial);
         if let Some(rank) = placed.current {
             if was.focused || !placed.background {
-                self.grid.scroll_to(rank, gtk::ListScrollFlags::FOCUS, None);
+                self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::FOCUS));
             }
             // The book that held the keyboard focus went with the old view.
             if was.focused {
-                self.grid.grab_focus();
-            }
-            // A change the reader did not ask for leaves the page where it was.
-            if !placed.background {
-                return;
+                self.with_view(|view| view.body().grab_focus());
             }
         }
+        // A search or sort the reader asked for starts at the book they
+        // were on, or at the top. A change they did not ask for leaves the
+        // page where it was.
+        if !placed.background {
+            return;
+        }
         let Some(rank) = placed.top else { return };
-        self.grid.scroll_to(rank, gtk::ListScrollFlags::NONE, None);
-        // `scroll_to` only brings the book on screen. Once the grid has laid
-        // itself out, move it to where it was.
+        self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::NONE));
+        // `scroll_to` only brings the book on screen. Once the view has laid
+        // itself out, move it to where it was. An offset measured in one
+        // kind of view means nothing in another.
         let weak = Rc::downgrade(self);
         let frames = Cell::new(0);
-        let top_offset = was.top_offset;
+        let top_offset = if rebuilt { 0.0 } else { was.top_offset };
         let moved = self.moved.get();
-        self.grid.add_tick_callback(move |_, _| {
+        self.scrolled.add_tick_callback(move |_, _| {
             let Some(library) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
@@ -174,10 +192,15 @@ impl Library {
             if frames.get() < 2 {
                 return glib::ControlFlow::Continue;
             }
-            let found = views::cells(library.scrolled.upcast_ref())
-                .into_iter()
-                .find(|cell| cell.book().is_some_and(|book| book.rank() == rank))
-                .and_then(|cell| cell.compute_bounds(&library.scrolled));
+            let found = library
+                .with_view(|view| {
+                    let body = view.body();
+                    views::cells(&body)
+                        .into_iter()
+                        .find(|cell| cell.book().is_some_and(|book| book.rank() == rank))
+                        .and_then(|cell| cell.compute_bounds(&body))
+                })
+                .flatten();
             let Some(bounds) = found else {
                 return glib::ControlFlow::Continue;
             };
@@ -187,17 +210,114 @@ impl Library {
         });
     }
 
+    fn with_view<T>(&self, act: impl FnOnce(&View) -> T) -> Option<T> {
+        self.view.borrow().as_ref().map(|(_, view)| act(view))
+    }
+
+    /// The view to show for the saved choice in this window.
+    fn shown(&self) -> ViewKind {
+        self.settings
+            .borrow()
+            .view
+            .shown(self.narrow.get(), text_scale())
+    }
+
+    /// Gives the grid the columns its width has room for.
     fn fit(&self) {
         let width = self.width.width();
-        if width > 0 {
-            grid::fit(&self.grid, width, COVER, text_scale());
+        if width > 0
+            && let Some((_, View::Grid(grid))) = &*self.view.borrow()
+        {
+            let cover = self.settings.borrow().cover_size.grid();
+            grid::fit(grid, width, cover, text_scale());
         }
+    }
+
+    /// Builds the view for the saved choices and puts it on screen.
+    fn build_view(self: &Rc<Self>) {
+        let kind = self.shown();
+        let settings = self.settings.borrow().clone();
+        let menu = Rc::downgrade(self);
+        let shared = Shared {
+            thumbs: self.thumbs.clone(),
+            menu: Rc::new(move |cell, x, y| {
+                if let Some(library) = menu.upgrade() {
+                    library.context_menu(cell, x, y);
+                }
+            }),
+            cover_size: settings.cover_size,
+            sorted_by: self.sorted_by.clone(),
+        };
+        let view = match kind {
+            ViewKind::Grid => View::Grid(grid::build(&self.model, &shared)),
+            ViewKind::List => View::List(list::build(&self.model, &shared)),
+            ViewKind::Table => {
+                let (sorts, layouts) = (Rc::downgrade(self), Rc::downgrade(self));
+                View::Table(table::build(
+                    &self.model,
+                    &shared,
+                    &settings.columns,
+                    settings.sort(kind),
+                    table::Events {
+                        sort: Box::new(move |field, add| {
+                            if let Some(library) = sorts.upgrade() {
+                                let sort = library.sort();
+                                library.set_sort(if add {
+                                    sort.then_by(field)
+                                } else {
+                                    sort.by(field)
+                                });
+                            }
+                        }),
+                        layout: Box::new(move |columns| {
+                            if let Some(library) = layouts.upgrade() {
+                                library.settings.borrow_mut().columns = columns;
+                                library.save_soon();
+                            }
+                        }),
+                    },
+                ))
+            }
+        };
+        // Return and a double click read the selected book, as every
+        // command from the keyboard acts on the selection. A click selects
+        // the book it lands on, so for a pointer the two are the same book.
+        let weak = self.window.downgrade();
+        view.connect_activate(move |_| {
+            if let Some(window) = weak.upgrade() {
+                gio::prelude::ActionGroupExt::activate_action(&window, "read", None);
+            }
+        });
+        self.scrolled.set_child(Some(view.widget()));
+        self.view.replace(Some((kind, view)));
+        self.rebuilt.set(true);
+        self.fit();
     }
 
     fn search_for(&self, text: &str) {
         let mut query = self.model.query();
         query.text = text.to_owned();
         self.model.set_query(query);
+    }
+
+    /// Writes the remembered choices shortly, once for a run of changes
+    /// such as a column being dragged wider.
+    fn save_soon(self: &Rc<Self>) {
+        if self.saving.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            if let Some(library) = weak.upgrade() {
+                library.save();
+            }
+        });
+    }
+
+    fn save(&self) {
+        self.saving.set(false);
+        // The choices are a convenience. Losing them is not worth a message.
+        let _ = self.settings.borrow().save(&self.settings_file);
     }
 
     /// Runs `command` with the ID of each selected book.
@@ -462,6 +582,10 @@ pub fn accelerators(app: &adw::Application) {
         ("win.add-files", &["<Control>o"][..]),
         ("win.add-folder", &["<Control><Shift>o"]),
         ("win.search", &["<Control>f"]),
+        ("win.view('grid')", &["<Control>1"]),
+        ("win.view('list')", &["<Control>2"]),
+        ("win.view('table')", &["<Control>3"]),
+        ("win.sort-more", &["<Control><Shift>s"]),
         ("win.refresh", &["F5", "<Control>r"]),
         ("win.edit", &["F2"]),
         ("win.send", &["<Control>d"]),
@@ -496,8 +620,7 @@ pub fn open(app: &adw::Application) {
         .tooltip_text("Add Books")
         .build();
     header.pack_start(&add);
-    let menu = gio::Menu::new();
-    menu.append(Some("_Refresh Library"), Some("win.refresh"));
+    let menu = controls::main_menu();
     header.pack_end(
         &gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
@@ -552,20 +675,11 @@ pub fn open(app: &adw::Application) {
     heading.append(&title);
     heading.append(&count);
 
-    let library = Rc::<Library>::new_cyclic(|weak: &std::rc::Weak<Library>| {
-        let for_menu = weak.clone();
-        let shared = Shared {
-            thumbs: thumbs.clone(),
-            menu: Rc::new(move |cell, x, y| {
-                if let Some(library) = for_menu.upgrade() {
-                    library.context_menu(cell, x, y);
-                }
-            }),
-        };
-        let grid = grid::build(&model, &shared, COVER);
+    let settings_file = glib::user_config_dir().join("ebook-manager/settings.json");
+    let settings = Settings::load(&settings_file);
+    let library = Rc::new({
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&grid)
             .vexpand(true)
             .build();
         let pages = gtk::Stack::new();
@@ -577,7 +691,15 @@ pub fn open(app: &adw::Application) {
             thumbs,
             scrolled,
             width: gtk::DrawingArea::builder().hexpand(true).build(),
-            grid,
+            view: RefCell::new(None),
+            narrow: Cell::new(false),
+            sorted_by: Rc::new(Cell::new(settings.sort(settings.view).first().field)),
+            settings: RefCell::new(settings),
+            settings_file,
+            saving: Cell::new(false),
+            rebuild: Cell::new(false),
+            rebuilt: Cell::new(false),
+            controls: controls::Controls::new(&header),
             pages,
             count,
             search_bar: search_bar.clone(),
@@ -653,6 +775,8 @@ pub fn open(app: &adw::Application) {
     window.set_content(Some(&frame));
 
     library.install_actions();
+    library.install_controls();
+    library.build_view();
     let (for_anchors, for_changed, for_place) = (
         Rc::downgrade(&library),
         Rc::downgrade(&library),
@@ -665,10 +789,15 @@ pub fn open(app: &adw::Application) {
                 .map(|library| library.anchors())
                 .unwrap_or_default()
         }),
-        changed: Box::new(move |_| {
+        changed: Box::new(move |replaced| {
             let Some(library) = for_changed.upgrade() else {
                 return;
             };
+            // A view to be built anew goes on screen with its books.
+            if replaced && library.rebuild.take() {
+                library.build_view();
+                library.show_sort();
+            }
             library.refresh_state();
             // Books imported before covers were read get theirs once the
             // window has shown what it has.
@@ -688,15 +817,6 @@ pub fn open(app: &adw::Application) {
             library.refresh_actions();
         }
     });
-    // Return and a double click read the selected book, as every command
-    // from the keyboard acts on the selection. A click selects the book it
-    // lands on, so for a pointer the two are the same book.
-    let weak = window.downgrade();
-    library.grid.connect_activate(move |_, _| {
-        if let Some(window) = weak.upgrade() {
-            gio::prelude::ActionGroupExt::activate_action(&window, "read", None);
-        }
-    });
     let weak = Rc::downgrade(&library);
     library.width.connect_resize(move |_, _, _| {
         if let Some(library) = weak.upgrade() {
@@ -707,7 +827,9 @@ pub fn open(app: &adw::Application) {
         let weak = Rc::downgrade(&library);
         settings.connect_gtk_xft_dpi_notify(move |_| {
             if let Some(library) = weak.upgrade() {
-                library.fit();
+                // Larger text takes columns from the grid and, from one
+                // and a half times, shows the list in its place.
+                library.show(false);
             }
         });
     }
@@ -866,9 +988,9 @@ pub fn open(app: &adw::Application) {
             // books with the arrow keys does.
             if library.model.selected_count() == 0 {
                 let to = gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT;
-                library.grid.scroll_to(0, to, None);
+                library.with_view(|view| view.scroll_to(0, to));
             }
-            library.grid.grab_focus();
+            library.with_view(|view| view.body().grab_focus());
             glib::Propagation::Stop
         }
         _ => glib::Propagation::Proceed,
@@ -884,7 +1006,11 @@ pub fn open(app: &adw::Application) {
     });
     // A window opened from this one closes first, through its own close, so
     // a reader saves its place before the process ends.
-    window.connect_close_request(|window| {
+    let weak = Rc::downgrade(&library);
+    window.connect_close_request(move |window| {
+        if let Some(library) = weak.upgrade() {
+            library.save();
+        }
         let open: Vec<_> = gtk::Window::list_toplevels()
             .into_iter()
             .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
@@ -914,10 +1040,14 @@ pub fn open(app: &adw::Application) {
         }
         glib::Propagation::Stop
     });
+    let query = Query {
+        text: String::new(),
+        sort: library.sort().terms(),
+    };
     // The window owns the library's state for as long as it is open.
     window.connect_destroy(move |_| {
         let _ = &library;
     });
-    model.set_query(Query::default());
+    model.set_query(query);
     window.present();
 }

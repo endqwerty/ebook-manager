@@ -1,7 +1,7 @@
 //! The cover grid: a `GtkGridView` whose cell is a cover over a caption.
-use super::{BookCell, Shared, finished, spoken};
+use super::{BookCell, Shared, finished, finished_mark, item_factory, spoken, truncating};
 use crate::{
-    browse::{BookListModel, BookObject},
+    browse::BookListModel,
     cover::{Cover, Kind},
 };
 use gtk::{pango, prelude::*};
@@ -43,19 +43,6 @@ pub fn fit(grid: &gtk::GridView, width: i32, cover: i32, text_scale: f64) {
     grid.set_max_columns(columns);
 }
 
-/// A label that shows its whole text in a tooltip when it is cut short.
-fn truncating(label: &gtk::Label) {
-    label.set_ellipsize(pango::EllipsizeMode::End);
-    label.set_has_tooltip(true);
-    label.connect_query_tooltip(|label, _, _, _, tooltip| {
-        let cut = label.layout().is_ellipsized();
-        if cut {
-            tooltip.set_text(Some(label.text().as_str()));
-        }
-        cut
-    });
-}
-
 fn caption_label(class: &str, lines: i32) -> gtk::Label {
     let label = gtk::Label::builder()
         .xalign(0.0)
@@ -69,23 +56,16 @@ fn caption_label(class: &str, lines: i32) -> gtk::Label {
     label
 }
 
-pub fn build(model: &BookListModel, shared: &Shared, cover_width: i32) -> gtk::GridView {
-    let factory = gtk::SignalListItemFactory::new();
+pub fn build(model: &BookListModel, shared: &Shared) -> gtk::GridView {
     let shared = shared.clone();
-    factory.connect_setup(move |_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let cover = Cover::new(Kind::Grid, cover_width, &shared.thumbs);
+    let factory = item_factory(move |item| {
+        let cover = Cover::new(Kind::Grid, shared.cover_size.grid(), &shared.thumbs);
         let title = caption_label("heading", 2);
         let author = caption_label("caption", 1);
         author.add_css_class("dimmed");
         author.set_hexpand(true);
         // The mark has a slot of its own, so only the name is cut short.
-        let done = gtk::Image::from_icon_name("object-select-symbolic");
-        done.set_pixel_size(12);
-        done.add_css_class("dimmed");
-        done.set_accessible_role(gtk::AccessibleRole::Presentation);
+        let done = finished_mark();
         let byline = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         byline.append(&author);
         byline.append(&done);
@@ -117,7 +97,7 @@ pub fn build(model: &BookListModel, shared: &Shared, cover_width: i32) -> gtk::G
         content.append(&cover);
         content.append(&caption);
         let weak = item.downgrade();
-        let cell = BookCell::new(&content, &shared, move |_, book| {
+        BookCell::new(&content, &shared, move |_, book| {
             cover.set_book(book);
             title.set_text(book.map_or("", |book| &book.title));
             author.set_text(book.map_or("", |book| &book.authors));
@@ -125,27 +105,7 @@ pub fn build(model: &BookListModel, shared: &Shared, cover_width: i32) -> gtk::G
             if let Some(item) = weak.upgrade() {
                 item.set_accessible_label(&book.map(|book| spoken(book)).unwrap_or_default());
             }
-        });
-        item.set_child(Some(&cell));
-    });
-    factory.connect_bind(|_, item| {
-        if let Some(item) = item.downcast_ref::<gtk::ListItem>()
-            && let (Some(cell), Some(book)) = (
-                item.child().and_downcast::<BookCell>(),
-                item.item().and_downcast::<BookObject>(),
-            )
-        {
-            cell.bind(&book);
-        }
-    });
-    factory.connect_unbind(|_, item| {
-        if let Some(cell) = item
-            .downcast_ref::<gtk::ListItem>()
-            .and_then(|item| item.child())
-            .and_downcast::<BookCell>()
-        {
-            cell.unbind();
-        }
+        })
     });
     let grid = gtk::GridView::new(Some(model.clone()), Some(factory));
     grid.add_css_class("books");
