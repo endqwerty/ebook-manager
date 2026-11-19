@@ -668,7 +668,7 @@ impl Reading {
             // showing: a page ended while a turn was unanswered also says
             // it did not move, and so does one the reader has since left.
             let keeper = reading.keeper.borrow();
-            let same = keeper.showing() == Some(load) && !keeper.gone();
+            let same = keeper.displayed().is_some_and(|(_, shown)| shown == load) && !keeper.gone();
             drop(keeper);
             if moved || !same {
                 return;

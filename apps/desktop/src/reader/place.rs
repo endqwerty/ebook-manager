@@ -96,8 +96,11 @@ pub struct Keeper {
     submitted: Option<Order>,
     /// The load the reader asked for last, and whether it is ready.
     showing: Option<(u32, bool)>,
-    /// What is displayed, and the order of the report it came from.
-    displayed: Option<(Place, Order)>,
+    /// What is displayed, and the rank of the report it came from: its
+    /// order, and then whether it is a reflow. A reflow repeats the count
+    /// of the move it follows, so of two reports with one order the reflow
+    /// is the later made.
+    displayed: Option<(Place, (Order, bool))>,
     timer: bool,
     gone: bool,
     #[cfg(test)]
@@ -133,12 +136,7 @@ impl Keeper {
 
     /// The place showing and the load it belongs to, for turning from.
     pub fn displayed(&self) -> Option<(Place, u32)> {
-        self.displayed.map(|(place, order)| (place, order.0))
-    }
-
-    /// The load being shown, once the reader has asked for one.
-    pub fn showing(&self) -> Option<u32> {
-        self.showing.map(|(number, _)| number)
+        self.displayed.map(|(place, (order, _))| (place, order.0))
     }
 
     pub fn gone(&self) -> bool {
@@ -194,7 +192,12 @@ impl Keeper {
                     self.timer = false;
                     effects.push(Effect::StopTimer);
                 }
-                self.submit(&mut effects);
+                // Always, even when the timer has submitted this place: that
+                // save may have failed, and its answer may not be in yet.
+                if let Some((place, order)) = self.held {
+                    self.submitted = Some(order);
+                    effects.push(Effect::Submit(place));
+                }
                 effects.push(Effect::AwaitLibrary);
                 effects.push(Effect::EndPage);
             }
@@ -245,14 +248,17 @@ impl Keeper {
                 && self
                     .displayed
                     .is_none_or(|(shown, _)| shown.chapter == place.chapter));
-        if mine && self.displayed.is_none_or(|(_, shown)| order >= shown) {
+        // A move's answer that arrives after a reflow made since has the
+        // page numbers of before the reflow, and is not shown over it.
+        let rank = (order, !report.moved);
+        if mine && self.displayed.is_none_or(|(_, shown)| rank >= shown) {
             // A reflow shows the held offset on new page numbers.
-            self.displayed = Some((place, order));
+            self.displayed = Some((place, rank));
             effects.push(Effect::Show(place));
         }
     }
 
-    /// Hand the held place to the library unless it already has it.
+    /// Hand the held place to the library unless it was handed it before.
     fn submit(&mut self, effects: &mut Vec<Effect>) {
         if let Some((place, order)) = self.held
             && self.submitted != Some(order)
@@ -387,12 +393,13 @@ mod tests {
             })]
         );
         assert_eq!(k.held().map(|p| (p.page, p.pages)), Some((2, 11)));
-        // No timer was started, and leaving has nothing new to submit.
+        // No timer was started.
         assert_eq!(k.step(Input::Timer), []);
-        assert_eq!(
-            k.step(Input::Leave),
-            [Effect::AwaitLibrary, Effect::EndPage]
-        );
+        // Leaving submits the held place again: the timed save may have failed.
+        assert!(matches!(
+            k.step(Input::Leave)[..],
+            [Effect::Submit(p), Effect::AwaitLibrary, Effect::EndPage] if (p.page, p.pages) == (2, 11)
+        ));
     }
 
     #[test]
@@ -428,6 +435,45 @@ mod tests {
         // A report that was on its way is still a move, and still not shown.
         assert_eq!(k.step(moved(a, 2, 3000)), [Effect::StartTimer]);
         assert_eq!(k.displayed(), None);
+    }
+
+    /// The timer's save may have failed, and its answer may not be in when
+    /// the reader leaves, so leaving submits the held place again.
+    #[test]
+    fn leaving_submits_the_held_place_even_after_the_timer_did() {
+        let mut k = Keeper::default();
+        let a = load(1, 0);
+        k.step(Input::Asked { number: 1 });
+        k.step(Input::Ready { load: a });
+        k.step(moved(a, 1, 100));
+        assert!(matches!(k.step(Input::Timer)[..], [Effect::Submit(p)] if p.offset == 100));
+        assert!(matches!(
+            k.step(Input::Leave)[..],
+            [Effect::Submit(p), Effect::AwaitLibrary, Effect::EndPage] if p.offset == 100
+        ));
+    }
+
+    /// A turn's answer that arrives after a reflow made since the turn has
+    /// the page numbers of before the reflow. It is saved and not shown.
+    #[test]
+    fn a_move_answered_after_its_reflow_is_not_shown_over_it() {
+        let mut k = Keeper::default();
+        let a = load(1, 0);
+        k.step(Input::Asked { number: 1 });
+        k.step(Input::Ready { load: a });
+        k.step(moved(a, 1, 0));
+        let reflow = Report {
+            load: a,
+            offset: 2000,
+            page: 1,
+            pages: 6,
+            count: 2,
+            moved: false,
+        };
+        assert_eq!(k.step(Input::Report(reflow)).len(), 1);
+        assert_eq!(k.step(moved(a, 2, 2000)), [Effect::StartTimer]);
+        assert_eq!(k.displayed().map(|(p, _)| (p.page, p.pages)), Some((1, 6)));
+        assert_eq!(k.held().map(|p| p.offset), Some(2000));
     }
 
     #[test]
@@ -491,9 +537,12 @@ mod tests {
         asked: Option<u32>,
         /// The load asked for last has said it is ready.
         ready: bool,
-        /// Everything valid that load has said since, in the order it came.
-        said: Vec<(Place, Order)>,
+        /// Everything valid that load has said since, in the order it came,
+        /// with whether it was a reflow.
+        said: Vec<(Place, (Order, bool))>,
         submitted: Vec<Place>,
+        /// The order of the move each submitted place was made by.
+        orders: Vec<Order>,
         left: bool,
     }
 
@@ -532,11 +581,12 @@ mod tests {
                     let at = pending[rng.below(pending.len() as u64) as usize];
                     loads[at].2 = true;
                     loads[at].1 = 1;
+                    let pages = 1 + rng.below(9) as u32;
                     in_flight.push(Report {
                         load: loads[at].0,
                         offset: rng.below(5001) as u32,
-                        page: rng.below(8) as u32,
-                        pages: 8,
+                        page: rng.below(u64::from(pages)) as u32,
+                        pages,
                         count: 1,
                         moved: true,
                     });
@@ -550,12 +600,14 @@ mod tests {
                     if is_move {
                         loads[at].1 += 1;
                     }
+                    // A reflow has its own page count, as a resize gives.
+                    let pages = 1 + rng.below(9) as u32;
                     in_flight.push(Report {
                         load: loads[at].0,
                         // Now and then the page says something impossible.
                         offset: rng.below(5200) as u32,
-                        page: rng.below(9) as u32,
-                        pages: 8,
+                        page: rng.below(u64::from(pages) + 1) as u32,
+                        pages,
                         count: loads[at].1,
                         moved: is_move,
                     });
@@ -601,7 +653,7 @@ mod tests {
                         reference.arrived.push((place, order));
                     }
                     if valid && reference.ready && reference.asked == Some(r.load.number) {
-                        reference.said.push((place, order));
+                        reference.said.push((place, (order, !r.moved)));
                     }
                 }
                 _ => {}
@@ -615,7 +667,15 @@ mod tests {
                         if reference.left {
                             return Err(format!("step {step}: a save was submitted after leaving"));
                         }
+                        // Every save is of the newest move to have arrived.
+                        let newest = reference.arrived.iter().max_by_key(|(_, order)| *order);
+                        let Some((_, order)) = newest.filter(|(held, _)| held == place) else {
+                            return Err(format!(
+                                "step {step}: {place:?} was submitted, and the newest move is {newest:?}"
+                            ));
+                        };
                         reference.submitted.push(*place);
+                        reference.orders.push(*order);
                     }
                     _ => {}
                 }
@@ -648,8 +708,37 @@ mod tests {
             let said = reference
                 .said
                 .iter()
-                .max_by_key(|(_, order)| *order)
+                .max_by_key(|(_, rank)| *rank)
                 .map(|(place, _)| *place);
+            // The reader is told what to show, so that is checked and not
+            // only what the keeper remembers: one `Show` when it changes.
+            let shows: Vec<Effect> = effects
+                .iter()
+                .copied()
+                .filter(|e| matches!(e, Effect::Show(_) | Effect::Blank))
+                .collect();
+            let expected: Vec<Effect> = match input {
+                Input::Asked { .. } if !reference.left => vec![Effect::Blank],
+                Input::Report(r)
+                    if !reference.left
+                        && reference.said.last().is_some_and(|(_, rank)| {
+                            *rank == ((r.load.number, r.count), !r.moved)
+                                && reference.said.iter().all(|(_, other)| other <= rank)
+                        })
+                        && reference.asked == Some(r.load.number)
+                        && r.pages > 0
+                        && r.page < r.pages
+                        && r.offset <= r.load.length =>
+                {
+                    said.map(Effect::Show).into_iter().collect()
+                }
+                _ => Vec::new(),
+            };
+            if shows != expected {
+                return Err(format!(
+                    "step {step}: the reader was told {shows:?}, and should be told {expected:?}"
+                ));
+            }
             if !reference.left && k.displayed().map(|(place, _)| place) != said {
                 return Err(format!(
                     "step {step}: {:?} is displayed, and the load showing last said {said:?}",
@@ -669,29 +758,25 @@ mod tests {
             // 4. Leaving submits the held place last, waits, and ends the page.
             if input == Input::Leave && !reference.left {
                 reference.left = true;
-                if newest.is_some() && reference.submitted.last().copied() != newest {
+                // Exactly this: the held place, submitted once whether or
+                // not the timer submitted it before, then the wait, then
+                // the page's end.
+                let mut expected: Vec<Effect> = newest.map(Effect::Submit).into_iter().collect();
+                expected.extend([Effect::AwaitLibrary, Effect::EndPage]);
+                let did: Vec<Effect> = effects
+                    .iter()
+                    .copied()
+                    .filter(|e| *e != Effect::StopTimer)
+                    .collect();
+                if did != expected {
                     return Err(format!(
-                        "step {step}: left with {newest:?} held and {:?} last submitted",
-                        reference.submitted.last()
+                        "step {step}: leaving did {effects:?}, with {newest:?} held"
                     ));
-                }
-                if !effects.ends_with(&[Effect::AwaitLibrary, Effect::EndPage]) {
-                    return Err(format!("step {step}: leaving did {effects:?}"));
                 }
             }
         }
         // 5. Saves were submitted in the order their places were made.
-        let orders: Vec<Order> = reference
-            .submitted
-            .iter()
-            .filter_map(|place| {
-                reference
-                    .arrived
-                    .iter()
-                    .find(|(p, _)| p == place)
-                    .map(|(_, o)| *o)
-            })
-            .collect();
+        let orders = &reference.orders;
         if orders.windows(2).any(|pair| pair[0] > pair[1]) {
             return Err(format!("saves were submitted out of order: {orders:?}"));
         }

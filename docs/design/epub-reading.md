@@ -655,7 +655,9 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   chapter loaded twice is two loads.
 - **What is shown belongs to the load being shown.** The shell shows a place
   only when its load is the one asked for last and that load is ready, and
-  never an older report of that load over a newer one. A turn at a chapter's
+  never an older report of that load over a newer one. A reflow repeats the
+  count of the move it follows, so a move's answer that arrives after a
+  reflow made since is not shown over it: its page numbers are from before. A turn at a chapter's
   edge moves to the next chapter only if the load it was made in is still
   the one showing. A chapter that fails shows nothing, so nothing turns
   from it, and the place held stays.
@@ -664,10 +666,12 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   was asked for, that one is ready, what a page reported, that the chapter
   showing failed, that the save timer fired, and that the reader is leaving. It answers what to do: show
   a place, start or stop the timer, submit a place, wait for the library,
-  end the page. `reader.rs` does those things in the order given and
-  decides nothing about places itself. Saves are submitted in the order
+  end the page. `reader.rs` does those things in the order given. The
+  one thing it asks is whether the load a turn was made in is still the one
+  displayed, before a turn at a chapter's edge opens the next chapter. Saves are submitted in the order
   their places were made, by one function that both the timer and leaving
-  use. The store queues a job when its future is first asked, so that
+  use. Leaving submits the held place even when the timer already has: that
+  save may have failed, and its answer may not be in yet. The store queues a job when its future is first asked, so that
   function asks once before it returns: a timed save is in the library's
   queue ahead of any leave that follows it.
 
