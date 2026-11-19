@@ -6,6 +6,10 @@ The caller owns the managed version and chooses a destination in a trusted direc
 
 Poll `job.stage()`, call `job.cancel()` to request cancellation and call `job.wait()` for the terminal result. On success, compare the identity in the report to the intended version before attaching it. Another job may already own the requested destination. `Error::Exists` means this job published nothing. Retry an unsuccessful request by calling `start` again. Dropping the handle detaches the running thread. The coordinator owns the catalogue transaction, desktop queue and helper installation.
 
+The writer accepts up to 512 sections, 4,096 images and 16 MiB of chapter markup per section. The checked file retains private staging permissions (0600 on Linux). A malformed source language becomes `und`, and XML-forbidden characters become �. Both changes appear in the report. An invalid catalogue language returns an error.
+
+For package-only job tests, first build the independent reader helper in the same Cargo profile, e.g. `cargo build -p ebook-reader --bin ebook-reader-helper && cargo test -p ebook-convert`.
+
 The host copies the input into private scratch space. The read-only converter sandbox returns bytes over stdout. A second sandbox opens the staged EPUB and reads each chapter. Hidden staging files have no EPUB extension. Normal exits clean up staging and scratch. If the host process dies, its caller may remove orphaned staging files in its own output directory.
 
 Build the helpers and run an independent conformance check on a converted book:

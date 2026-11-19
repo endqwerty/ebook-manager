@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::io::{Cursor, Write};
 use zip::{write::SimpleFileOptions, ZipWriter};
 
-fn xml(value: &str) -> Result<String, Error> {
+fn escape_xml(value: &str, replaced: &mut bool) -> Result<String, Error> {
     let mut escaped = String::new();
     for ch in value.chars() {
         match ch {
@@ -19,9 +19,8 @@ fn xml(value: &str) -> Result<String, Error> {
             | '\u{e000}'..='\u{fffd}'
             | '\u{10000}'..='\u{10ffff}' => escaped.push(ch),
             _ => {
-                return Err(Error::Invalid(
-                    "text contains invalid XML characters".into(),
-                ))
+                escaped.push('�');
+                *replaced = true;
             }
         }
         if escaped.len() > 16 << 20 {
@@ -88,16 +87,24 @@ pub fn write(
     );
     let mut spine = String::new();
     let mut toc = String::new();
+    let mut replaced = false;
+    let mut xml = |s: &str| escape_xml(s, &mut replaced);
     let title = xml(metadata.title.as_deref().unwrap_or(&book.title).trim())?;
     if title.is_empty() {
         return Err(Error::Invalid("missing title".into()));
     }
-    let lang = metadata
+    let override_language = metadata.language.is_some();
+    let mut lang = metadata
         .language
         .or(book.language)
         .unwrap_or_else(|| "und".into());
     if lang.parse::<language_tags::LanguageTag>().is_err() {
-        return Err(Error::Invalid("invalid publication language".into()));
+        if override_language {
+            return Err(Error::Invalid("invalid catalogue language".into()));
+        }
+        lang = "und".into();
+        book.losses
+            .push("Unrecognised source language was replaced with und (undetermined).".into());
     }
     for (i, image) in book.images.iter().enumerate() {
         let (ext, mime) = image_type(image.kind);
@@ -178,6 +185,12 @@ pub fn write(
     if bytes.len() as u64 > OUTPUT_LIMIT {
         return Err(Error::Limit);
     }
+    if replaced {
+        book.losses.push(
+            "Characters forbidden in EPUB XML were replaced with the replacement character (�)."
+                .into(),
+        );
+    }
     Ok((book.losses, bytes))
 }
 
@@ -224,6 +237,27 @@ mod tests {
         );
         assert!(read("s0.xhtml").contains("<p>&lt;img&gt; &amp; fish</p>"));
         assert!(read("nav.xhtml").contains("A &amp; B"));
+    }
+    #[test]
+    fn e2_replaces_invalid_source_characters_and_language_with_a_report() {
+        let mut parsed = book();
+        parsed.title = "First\u{1b}title".into();
+        parsed.language = Some("en_US".into());
+        parsed.sections[0]
+            .blocks
+            .push(Block::Paragraph("Text\0.".into()));
+        let (losses, bytes) = write(parsed, Metadata::default(), None).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut package = String::new();
+        archive
+            .by_name("book.opf")
+            .unwrap()
+            .read_to_string(&mut package)
+            .unwrap();
+        assert!(
+            package.contains("First�title") && package.contains("<dc:language>und</dc:language>")
+        );
+        assert_eq!(losses.len(), 2);
     }
     #[test]
     fn e2_refuses_an_unresolved_image() {

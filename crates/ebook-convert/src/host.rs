@@ -137,7 +137,11 @@ fn convert(req: Request, config: Config, state: &Shared) -> Result<Converted, Er
     let valid = |s: &str| s.len() <= 512 && !s.chars().any(char::is_control);
     let losses = result.map_err(|err| match &err {
         Error::Protected | Error::Limit => err,
-        Error::Invalid(s) | Error::Unsupported(s) | Error::Sandbox(s) if valid(s) => err,
+        Error::Invalid(s) | Error::Unsupported(s) | Error::Sandbox(s) | Error::Io(s)
+            if valid(s) =>
+        {
+            err
+        }
         _ => bad_reply(),
     })?;
     if losses.len() > 128 || !losses.iter().all(|s| valid(s)) {
