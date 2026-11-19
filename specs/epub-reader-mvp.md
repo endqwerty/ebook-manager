@@ -180,11 +180,14 @@ that take more than the package to find: a word count and a cover.
   is another type such as SVG, it fails to decode, it is a JPEG that a strict
   decode refuses, the decoder stops, or it
   would need enlarging more than three times. The pixel count is checked from
-  the header before any pixel is decoded. A JPEG is decoded strictly once
-  before it is used, because the lenient decoder fills in the rest of a file
-  that stops early. Bytes after the picture's end are ignored. Damage that
-  leaves a file every decoder accepts is not detected: a JPEG cut short and
-  then closed with an end marker is used with its missing part blank.
+  the header before any pixel is decoded. A JPEG must also have its
+  end marker after its picture data and pass a strict decode before it is
+  used, because the lenient decoder fills in the rest of a file that stops
+  early. So a JPEG that stops anywhere before its end gives no cover. Bytes
+  after the picture's end are ignored. Damage that this decoder accepts is
+  not detected, and the cover is used as it decodes: a file cut and then
+  given an end marker, which some stricter decoders refuse, or a changed
+  byte inside the picture data.
 - **V5** The host accepts a cover only when both sides are at least 1, the
   width at most 256, the height at most 384, and the pixel data is exactly
   width times height times 3 bytes, computed without overflow. Any other

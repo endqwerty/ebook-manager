@@ -72,13 +72,22 @@ fn decode(bytes: &[u8], max_pixels: u64) -> Option<RgbaImage> {
 
 /// The lenient JPEG decoder repairs a file that stops early and returns a
 /// picture with the missing part filled in, which is not the book's cover.
-/// So a JPEG is first decoded once by the same decoder in its strict mode,
-/// which refuses data that ends before the picture does, and the result is
-/// thrown away. Bytes after the picture's end are not read and do not matter.
-/// This catches what a decoder can know. A file cut short and then closed
-/// with an end marker is, to any decoder, a finished picture with little
-/// data, and is used with its missing part blank.
+/// Two checks refuse such a file. The picture data must be followed by an
+/// end-of-image marker, which a file that simply stops does not have. And
+/// the same decoder in its strict mode must accept the file, which catches
+/// data that runs out long before the marker's place. Bytes after the
+/// picture's end do not matter to either. Damage this decoder accepts is
+/// not caught: a file cut and then given an end marker, or a changed byte
+/// that still decodes, is used as it decodes.
 fn jpeg_is_whole(bytes: &[u8], width: u32, height: u32) -> bool {
+    let Some(scan) = first_scan(bytes) else {
+        return false;
+    };
+    // Inside picture data a 0xFF is always followed by a zero or a restart
+    // marker, so this pair can only be the end marker.
+    if !bytes[scan..].windows(2).any(|w| w == [0xFF, 0xD9]) {
+        return false;
+    }
     let options = zune_core::options::DecoderOptions::default()
         .set_strict_mode(true)
         .set_max_width(width as usize)
@@ -86,6 +95,29 @@ fn jpeg_is_whole(bytes: &[u8], width: u32, height: u32) -> bool {
     zune_jpeg::JpegDecoder::new_with_options(zune_core::bytestream::ZCursor::new(bytes), options)
         .decode()
         .is_ok()
+}
+
+/// Where the picture's first scan starts, found by stepping over the header
+/// segments by their lengths. A thumbnail embedded in a header segment is
+/// stepped over with it, so its own markers are not mistaken for the
+/// picture's.
+fn first_scan(bytes: &[u8]) -> Option<usize> {
+    let mut at = 2;
+    loop {
+        if *bytes.get(at)? != 0xFF {
+            return None;
+        }
+        match *bytes.get(at + 1)? {
+            0xFF => at += 1,
+            0xDA => return Some(at),
+            0x01 | 0xD0..=0xD8 => at += 2,
+            0xD9 => return None,
+            _ => {
+                let len = u16::from_be_bytes([*bytes.get(at + 2)?, *bytes.get(at + 3)?]);
+                at += 2 + usize::from(len.max(2));
+            }
+        }
+    }
 }
 
 /// The thumbnail's size: the picture scaled to fit within the maximum with
@@ -218,6 +250,39 @@ mod tests {
         assert_eq!(fit(128, 128), Some((256, 256)));
         assert_eq!(fit(80, 120), None);
         assert_eq!(fit(85, 85), None);
+    }
+
+    fn jpeg(width: u32, height: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([(3 * x + y) as u8, (x + 5 * y) as u8, (7 * x + 3 * y) as u8])
+        });
+        let mut out = Vec::new();
+        DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut out), ImageFormat::Jpeg)
+            .unwrap();
+        out
+    }
+
+    /// A copy or download that stopped early leaves the start of the file.
+    /// However much is missing, even one byte, there is no cover.
+    #[test]
+    fn a_jpeg_that_stops_anywhere_before_its_end_is_refused() {
+        let whole = jpeg(48, 72);
+        assert!(decode(&whole, 1_000_000).is_some());
+        for len in 0..whole.len() {
+            assert!(
+                decode(&whole[..len], 1_000_000).is_none(),
+                "first {len} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_after_a_whole_jpeg_do_not_cost_the_cover() {
+        let mut trailed = jpeg(48, 72);
+        let plain = decode(&trailed, 1_000_000).unwrap();
+        trailed.extend_from_slice(b"ordinary trailing bytes\xFF\xDA");
+        assert_eq!(decode(&trailed, 1_000_000), Some(plain));
     }
 
     #[test]
