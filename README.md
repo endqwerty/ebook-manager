@@ -6,8 +6,9 @@ mounted e-reader. Conversion, wireless sync and mobile apps are in the backlog.
 
 ## Run on Linux
 
-Install a recent stable Rust toolchain, a C compiler, pkg-config, GTK 4.12 or
-later, libadwaita 1.5 or later development files, Bubblewrap, Python 3 and Make. On Arch the system
+Use Linux 5.11 or later and Bubblewrap 0.8.0 or later. Building also needs a
+recent stable Rust toolchain, a C compiler, pkg-config, the GTK 4.12+ and
+libadwaita 1.5+ development files, Python 3 and Make. On Arch the system
 packages are `base-devel gtk4 libadwaita bubblewrap python`. CI on Ubuntu 26.04 uses
 `build-essential pkg-config libgtk-4-dev libadwaita-1-dev bubblewrap python3`.
 
@@ -20,7 +21,12 @@ make install
 
 The installer puts both the desktop app and its EPUB helper in `~/.local/bin`.
 The **Ebook Manager** menu entry opens the installed executable directly. For a
-development run, build all binaries together with
+custom install prefix, use an absolute path without `=` or `%` so GTK can open
+its menu entry. If the reader reports that isolation is unavailable, check
+`bwrap --version` and whether your Linux session permits unprivileged user
+namespaces. The app requires its sandbox for import and reading.
+
+For a development run, build all binaries together with
 `cargo build --workspace --bins --locked`, then run `target/debug/ebook-manager`.
 
 Choose **Add files** or **Add folder** to import. The app keeps managed copies
