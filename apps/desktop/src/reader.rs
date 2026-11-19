@@ -393,6 +393,34 @@ impl Reading {
                 }
             });
         }
+        // That window can also be destroyed from outside, as when a window
+        // manager ends. GTK 4.24 then unrealizes it, which the hook above
+        // hears. Earlier GTK tells the window nothing while the reader is
+        // modal, and goes on drawing to a surface that is gone. Its surface
+        // does say it is no longer mapped, so the reader leaves then and
+        // the application quits, as it does on later GTK.
+        if let Some(parent) = w.transient_for()
+            && let Some(surface) = parent.surface()
+        {
+            let weak = Rc::downgrade(&reading);
+            let parent = parent.downgrade();
+            surface.connect_mapped_notify(move |surface| {
+                if !surface.is_destroyed() {
+                    return;
+                }
+                // Not from inside the surface's own destruction.
+                let (weak, parent) = (weak.clone(), parent.clone());
+                glib::idle_add_local_once(move || {
+                    let Some(parent) = parent.upgrade() else {
+                        return;
+                    };
+                    if let Some(r) = weak.upgrade() {
+                        let _ = r.leave();
+                    }
+                    orphaned(&parent);
+                });
+            });
+        }
         // The application can also quit with no window being closed, as it
         // does when the session ends.
         if let Some(app) = gio::Application::default() {
@@ -412,15 +440,11 @@ impl Reading {
             {
                 position_error(&parent, &e);
             }
-            // The window the reader was opened from may have been destroyed
-            // from outside, as when a window manager ends. GTK before 4.24
-            // tells that window nothing while this one is modal, so it
-            // would stay, unseen, and the app would run on with no window.
-            // It goes with the reader, and the app ends with its last window.
-            if let Some(parent) = w.transient_for()
-                && parent.surface().is_none_or(|s| s.is_destroyed())
-            {
-                glib::idle_add_local_once(move || parent.destroy());
+            // If the window the reader was opened from was destroyed from
+            // outside and nothing said so, the app would run on with no
+            // window. See `orphaned`.
+            if let Some(parent) = w.transient_for() {
+                glib::idle_add_local_once(move || orphaned(&parent));
             }
             glib::Propagation::Proceed
         });
@@ -756,6 +780,21 @@ impl Reading {
     /// nothing the second time.
     fn leave(self: &Rc<Self>) -> Result<()> {
         self.step(Input::Leave)
+    }
+}
+
+/// End the application if `parent`, the window a reader was opened from,
+/// has lost its surface to something outside the app. Nothing may be asked
+/// of such a window: GTK complains when one is closed or destroyed. So it
+/// is only taken off the application's list, and the application quits. A
+/// window that is hidden or minimised still has its surface, and one being
+/// closed in the ordinary way has none, so neither is touched.
+fn orphaned(parent: &gtk::Window) {
+    if parent.surface().is_some_and(|s| s.is_destroyed())
+        && let Some(app) = parent.application()
+    {
+        app.remove_window(parent);
+        app.quit();
     }
 }
 

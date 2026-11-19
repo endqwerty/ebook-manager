@@ -218,8 +218,8 @@ process.
 |---|---|---|
 | The reader's **Back to library** or its close button | Saved by leaving | Ended by leaving |
 | The library window is asked to close | Nothing happens: the reader is modal, so the request is not delivered while it is open | Keeps running |
-| The library window is destroyed without being asked, GTK 4.24 or later | Saved by leaving, from the parent's hook. The application ends. | Ended by leaving |
-| The same on GTK before 4.24 (Ubuntu 26.04 has 4.22) | GTK tells the library window nothing while the reader is modal, so the reader goes on working. Saved by leaving when the reader is closed; the reader then closes the destroyed window too, so the application ends with no window left behind. | Ended by leaving |
+| The library window is destroyed without being asked, GTK 4.24 or later | GTK unrealizes the window. Saved by leaving, from the parent's hook. The application ends. | Ended by leaving |
+| The same on GTK before 4.24 (Ubuntu 26.04 has 4.22) | GTK tells the library window nothing while the reader is modal, and would go on drawing to the surface that is gone. The surface itself says it is no longer mapped; the reader hears that, leaves and saves, takes the window off the application's list without closing or destroying it, and the application quits. | Ended by leaving |
 | The application quits, as when the session ends | Saved by leaving, from the application's shutdown | Ended by leaving |
 | SIGTERM, SIGINT or SIGKILL to the application | Not saved after the last place held | Gone with the application. No record of its own. |
 | The display goes away | Not saved after the last place held | Gone with the application. No record of its own. |
