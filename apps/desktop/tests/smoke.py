@@ -18,6 +18,8 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi, GLib
 
+SCREEN = (1100, 800)
+
 
 def epub(path, revised=False):
     ns = "http://www.w3.org/1999/xhtml"
@@ -113,6 +115,82 @@ def markers(image):
     return [int(n) for n in re.findall(r"Marker (\d+)", text)]
 
 
+def size(title):
+    wid = subprocess.check_output(
+        ["xdotool", "search", "--onlyvisible", "--name", "^" + title + "$"], text=True
+    ).splitlines()[-1]
+    out = subprocess.check_output(
+        ["xdotool", "getwindowgeometry", "--shell", wid], text=True
+    )
+    values = dict(line.split("=") for line in out.split())
+    return int(values["WIDTH"]), int(values["HEIGHT"])
+
+
+def keys(evidence):
+    """Turn pages and toggle full screen from the keyboard, starting and ending in chapter one."""
+    title = "The Lantern Atlas · Revised"
+
+    def press(key):
+        xd("key", key)
+        time.sleep(0.4)
+
+    def page(name):
+        capture(title, evidence / name)
+        found = markers(evidence / name)
+        assert found, name
+        return found
+
+    first = page("page-1.png")
+    assert first[0] == 0, first
+    press("Right")
+    second = page("page-2.png")
+    assert second[0] > 0 and first[-1] <= second[0] <= first[-1] + 1, (first, second)
+    press("Left")
+    assert page("page-1-again.png") == first
+    press("Next")
+    assert page("page-2-again.png") == second
+    press("Prior")
+    assert page("page-1-again.png") == first
+    shown, turns = first, 0
+    while True:
+        press("Right")
+        turns += 1
+        assert turns < 30, "Right never reached chapter two"
+        if any("Chapter 2 of 2" in (n.get_name() or "") for n in walk(Atspi.get_desktop(0))):
+            break
+        turned = page("page-turned.png")
+        assert turned[0] <= shown[-1] + 1 and turned[-1] > shown[-1], (shown, turned)
+        shown = turned
+    assert shown[-1] == 79, shown
+    assert page("chapter-2.png")[0] == 0
+    press("Left")
+    find("Chapter 1 of 2", contains=True)
+    assert page("chapter-1-end.png")[-1] == 79
+    print(
+        f"PASS arrow and page keys: {turns} turns through chapter one without a skipped paragraph, back from chapter two to its end",
+        flush=True,
+    )
+    windowed = size(title)
+    press("F11")
+    find("Leave full screen", "button")
+    assert size(title) == SCREEN, size(title)
+    capture(title, evidence / "full-screen.png")
+    press("Right")
+    find("Chapter 2 of 2", contains=True)
+    press("Left")
+    find("Chapter 1 of 2", contains=True)
+    press("Escape")
+    find("Full screen", "button")
+    assert size(title) == windowed, (size(title), windowed)
+    click("Full screen")
+    find("Leave full screen", "button")
+    assert size(title) == SCREEN, size(title)
+    press("F11")
+    find("Full screen", "button")
+    assert size(title) == windowed, (size(title), windowed)
+    print("PASS full screen from F11 and its button, left with Escape and F11", flush=True)
+
+
 def run(binary, evidence, root):
     env = dict(
         os.environ,
@@ -182,6 +260,7 @@ def run(binary, evidence, root):
         print("PASS search and edit", flush=True)
         click("Read")
         find("Chapter 1 of 2", contains=True)
+        keys(evidence)
         click("Next")
         find("Chapter 2 of 2", contains=True)
         view = find("", "text")
@@ -268,9 +347,21 @@ if __name__ == "__main__":
         ]
         registry = next(p for p in registries if p.exists())
         proc = subprocess.Popen([registry])
+        # Full screen is a request to the window manager, so the session needs one.
+        manager = subprocess.Popen(["openbox"])
         try:
+            deadline = time.monotonic() + 10
+            while subprocess.run(
+                ["xdotool", "getactivewindow"], capture_output=True
+            ).returncode and subprocess.run(
+                ["xdotool", "get_num_desktops"], capture_output=True, text=True
+            ).stdout.strip() in ("", "0"):
+                assert time.monotonic() < deadline, "openbox did not start"
+                time.sleep(0.1)
             run(binary, evidence, Path(os.environ["HOME"]))
         finally:
+            manager.terminate()
+            manager.wait(timeout=10)
             proc.terminate()
             proc.wait(timeout=10)
     else:
@@ -297,7 +388,7 @@ if __name__ == "__main__":
                     "xvfb-run",
                     "-a",
                     "-s",
-                    "-screen 0 1100x800x24 -nolisten tcp",
+                    f"-screen 0 {SCREEN[0]}x{SCREEN[1]}x24 -nolisten tcp",
                     "dbus-run-session",
                     "--",
                     sys.executable,

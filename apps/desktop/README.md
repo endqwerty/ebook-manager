@@ -1,6 +1,6 @@
 # Ebook Manager for Linux
 
-Run `ebook-manager` to open your shelf. Choose **Add files** or **Add folder** to import DRM-free EPUBs. Use **Read** to open the chapter reader, **Edit** to correct a shelf entry, and **Export** to copy its EPUB to a folder. On an Xteink X4 Pro running the CrossPoint fork, switch to USB Drive mode and choose a folder on the mounted SD card.
+Run `ebook-manager` to open your shelf. Choose **Add files** or **Add folder** to import DRM-free EPUBs. Use **Read** to open the chapter reader, where Left and Right turn pages and F11 fills the screen, **Edit** to correct a shelf entry, and **Export** to copy its EPUB to a folder. On an Xteink X4 Pro running the CrossPoint fork, switch to USB Drive mode and choose a folder on the mounted SD card.
 
 The GTK4 application uses GTK 4.12 or later and libadwaita 1.5 or later. Install the GTK and libadwaita development packages and bubblewrap. Imports and reading require a working bubblewrap sandbox. From the repository root, run `make install` to build the optimized desktop binary and helper together and install them in `~/.local/bin`, with the launcher in `~/.local/share/applications`. The helper must be discoverable by the reader crate, normally next to the desktop binary. The installer writes the absolute executable path into the application menu entry.
 
@@ -8,7 +8,7 @@ The GTK4 application uses GTK 4.12 or later and libadwaita 1.5 or later. Install
 
 ## Exercise the desktop
 
-From the repository root containing the workspace Cargo.toml, build and run the smoke driver in a private graphical session. It requires Xvfb, D-Bus, xdotool, ImageMagick, Tesseract with English data, Python with PyGObject, and AT-SPI 2. The driver creates a temporary home directory, generates all its books, exercises the GTK controls, restarts the process and compares the exported bytes. Its two arguments are the desktop binary and a directory for screenshots, including the scrolled and restored pages.
+From the repository root containing the workspace Cargo.toml, build and run the smoke driver in a private graphical session. It requires Xvfb, Openbox, D-Bus, xdotool, ImageMagick, Tesseract with English data, Python with PyGObject, and AT-SPI 2. The driver creates a temporary home directory, generates all its books, exercises the GTK controls and reader keys, restarts the process and compares the exported bytes. Its two arguments are the desktop binary and a directory for screenshots, including the scrolled and restored pages.
 
 ```sh
 cargo build --release --workspace --bins
@@ -18,4 +18,4 @@ python3 apps/desktop/tests/smoke.py \
 
 See [desktop behaviour](../../specs/desktop-mvp.md) for the acceptance cases.
 
-The [empty and populated shelf](tests/evidence/shelf.png), [folder import report](tests/evidence/import.png), [chapter reader](tests/evidence/reader.png) and [reading position across restart](tests/evidence/resume.png) show the synthetic smoke library.
+The [empty and populated shelf](tests/evidence/shelf.png), [folder import report](tests/evidence/import.png), [chapter reader](tests/evidence/reader.png), [full-screen reader](tests/evidence/full-screen.png) and [reading position across restart](tests/evidence/resume.png) show the synthetic smoke library.
