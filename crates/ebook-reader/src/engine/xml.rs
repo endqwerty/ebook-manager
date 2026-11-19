@@ -73,7 +73,7 @@ pub fn tokenize(src: &str, html: bool, mut f: impl FnMut(Tok) -> bool) -> bool {
             Err(_) => {
                 clean = false;
                 errors += 1;
-                let at = reader.buffer_position() as u64;
+                let at = reader.buffer_position();
                 if at == last_error_at || errors > 1000 {
                     break;
                 }

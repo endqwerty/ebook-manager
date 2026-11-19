@@ -358,11 +358,12 @@ impl Extractor<'_> {
             }
             if self.cur.pending_space {
                 self.cur.pending_space = false;
-                // The gap belongs to the text before it, so a link or bold
-                // run never starts with a styled space.
+                // The gap goes with the text before it, unless that text is a
+                // link that ends here: a link never trails an underlined space.
+                let now = self.links.last().cloned().flatten();
                 match self.cur.spans.last_mut() {
-                    Some(last) => last.text.push(' '),
-                    None => self.push_raw(' '),
+                    Some(last) if last.link.is_none() || last.link == now => last.text.push(' '),
+                    _ => self.push_styled(' ', None),
                 }
             }
             self.cur.line_start = false;
@@ -411,10 +412,14 @@ impl Extractor<'_> {
     }
 
     fn push_raw(&mut self, c: char) {
+        let link = self.links.last().cloned().flatten();
+        self.push_styled(c, link);
+    }
+
+    fn push_styled(&mut self, c: char, link: Option<Link>) {
         if self.cur.kind.is_none() {
             self.cur.kind = Some(self.kind_now());
         }
-        let link = self.links.last().cloned().flatten();
         let (bold, italic, code) = (self.bold > 0, self.italic > 0, self.code > 0);
         let (superscript, subscript) = (self.sup > 0, self.sub > 0);
         if let Some(last) = self.cur.spans.last_mut() {
@@ -549,7 +554,7 @@ mod tests {
         assert_eq!(s[0].text, "plain ");
         assert!(s[1].bold && !s[1].italic && s[1].text == "bold ");
         assert!(s[2].bold && s[2].italic && s[2].text == "both ");
-        let out = s.iter().find(|s| s.text.trim() == "out").unwrap();
+        let out = s.iter().find(|s| s.text == "out").unwrap();
         assert_eq!(out.link, Some(Link::External("http://example.com/".into())));
         let inn = s.iter().find(|s| s.text == "in").unwrap();
         assert_eq!(inn.link, Some(Link::Internal(Target { chapter: 7, anchor: None })));
