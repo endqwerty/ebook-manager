@@ -41,6 +41,9 @@ pub struct Resolver<'a> {
 
 const MAX_DEPTH: usize = 400;
 const MAX_VALUE_CHARS: usize = 1024;
+/// An `id` and a link's anchor are cut at the same length, so a long one
+/// still names its target.
+const MAX_ANCHOR_CHARS: usize = 256;
 
 /// Written as elements. Everything else is left out and its content kept,
 /// unless it is in `DROPPED`.
@@ -114,10 +117,10 @@ const KEPT_MORE: [&str; 7] = ["thead", "time", "tr", "u", "ul", "var", "wbr"];
 /// Written with no content and no end tag of their own.
 const EMPTY: [&str; 5] = ["br", "hr", "img", "col", "wbr"];
 /// Left out with everything inside them.
-const DROPPED: [&str; 21] = [
+const DROPPED: [&str; 22] = [
     "script", "style", "template", "iframe", "frame", "frameset", "object", "embed", "applet",
     "audio", "video", "canvas", "svg", "math", "input", "button", "select", "textarea", "datalist",
-    "noscript", "head",
+    "noscript", "head", "title",
 ];
 const ATTRIBUTES: [&str; 10] = [
     "id", "class", "lang", "dir", "title", "alt", "colspan", "rowspan", "start", "value",
@@ -136,6 +139,10 @@ struct Skip {
     /// For `svg`: picture references seen and other drawn elements seen.
     images: Vec<String>,
     others: u32,
+    /// The element was hidden, so nothing stands in for it.
+    hidden: bool,
+    /// `style` elements open inside it.
+    styles: u32,
 }
 
 struct Writer<'a> {
@@ -151,6 +158,7 @@ struct Writer<'a> {
     title: String,
     heading: Option<String>,
     in_heading: u32,
+    heading_done: bool,
     language: Option<String>,
     right_to_left: bool,
     remote: bool,
@@ -172,6 +180,7 @@ pub fn sanitise(src: &str, max_nodes: usize, resolve: &Resolver<'_>) -> Sanitise
         title: String::new(),
         heading: None,
         in_heading: 0,
+        heading_done: false,
         language: None,
         right_to_left: false,
         remote: false,
@@ -251,14 +260,17 @@ fn write_text(out: &mut String, text: &str) -> u32 {
     units
 }
 
-fn write_attr(out: &mut String, name: &str, value: &str) {
+/// Write an attribute with at most `limit` characters of its value. `>` is
+/// escaped too, so a `>` in the markup always ends a tag.
+fn write_attr(out: &mut String, name: &str, value: &str, limit: usize) {
     out.push(' ');
     out.push_str(name);
     out.push_str("=\"");
-    for c in value.chars().filter(|c| allowed(*c)).take(MAX_VALUE_CHARS) {
+    for c in value.chars().filter(|c| allowed(*c)).take(limit) {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\t' | '\n' => out.push(' '),
             c => out.push(c),
@@ -325,10 +337,14 @@ impl Writer<'_> {
             if skip.name == "head" && name == "title" {
                 self.in_title = true;
             }
+            if name == "style" {
+                skip.styles += 1;
+            }
             return;
         }
+        let concealed = hidden(attrs);
         match name {
-            "html" | "body" => {
+            "html" | "body" if !concealed => {
                 if self.language.is_none() {
                     self.language = attr(attrs, "xml:lang")
                         .or_else(|| attr(attrs, "lang"))
@@ -349,12 +365,14 @@ impl Writer<'_> {
             }
             _ => {}
         }
-        if DROPPED.contains(&name) || hidden(attrs) {
+        if DROPPED.contains(&name) || concealed {
             self.skip = Some(Skip {
                 name: name.to_owned(),
                 depth: 1,
                 images: Vec::new(),
                 others: 0,
+                hidden: concealed,
+                styles: u32::from(name == "style"),
             });
             return;
         }
@@ -376,14 +394,15 @@ impl Writer<'_> {
             match attr(attrs, "href").and_then(|h| (self.resolve.link)(h)) {
                 Some(Href::Chapter(chapter, anchor)) => {
                     let mut href = format!("/c/{chapter}");
-                    if let Some(anchor) = anchor {
+                    if let Some(mut anchor) = anchor {
+                        truncate_chars(&mut anchor, MAX_ANCHOR_CHARS);
                         href.push('#');
                         href.push_str(&percent_encode(&anchor));
                     }
-                    write_attr(&mut self.out, "href", &href);
+                    write_attr(&mut self.out, "href", &href, usize::MAX);
                 }
                 Some(Href::External(address)) => {
-                    write_attr(&mut self.out, "data-external", &address)
+                    write_attr(&mut self.out, "data-external", &address, usize::MAX)
                 }
                 None => {}
             }
@@ -394,7 +413,7 @@ impl Writer<'_> {
         }
         self.out.push('>');
         self.open.push(name);
-        if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+        if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") && !self.heading_done {
             self.in_heading += 1;
             if self.heading.is_none() {
                 self.heading = Some(String::new());
@@ -417,23 +436,31 @@ impl Writer<'_> {
                 continue;
             }
             seen.push(name);
-            write_attr(&mut self.out, name, value);
+            let limit = if name == "id" {
+                MAX_ANCHOR_CHARS
+            } else {
+                MAX_VALUE_CHARS
+            };
+            write_attr(&mut self.out, name, value, limit);
         }
     }
 
     /// An `img`, or its text alternative when the picture cannot be served.
     fn picture(&mut self, src: Option<&str>, alt: Option<&str>, attrs: &[(String, String)]) {
-        match src.and_then(|s| (self.resolve.picture)(s)) {
+        // With the nesting limit reached a picture is left out like any other
+        // element, and its words stand in for it.
+        let room = self.open.len() < MAX_DEPTH;
+        match src.and_then(|s| (self.resolve.picture)(s)).filter(|_| room) {
             Some(id) => {
                 if !self.count() {
                     return;
                 }
                 self.out.push_str("<img");
-                write_attr(&mut self.out, "src", &format!("/r/{id}"));
+                write_attr(&mut self.out, "src", &format!("/r/{id}"), usize::MAX);
                 // `alt` is always written, so a missing picture has a place
                 // for its words and a decorative one is skipped when read out.
                 if attr(attrs, "alt").is_none() {
-                    write_attr(&mut self.out, "alt", "");
+                    write_attr(&mut self.out, "alt", "", 0);
                 }
                 self.attributes(attrs);
                 self.out.push_str("/>");
@@ -451,6 +478,9 @@ impl Writer<'_> {
             if skip.name == "head" && name == "title" {
                 self.in_title = false;
             }
+            if name == "style" {
+                skip.styles = skip.styles.saturating_sub(1);
+            }
             if name != skip.name {
                 return;
             }
@@ -460,6 +490,7 @@ impl Writer<'_> {
             }
             let skip = self.skip.take().expect("checked above");
             match skip.name.as_str() {
+                _ if skip.hidden => {}
                 "svg" => {
                     let wrapped = (skip.others == 0 && skip.images.len() == 1)
                         .then(|| (self.resolve.picture)(&skip.images[0]))
@@ -485,8 +516,10 @@ impl Writer<'_> {
         };
         while self.open.len() > at {
             let closing = self.open.pop().expect("length checked");
-            if matches!(closing, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
-                self.in_heading = self.in_heading.saturating_sub(1);
+            if matches!(closing, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") && self.in_heading > 0 {
+                self.in_heading -= 1;
+                // The title is the first heading alone.
+                self.heading_done = self.in_heading == 0;
             }
             close(&mut self.out, closing);
         }
@@ -497,7 +530,7 @@ impl Writer<'_> {
             if self.in_title && self.title.len() < 4096 {
                 self.title.push_str(text);
             }
-            if skip.name == "style" && !self.remote {
+            if skip.styles > 0 && !self.remote {
                 self.remote = css_is_remote(text);
             }
             return;
@@ -730,5 +763,65 @@ mod tests {
     fn anchors_are_percent_encoded() {
         let s = run(r#"<body><a href="ch2.xhtml#a b&quot;c">x</a></body>"#);
         assert_eq!(s.markup, r#"<a href="/c/1#a%20b%22c">x</a>"#);
+    }
+
+    #[test]
+    fn a_picture_past_the_nesting_limit_is_its_words() {
+        let s = run(&format!(
+            "<body>{}<img src=\"cover.png\" alt=\"Deep\"/><svg><image href=\"cover.png\"/></svg></body>",
+            "<div>".repeat(MAX_DEPTH)
+        ));
+        let (names, _, _) = parse(&s.markup);
+        assert_eq!(names.len(), MAX_DEPTH);
+        assert!(!s.markup.contains("<img"));
+        assert!(s.markup.contains("Deep"));
+    }
+
+    #[test]
+    fn a_hidden_body_and_a_hidden_cover_are_left_out() {
+        let s = run(r#"<html><body hidden=""><p>concealed</p></body></html>"#);
+        assert_eq!(s.markup, "");
+        let s = run(r#"<html hidden="hidden"><body><p>concealed</p></body></html>"#);
+        assert_eq!(s.markup, "");
+        let s =
+            run(r#"<body><svg style="display:none"><image href="cover.png"/></svg>shown</body>"#);
+        assert_eq!(s.markup, "shown");
+        assert!(!s.unsupported);
+    }
+
+    #[test]
+    fn remote_styles_in_the_head_are_noticed() {
+        let s = run("<html><head><style>p {background:url(https://example.invalid/a)}</style></head><body><p>x</p></body></html>");
+        assert!(s.remote_references);
+        let s = run("<html><head><style>p {background:url(a.png)}</style></head><body><p>x</p></body></html>");
+        assert!(!s.remote_references);
+    }
+
+    #[test]
+    fn a_long_anchor_is_cut_on_a_character_in_both_places() {
+        let name = "\u{1F600}".repeat(300);
+        let s = run(&format!(
+            r#"<body><p id="{name}">t</p><a href="ch2.xhtml#{name}">x</a></body>"#
+        ));
+        let (_, attrs, _) = parse(&s.markup);
+        let id = &attrs.iter().find(|(k, _)| k == "id").unwrap().1;
+        let href = &attrs.iter().find(|(k, _)| k == "href").unwrap().1;
+        assert_eq!(id.chars().count(), 256);
+        let encoded: String = id.bytes().map(|b| format!("%{b:02X}")).collect();
+        assert_eq!(href, &format!("/c/1#{encoded}"));
+    }
+
+    #[test]
+    fn the_title_is_the_first_heading_only() {
+        let s = run("<body><h1>First</h1><p>para</p><h2>Second</h2></body>");
+        assert_eq!(s.first_heading.as_deref(), Some("First"));
+        let s = run("<body><title>body title</title><p>x</p></body>");
+        assert_eq!(s.markup, "<p>x</p>");
+    }
+
+    #[test]
+    fn a_greater_than_sign_in_a_value_is_escaped() {
+        let s = run(r#"<body><p title="a>b">t</p></body>"#);
+        assert_eq!(s.markup, r#"<p title="a&gt;b">t</p>"#);
     }
 }

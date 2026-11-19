@@ -319,9 +319,12 @@ fn truncated_markup_still_parses() {
     let content = book.read_content(0).unwrap();
     assert!(content.truncated);
     let parsed = parse(&content.markup);
-    assert!(parsed.elements.len() <= 60);
+    // Exactly 60 elements and text runs: the line end before the div, the
+    // div, the ul, and 19 items of li, b and text.
+    assert_eq!(parsed.elements.len(), 40);
+    assert_eq!(parsed.text, format!("\n{}", "item".repeat(19)));
     assert_eq!(content.length as usize, parsed.text.encode_utf16().count());
-    assert!(content.markup.ends_with("</ul></div>"));
+    assert!(content.markup.ends_with("</li></ul></div>"));
 }
 
 /// C7: a chapter's size is what the archive states, capped at the limit.
@@ -379,7 +382,7 @@ fn malformed_content_and_resource_replies_are_refused() {
             index: 0,
             title: None,
             linear: true,
-            size: 9,
+            size: u32::MAX,
         }],
         toc: vec![],
     })))
@@ -440,18 +443,36 @@ fn malformed_content_and_resource_replies_are_refused() {
             warnings: vec![],
         })
     };
-    let good = fake("good", &content("<p>a\u{1b}b\tc</p>", 4))
-        .read_content(0)
-        .unwrap();
+    let opened = fake("good", &content("<p>a\u{1b}b\tc</p>", 4));
+    // A size past the chapter limit is brought down to it.
+    assert_eq!(
+        opened.chapters()[0].size as u64,
+        config().limits.max_chapter_bytes
+    );
+    let good = opened.read_content(0).unwrap();
     assert_eq!(good.index, 0);
     assert_eq!(good.markup, "<p>ab\tc</p>");
     assert_eq!(good.title.as_deref(), Some("Atitle"));
     assert_eq!(good.language.as_deref(), Some("en"));
     assert!(good.styles.is_empty());
-    assert!(matches!(
-        fake("long", &content("<p>ab</p>", 10)).read_content(0),
-        Err(ReaderError::HelperFailed { .. })
-    ));
+    // The length must be the text's own, counted the way the page will.
+    let astral = fake(
+        "astral",
+        &content("<p title=\"x&gt;y\">a\u{1F600} &amp; &lt;b&gt;</p>", 9),
+    );
+    assert_eq!(astral.read_content(0).unwrap().length, 9);
+    for (name, markup, length) in [
+        ("long", "<p>ab</p>", 10),
+        ("short", "<p>x</p>", 0),
+        ("scalar", "<p>a\u{1F600}</p>", 2),
+        ("unclosed", "<p>x</p", 1),
+        ("entity", "<p>&nbsp;</p>", 1),
+    ] {
+        match fake(name, &content(markup, length)).read_content(0) {
+            Err(ReaderError::HelperFailed { .. }) => {}
+            other => panic!("{name}: expected a refusal, got {other:?}"),
+        }
+    }
 
     let png = picture(1, 1, ImageFormat::Png, |_, _| [0, 0, 0, 255]);
     let resource = |kind, base64: String| Payload::Resource(WireResource { kind, base64 });
@@ -473,10 +494,55 @@ fn malformed_content_and_resource_replies_are_refused() {
             resource(ResourceKind::Png, "iVBORw0KGgo!".into()),
         ),
         ("empty", resource(ResourceKind::Gif, String::new())),
+        ("loose-padding", {
+            // The same bytes with a bit set that canonical base64 leaves 0.
+            let mut text = base64_encode(&png[..png.len() - png.len() % 3 + 1]);
+            let at = text.len() - 3;
+            text.replace_range(at..at + 1, "R");
+            resource(ResourceKind::Png, text)
+        }),
     ] {
         match fake(name, &reply).read_resource(ResourceId(0)) {
             Err(ReaderError::HelperFailed { .. }) => {}
             other => panic!("{name}: expected a refusal, got {other:?}"),
         }
     }
+}
+
+/// C4, C8: the first manifest item to name a file decides what it is, and a
+/// reading-order item is a picture only when it says so itself.
+#[test]
+fn a_file_is_what_its_first_manifest_item_says() {
+    let dir = Scratch::new();
+    let png = picture(2, 2, ImageFormat::Png, |_, _| [0, 0, 0, 255]);
+    let bytes = package(Parts {
+        manifest: r#"<item id="text" href="shared.png" media-type="text/plain"/>
+<item id="png" href="shared.png" media-type="image/png"/>
+<item id="svg" href="shared.png" media-type="image/svg+xml"/>
+<item id="other" href="notes.txt" media-type="text/plain"/>
+<item id="absent" href="absent.xhtml" media-type="application/xhtml+xml"/>"#,
+        chapters: &[r#"<p><img src="shared.png" alt="Shared"/></p>"#],
+        spine_extra: r#"<itemref idref="svg"/><itemref idref="other"/><itemref idref="absent"/>"#,
+        files: &[("OEBPS/shared.png", &png), ("OEBPS/notes.txt", b"notes")],
+        ..Parts::default()
+    });
+    let book = reader().open(&dir.file("b.epub", &bytes)).unwrap();
+    let first = book.read_content(0).unwrap();
+    assert_eq!(first.markup.trim(), "<p>Shared</p>");
+    for index in [1, 2] {
+        let item = book.read_content(index).unwrap();
+        assert_eq!(item.markup, "", "item {index}");
+        assert_eq!(item.warnings, [ChapterWarning::UnsupportedContent]);
+    }
+    // C7: a file the archive lacks has size 0.
+    let sizes: Vec<u32> = book.chapters().iter().map(|c| c.size).collect();
+    assert_eq!(sizes[3], 0);
+    assert_eq!(sizes[2], 5);
+    // C8: the title falls back to the first heading alone.
+    let titled = simple(&["<h2>First</h2><p>para</p><h3>Second</h3>"], &[]);
+    let book = reader().open(&dir.file("t.epub", &titled)).unwrap();
+    assert_eq!(
+        book.read_content(0).unwrap().title.as_deref(),
+        Some("First")
+    );
 }

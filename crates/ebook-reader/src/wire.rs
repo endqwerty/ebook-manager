@@ -36,6 +36,33 @@ pub struct WireResource {
 
 const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+/// The UTF-16 length of the text in markup the helper wrote, or `None` when
+/// the text is not in the helper's form. That form makes this exact without
+/// parsing: `<` only starts a tag, `>` only ends one, and the only entities
+/// in text are `&amp;`, `&lt;` and `&gt;`.
+pub fn markup_text_units(markup: &str) -> Option<u32> {
+    let mut units = 0u32;
+    let mut rest = markup;
+    while let Some(c) = rest.chars().next() {
+        match c {
+            '<' => rest = &rest[rest.find('>')? + 1..],
+            '>' => return None,
+            '&' => {
+                let entity = ["&amp;", "&lt;", "&gt;"]
+                    .into_iter()
+                    .find(|e| rest.starts_with(e))?;
+                units = units.checked_add(1)?;
+                rest = &rest[entity.len()..];
+            }
+            c => {
+                units = units.checked_add(c.len_utf16() as u32)?;
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    Some(units)
+}
+
 pub fn base64_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -75,6 +102,10 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
             n = n << 6 | value(*c)?;
         }
         n <<= 6 * padding as u32;
+        // The bits padding stands in for are 0 in canonical text.
+        if n & ((1u32 << (8 * padding as u32)) - 1) != 0 {
+            return None;
+        }
         let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
         out.extend_from_slice(&bytes[..3 - padding]);
     }
@@ -158,7 +189,9 @@ mod tests {
         assert_eq!(base64_encode(b"Man"), "TWFu");
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert_eq!(base64_encode(b"M"), "TQ==");
-        for bad in ["TWF", "TW=u", "T===", "TQ==TWFu", "TW!u", "TWFu\n"] {
+        for bad in [
+            "TWF", "TW=u", "T===", "TQ==TWFu", "TW!u", "TWFu\n", "TR==", "TWF=",
+        ] {
             assert_eq!(base64_decode(bad), None, "{bad}");
         }
     }

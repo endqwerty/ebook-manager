@@ -298,7 +298,11 @@ fn content(
     };
     let pictures = resource::pictures(package);
     if item.media_type.starts_with("image/") {
-        match pictures.get(item.path.as_str()) {
+        // The item's own type decides, then the file's first manifest item.
+        let id = pictures
+            .get(item.path.as_str())
+            .filter(|_| resource::is_picture(&item.media_type));
+        match id {
             Some(id) if archive.contains(&item.path) => {
                 out.markup = format!(r#"<img src="/r/{id}" alt=""/>"#);
             }

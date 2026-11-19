@@ -7,8 +7,8 @@ use crate::model::{
     ResourceKind, Survey, SurveyedCover, Thumbnail, TocEntry,
 };
 use crate::wire::{
-    base64_decode, BookOutline, Payload, Response, WireError, WireErrorKind, WireSurvey,
-    BOOK_IN_SANDBOX, HELPER_IN_SANDBOX,
+    base64_decode, markup_text_units, BookOutline, Payload, Response, WireError, WireErrorKind,
+    WireSurvey, BOOK_IN_SANDBOX, HELPER_IN_SANDBOX,
 };
 use std::ffi::OsString;
 use std::io::Read;
@@ -427,8 +427,10 @@ impl Book {
         }
         scrub_metadata(&mut metadata);
         let count = chapters.len() as u32;
+        let largest = limits.max_chapter_bytes.min(u64::from(u32::MAX)) as u32;
         for (i, c) in chapters.iter_mut().enumerate() {
             c.index = i as u32;
+            c.size = c.size.min(largest);
             if let Some(t) = &mut c.title {
                 scrub(t);
             }
@@ -502,17 +504,18 @@ impl Book {
         let n = index.to_string();
         match self.reader.run(Some(&self.source.path), &["content", &n])? {
             Payload::Content(mut content) => {
-                // The markup is not parsed here. Its text cannot be longer
-                // than the markup that holds it, in either unit.
-                if content.length as usize > content.markup.len() {
-                    return Err(ReaderError::HelperFailed {
-                        detail: "inconsistent reply".into(),
-                    });
-                }
                 content.index = index;
                 // No style sheet is served yet, so none is named.
                 content.styles.clear();
                 scrub_text(&mut content.markup);
+                // The markup is not parsed here, but its text is counted,
+                // because every saved place and search result rests on the
+                // length being the text's own.
+                if markup_text_units(&content.markup) != Some(content.length) {
+                    return Err(ReaderError::HelperFailed {
+                        detail: "inconsistent reply".into(),
+                    });
+                }
                 if let Some(t) = &mut content.title {
                     scrub(t);
                 }

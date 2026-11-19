@@ -69,11 +69,16 @@ Showing a chapter in a web view:
 ```rust
 let content = book.read_content(0)?;                  // markup, length, language, warnings
 // content.markup: children of an XHTML <body>. Wrap it in your own document.
-//   <a href="/c/3#note1">      a place in the book: chapter 3, anchor note1
+//   <a href="/c/3#note1">      a place in the book: chapter 3, anchor note1.
+//                              The anchor is percent-encoded once; decode it once
+//                              and look for that id. `/c/3` alone is the chapter's start.
 //   <a data-external="https://…">  an outside address, inert; ask before opening
 //   <img src="/r/12" alt="…"/>  a picture: ResourceId(12)
 let picture = book.read_resource(ResourceId(12))?;    // kind and undecoded bytes
 ```
+
+A picture the markup names can still be refused when it is read: missing,
+too large, or not the type it claims. Show its `alt` text then.
 
 A place inside a chapter is an offset into its text in UTF-16 code units,
 from 0 to `content.length`. `book.chapters()[i].size` weighs chapters for a
@@ -102,7 +107,8 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   attributes (C1 and C2 in the spec). It holds no script, no handler
   attribute, no style, no frame, form control or embedded object, and no
   address other than `/c/<chapter>#<anchor>`, `/r/<id>` and the inert
-  `data-external`. The host does not parse it again. It is still the book's
+  `data-external`. The host does not parse it again, but it counts the text
+  and refuses a reply whose `length` is not that count. It is still the book's
   content, so show it only where no script runs and nothing else loads, and
   serve it as `application/xhtml+xml` so no parser repairs it into something
   else. `styles` is always empty for now.

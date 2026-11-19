@@ -213,22 +213,28 @@ and not this crate's.
   `a abbr address article aside b bdi bdo blockquote br caption cite code col colgroup dd del details dfn div dl dt em figcaption figure footer h1 h2 h3 h4 h5 h6 header hgroup hr i img ins kbd li main mark nav ol p pre q rp rt ruby s samp section small span strong sub summary sup table tbody td tfoot th thead time tr u ul var wbr`.
   Only these attributes are written: `id`, `class`, `lang` (also from
   `xml:lang`), `dir`, `title`, `alt`, `colspan`, `rowspan`, `start`, `value`,
-  and `epub:type` as `data-epub-type`, each value cut at 1,024 characters.
-  Any other element is left out and its content kept. Nesting deeper than
-  400 elements is flattened.
+  and `epub:type` as `data-epub-type`, each value cut at 1,024 characters and
+  an `id` at 256. In a value `&`, `<`, `>` and `"` are escaped, so `<` and `>`
+  in the markup only ever open and close a tag. Any other element is left out
+  and its content kept. With 400 elements open, a further one is left out the
+  same way, and a picture there is replaced by its text alternative.
 - **C2** Left out with their content: `script`, `style`, `template`, `iframe`,
   `frame`, `frameset`, `object`, `embed`, `applet`, `audio`, `video`,
   `canvas`, `svg`, `math`, `input`, `button`, `select`, `textarea`,
-  `datalist`, `noscript`, `head`, and any element with a `hidden` attribute
-  or an inline `display: none`. An `svg` whose only drawn element is one
-  `image` naming a picture of the book becomes that picture. Other `svg` and
+  `datalist`, `noscript`, `head`, `title`, and any element with a `hidden`
+  attribute or an inline `display: none`, `html` and `body` included. An
+  `svg` that is not hidden and whose only drawn element is one `image` naming
+  a picture of the book becomes that picture. Other `svg` and
   `math` add the unsupported-content warning. A link to a place in the book
-  is `href="/c/<chapter>#<anchor>"` with the anchor percent-encoded. An
+  is `href="/c/<chapter>#<anchor>"`, or `href="/c/<chapter>"` when it names no
+  anchor. The anchor is cut at 256 characters, as an `id` is, and then
+  percent-encoded once. An
   `http`, `https` or `mailto` link has no `href` and carries its address in
   `data-external`. Any other link has neither. A picture that is a PNG, JPEG,
   GIF or WebP item of the manifest is `src="/r/<id>"`, and any other picture
   is replaced by its text alternative. The markup holds no other address.
-  The remote-references warning is raised as in R6.
+  The remote-references warning is raised as in R6, for what is left out as
+  much as for what is kept.
 - **C3** Text keeps its whitespace. Line ends become a line feed, and
   control characters other than tab and line feed are removed. A chapter's
   length is the number of UTF-16 code units of text in its markup, text
@@ -236,22 +242,29 @@ and not this crate's.
   those units.
 - **C4** A resource id is the position of an item among the manifest items
   that have an id and a path inside the book, counted from 0 in package
-  order. When two items name one file, references resolve to the first.
-- **C5** A resource is returned only when its manifest item is a PNG, JPEG,
-  GIF or WebP, it unpacks to at most 32 MiB within the limits of F6, and its
+  order. When two items name one file, the first says what the file is: a
+  reference resolves to it, and the file is a picture only if that item is.
+- **C5** A resource is returned only when its manifest item is a PNG, JPEG
+  (`image/jpeg` or `image/jpg`), GIF or WebP, it unpacks to at most 32 MiB within the limits of F6, and its
   first bytes are that type's signature. The host checks the signature and
-  the size again. The bytes are not decoded.
+  the size again and refuses base64 that is not canonical. The bytes are not
+  decoded. A reference in markup can therefore name a picture that is then
+  refused. Its text alternative is in the markup's `alt`.
 - **C6** Markup with more than 400,000 elements and text runs is cut there,
   closed so that it is still well-formed, and flagged as truncated.
 - **C7** Each chapter of an opened book has the unpacked size the archive
   states for it, capped at the chapter size limit, and 0 when the archive
-  lacks the file. The book controls that number. It is for weighing chapters
+  lacks the file. The host brings a larger number down to the limit. The
+  book controls that number. It is for weighing chapters
   when showing progress and for nothing else.
-- **C8** A reading-order item that is a servable picture gives one `img`.
+- **C8** A reading-order item whose own media type is a servable picture's,
+  and whose file is one by C4, gives one `img`.
   Any other item that is not a text document gives empty markup and the
   unsupported-content warning. A chapter index past the end and a changed
-  file are refused as for R1 to R9 (F4, F8). The title is the contents label,
-  else the first heading, else the document title. The language is the
+  file are refused as for R1 to R9 (F4, F8). The host counts the text in the
+  markup it receives and refuses a reply whose length is not that count. The
+  title is the contents label, else the text of the first heading alone, else
+  the document title. The language is the
   chapter's own, else the package's first. Right-to-left is set by
   `dir="rtl"` on `html` or `body`.
 

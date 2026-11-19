@@ -20,16 +20,25 @@ fn kind_for(media_type: &str) -> Option<ResourceKind> {
     }
 }
 
-/// Container path to manifest position for every picture this build serves.
-/// When two items name one file, the first wins.
+/// Container path to manifest position for every file that is a picture
+/// this build serves. The first item to name a file says what it is: a file
+/// first listed as something else is not a picture, whatever a later item
+/// calls it.
 pub fn pictures(package: &Package) -> HashMap<&str, u32> {
-    let mut map = HashMap::new();
+    let mut first: HashMap<&str, usize> = HashMap::new();
     for (i, item) in package.manifest.iter().enumerate() {
-        if kind_for(&item.media_type).is_some() {
-            map.entry(item.path.as_str()).or_insert(i as u32);
-        }
+        first.entry(item.path.as_str()).or_insert(i);
     }
-    map
+    first
+        .into_iter()
+        .filter(|(_, i)| kind_for(&package.manifest[*i].media_type).is_some())
+        .map(|(path, i)| (path, i as u32))
+        .collect()
+}
+
+/// Whether a reading-order item with this media type is a picture to show.
+pub fn is_picture(media_type: &str) -> bool {
+    kind_for(media_type).is_some()
 }
 
 /// The picture a reference written in the file `base` names.

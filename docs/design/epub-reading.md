@@ -289,8 +289,8 @@ itself. It never copies source bytes.
   Any other element is left out and its content kept, except the next group.
 - **Dropped with their content:** `script style template iframe frame frameset object embed applet audio video canvas svg math input button select textarea datalist noscript head title`,
   and any element `text.rs` treats as hidden (its `hidden` function: the
-  `hidden` attribute or an inline `display: none`). An
-  `svg` element whose only drawn child is one `image` with a reference that
+  `hidden` attribute or an inline `display: none`), `html` and `body`
+  included. An `svg` element that is not hidden and whose only drawn child is one `image` with a reference that
   resolves to a picture is written as that `img`, because many books wrap
   their cover that way. Other `svg` and `math` add the unsupported-content
   warning. `form`, `fieldset` and `label` are left out and their text kept.
@@ -299,25 +299,31 @@ itself. It never copies source bytes.
   closes the nearest element of that name on the stack and everything above
   it. An end tag with none is ignored. `br hr img col wbr` are written empty.
   Everything still open at the end is closed. With 400 elements open, a
-  further one is left out and its content kept.
+  further one is left out and its content kept, and a picture there is
+  replaced by its text alternative.
 - **Attributes.** Written only if the name is `id`, `class`, `lang`,
   `xml:lang` (as `lang`), `dir`, `title`, `alt`, `colspan`, `rowspan`, `start`,
   `value`, or the literal name `epub:type`, written as `data-epub-type`. The
   tokenizer does not resolve namespaces, so another prefix bound to the EPUB
   namespace is not recognised. The first attribute to produce a written name
-  wins. Values are written in double quotes with `&`, `<` and `"` escaped, a
-  tab or line end as a space, the characters left out of text left out, and
-  at most 1,024 characters.
+  wins. Values are written in double quotes with `&`, `<`, `>` and `"` escaped,
+  a tab or line end as a space, the characters left out of text left out, and
+  at most 1,024 characters, or 256 for an `id`. With `>` escaped, `<` and `>`
+  in the markup only open and close tags, which lets the host count the text
+  without parsing.
   `style`, `srcset`, every `on…` name and everything else is left out. Inline
   `style` returns in task 4 through the CSS sanitiser.
 - **Links.** `a href` that resolves to a reading-order item, by the resolver
   `engine/run.rs` already uses for `Link::Internal`, becomes
-  `href="/c/<chapter>#<anchor>"`, with the anchor percent-encoded. An `http`,
+  `href="/c/<chapter>#<anchor>"`, or `/c/<chapter>` with no anchor. The anchor
+  is cut at 256 characters, like an `id`, and percent-encoded once. Whoever
+  follows the link decodes it once. An `http`,
   `https` or `mailto` address is written as `data-external="<address>"` with no
   `href`, so the helper's output holds nothing a click can follow outside the
   book. Any other link loses its `href`.
-- **Pictures.** `img src` that resolves to a manifest item with the media type
-  `image/png`, `image/jpeg`, `image/gif` or `image/webp` becomes
+- **Pictures.** `img src` that resolves to a file whose first manifest item
+  has the media type `image/png`, `image/jpeg`, `image/jpg`, `image/gif` or
+  `image/webp` becomes
   `src="/r/<id>"`. Otherwise the element is replaced by its text alternative as
   text. The remote-references warning is raised by the same test as R6
   of [the reader spec](../../specs/epub-reader-mvp.md#reading), applied to
@@ -332,8 +338,9 @@ itself. It never copies source bytes.
   closes what is open and sets `truncated`. Warnings cover what was read up to
   that point. The tokenizer recovers from broken markup as it does for
   `read_chapter`, and the chapter carries the malformed-markup warning (R8).
-- **Other reading-order items.** An item that is a PNG, JPEG, GIF or WebP
-  gives one `img` for it, and an error if the archive lacks the file. Any
+- **Other reading-order items.** An item whose own media type is a PNG, JPEG,
+  GIF or WebP, and whose file is one by the rule under `ResourceId`, gives one
+  `img` for it, and an error if the archive lacks the file. Any
   other item that is not a text document, an SVG picture included, gives
   empty markup and the unsupported-content warning (R8).
 
@@ -346,10 +353,12 @@ For example, a chapter linked as the second reading-order item holds
 and the helper returns `<p>See <a href="/c/1#n1">note</a> and pixel</p>`, a
 length of 18 and the remote-references warning.
 
-**Reply checks.** `host.rs` refuses a `ChapterContent` whose `markup` is longer
-than the reply limit allows or whose `length` exceeds the markup's own length,
-renumbers `index`, and strips control characters from `title` and `language`.
-It does not parse `markup`. The view is the check on markup. It refuses a
+**Reply checks.** `host.rs` refuses a `ChapterContent` whose `length` is not
+the UTF-16 length of the text in its `markup`, which it counts by skipping
+tags and the three text entities. It renumbers `index`, brings a chapter
+`size` down to the chapter limit, and strips control characters from `title`
+and `language`. It does not parse `markup` further. The view is the check on
+markup. It refuses a
 `Resource` over 32 MiB or whose first bytes are not its `kind`'s signature.
 
 **Resources.** `read_resource` unpacks one manifest item through
