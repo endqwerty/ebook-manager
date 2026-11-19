@@ -1,0 +1,264 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interface reader sample</title>
+<!-- Illustrates docs/design/interface-reader.md. Add #dark to the address for dark appearance.
+     Regenerate the pictures with:
+     chromium --headless --hide-scrollbars --window-size=820,1640 --screenshot=NAME-light.png NAME.html
+     and the same with NAME.html#dark for NAME-dark.png, where NAME is this file's name without .html.
+     Covers and spines are drawn here and are not real artwork. -->
+<style>
+  :root {
+    --background: #f6f6f7; --foreground: #1c1c1f; --card: #ffffff; --border: #dcdce0; --fill: #e9e9ec;
+    --primary: #2f6fde; --primary-foreground: #ffffff; --radius: 10px;
+    --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Adwaita Sans", Roboto, sans-serif;
+    --contact: rgba(0,0,0,.16); --ambient: rgba(0,0,0,.16); --edge: rgba(0,0,0,.12);
+    --serif: "New York", "Iowan Old Style", "Sitka Text", Literata, "Source Serif 4", Charter, "Noto Serif", Georgia, serif;
+    --hair: color-mix(in srgb, var(--foreground) 12%, transparent);
+    --dim: color-mix(in srgb, var(--foreground) 62%, transparent);
+    --faint: color-mix(in srgb, var(--foreground) 6%, transparent);
+  }
+  :root[data-theme="dark"] {
+    --background: #1b1b1e; --foreground: #f1f1f3; --card: #232326; --border: #37373c; --fill: #34343a;
+    --primary: #5b93f0; --primary-foreground: #0b1220;
+    --contact: rgba(0,0,0,.28); --ambient: rgba(0,0,0,.28); --edge: rgba(255,255,255,.18);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: var(--background); font: 13px/18px var(--font-sans); color: var(--foreground); }
+  h2 { font: 600 11px/1.3 var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 28px 0 10px; }
+  h2:first-of-type { margin-top: 0; }
+  p.note { color: var(--dim); margin: 8px 0 0; max-width: 66ch; }
+
+  /* Stand-in frame: not part of the rules. */
+  .window { display: grid; grid-template-columns: 158px 1fr; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .side { padding: 14px 8px; border-inline-end: 1px solid var(--hair); background: var(--faint); }
+  .side h3 { font: 600 11px/1 var(--font-sans); color: var(--dim); margin: 16px 8px 6px; }
+  .side h3:first-child { margin-top: 2px; }
+  .side a { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: 6px; }
+  .side a.on { background: color-mix(in srgb, var(--foreground) 10%, transparent); font-weight: 600; }
+  .side a span { color: var(--dim); font-variant-numeric: tabular-nums; font-weight: 400; }
+  .field { align-self: center; width: 150px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--hair); color: var(--dim); background: var(--faint); }
+  .btn { align-self: center; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--hair); background: var(--faint); font-weight: 600; }
+  .btn.pri { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+
+  /* Content layer: these follow the page. */
+  .main { padding: 16px 20px 22px; min-width: 0; }
+  .bar { display: flex; align-items: baseline; gap: 10px; margin-bottom: 20px; }
+  .bar h1 { font: 600 26px/1.15 var(--serif); letter-spacing: -.01em; margin: 0; }
+  .bar .count { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .bar .sp { flex: 1; }
+
+  .shelf { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 20px; row-gap: 28px; }
+  .book { min-width: 0; }
+  .cover { position: relative; width: 100%; aspect-ratio: 2/3; border-radius: 2px; overflow: hidden; background: var(--fill);
+    box-shadow: 0 1px 2px var(--contact), 0 6px 14px -4px var(--ambient); transition: transform .167s, box-shadow .167s; }
+  /* Spine shade below, edge line above everything. */
+  .cover::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 0; width: 5%; background: linear-gradient(90deg, rgba(0,0,0,.14), rgba(0,0,0,0)); pointer-events: none; z-index: 1; }
+  .cover.nofill::before { display: none; }
+  .cover::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--edge); pointer-events: none; z-index: 2; }
+  .art { position: absolute; inset: 0; overflow: hidden; }
+  .art i, .art b, .art u { font-style: normal; }
+  .art.fit { display: flex; align-items: center; }
+  .art.fit .sq { position: relative; width: 100%; aspect-ratio: 1; }
+  /* Binding set in type: padding 12%, title 11% and author 9% of the cover's width. */
+  .binding { display: flex; flex-direction: column; justify-content: space-between; padding: 12%; }
+  .binding .t { font: 600 10.8px/1.15 var(--serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+  .binding .a { font: 8.8px/1.25 var(--font-sans); display: none; }
+  .binding .rule { height: 1px; background: currentColor; margin: 6px 0; }
+  .b-umber { background: #7a3b22; color: #f1e6cc; }
+  .b-slate { background: #465366; color: #f1e6cc; }
+  .b-navy { background: #24405c; color: #f1e6cc; }
+
+  .prog { height: 2px; border-radius: 1px; background: var(--hair); margin: 5px 0; }
+  .prog i { display: block; height: 100%; border-radius: 1px; background: var(--dim); }
+  .prog.none { background: transparent; }
+  .meta .lines { height: 54px; }
+  .meta .t { font-weight: 600; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .meta .a { display: flex; gap: 4px; font-size: 12px; color: var(--dim); }
+  .meta .a span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta .a .chk { flex: none; }
+
+  .row5 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+  .cell { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 12px; }
+  .cell .stage { display: flex; justify-content: center; padding: 8px 0 0; }
+  .cell .stage .book { width: 96px; padding: 6px; margin: -6px; border-radius: 8px; }
+  .cell > b { display: block; margin-top: 8px; }
+  .cell small { color: var(--dim); font-size: 12px; }
+  .lift .cover { transform: translateY(-2px); box-shadow: 0 2px 3px var(--contact), 0 9px 18px -4px var(--ambient); }
+  .sel { background: color-mix(in srgb, var(--primary) 22%, transparent); }
+  .foc { outline: 2px solid var(--primary); outline-offset: 0; }
+  .hc .cover { box-shadow: none; outline: 1px solid var(--foreground); }
+  .hc .cover::before, .hc .cover::after { display: none; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: start; font-weight: 400; font-size: 12px; color: var(--dim); padding: 0 10px 6px; border-bottom: 1px solid var(--hair); }
+  td { padding: 4px 10px; height: 36px; color: var(--dim); border-bottom: 1px solid var(--faint); }
+  td.ti { display: flex; align-items: center; gap: 10px; color: var(--foreground); font-weight: 600; }
+  th.n, td.n { text-align: end; font-variant-numeric: tabular-nums; }
+  .cover.mini { width: 19px; flex: none; border-radius: 1px; box-shadow: none; }
+  .cover.mini::before { display: none; }
+  .cover.mini.binding { padding: 0; display: block; }
+  .cover.mini * { display: none; }
+  .cover.mini .art { display: block; }
+
+  .detail { display: grid; grid-template-columns: 160px 1fr; gap: 22px; }
+  .detail .cover { align-self: start; }
+  .detail .cover .art { zoom: 1.6; }
+  .detail h1 { font: 600 24px/1.15 var(--serif); letter-spacing: -.01em; margin: 0 0 2px; }
+  .detail .by { font-size: 15px; line-height: 20px; color: var(--dim); }
+  .detail .ser { color: var(--dim); }
+  .detail .acts { display: flex; gap: 8px; margin: 14px 0 16px; }
+  .detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; }
+  .detail dt { color: var(--dim); }
+  .detail dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+
+  .rowhead { display:flex; justify-content:space-between; align-items:baseline; margin:28px 0 12px; }
+  .rowhead b { font-size:15px; }
+  .link { color:var(--dim); }
+  .hrow { display:flex; gap:20px; overflow:hidden; margin-right:-20px; }
+  .hrow .meta .t { -webkit-line-clamp:1; }
+  .lrow { display:flex; align-items:center; gap:12px; padding:12px 0; position:relative; }
+  .lrow + .lrow::before { content:""; position:absolute; top:0; left:60px; right:0; height:1px; background:var(--hair); }
+  .cover.thumb { width:48px; flex:none; box-shadow:0 1px 2px var(--contact); }
+  .cover.thumb::before { display:none; }
+  .cover.thumb .art { zoom:.5; }
+  .ltxt { flex:1; min-width:0; }
+  .ltxt .t { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ltxt .a { color:var(--dim); }
+  .ltxt .s, .ltr { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  .slabel { color:var(--dim); font-size:12px; margin:0 0 8px; }
+  .srow + .slabel { margin-top:28px; }
+  .srow { display:flex; align-items:flex-end; gap:2px; border-bottom:1px solid var(--hair); }
+  .spine { position:relative; height:192px; flex:none; border-radius:1px 1px 0 0; box-shadow:0 1px 2px var(--contact); overflow:hidden; }
+  .spine::after { content:""; position:absolute; inset:0; border-radius:inherit; box-shadow:inset 0 0 0 1px var(--edge); }
+  .spine.rnd::before { content:""; position:absolute; inset:0; background:linear-gradient(90deg,rgba(0,0,0,.10),rgba(0,0,0,0) 25%,rgba(0,0,0,0) 75%,rgba(0,0,0,.10)); }
+  .spine span { position:absolute; left:50%; writing-mode:vertical-rl; transform:translateX(-50%); white-space:nowrap; }
+  .spine .st { top:10px; font:600 12px/1 var(--serif); max-height:120px; overflow:hidden; text-overflow:ellipsis; }
+  .spine .sa { bottom:10px; font:10px/1 var(--font-sans); }
+  .cover.pulled { width:128px; flex:none; border-radius:2px 2px 0 0; margin:0 6px; }
+  .two { display:grid; grid-template-columns:1fr 1.25fr; gap:16px; align-items:start; margin-top:28px; }
+  .idx { padding-top:4px; }
+  .letter { font:600 20px/1.2 var(--serif); margin:16px 0 6px; }
+  .irow { display:flex; justify-content:space-between; padding:3px 0; }
+  .irow i { font-style:normal; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .stack { position:relative; margin-top:8px; }
+  .cover.back { position:absolute; width:auto; aspect-ratio:auto; box-shadow:none; }
+  .cover.back::before { display:none; }
+  .stack > .cover:not(.back) { z-index:1; }
+
+  .rowhead { display:flex; justify-content:space-between; align-items:baseline; margin:28px 0 12px; }
+  .rowhead b { font-size:15px; }
+  .link { color:var(--dim); }
+  .hrow { display:flex; gap:20px; overflow:hidden; margin-right:-20px; }
+  .hrow .meta .t { -webkit-line-clamp:1; }
+  .lrow { display:flex; align-items:center; gap:12px; padding:12px 0; position:relative; }
+  .lrow + .lrow::before { content:""; position:absolute; top:0; left:60px; right:0; height:1px; background:var(--hair); }
+  .cover.thumb { width:48px; flex:none; box-shadow:0 1px 2px var(--contact); }
+  .cover.thumb::before { display:none; }
+  .cover.thumb .art { zoom:.5; }
+  .ltxt { flex:1; min-width:0; }
+  .ltxt .t { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ltxt .a { color:var(--dim); }
+  .ltxt .s, .ltr { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  .slabel { color:var(--dim); font-size:12px; margin:0 0 8px; }
+  .srow + .slabel { margin-top:28px; }
+  .srow { display:flex; align-items:flex-end; gap:2px; border-bottom:1px solid var(--hair); }
+  .spine { position:relative; height:192px; flex:none; border-radius:1px 1px 0 0; box-shadow:0 1px 2px var(--contact); overflow:hidden; }
+  .spine::after { content:""; position:absolute; inset:0; border-radius:inherit; box-shadow:inset 0 0 0 1px var(--edge); }
+  .spine.rnd::before { content:""; position:absolute; inset:0; background:linear-gradient(90deg,rgba(0,0,0,.10),rgba(0,0,0,0) 25%,rgba(0,0,0,0) 75%,rgba(0,0,0,.10)); }
+  .spine span { position:absolute; left:50%; writing-mode:vertical-rl; transform:translateX(-50%); white-space:nowrap; }
+  .spine .st { top:10px; font:600 12px/1 var(--serif); max-height:120px; overflow:hidden; text-overflow:ellipsis; }
+  .spine .sa { bottom:10px; font:10px/1 var(--font-sans); }
+  .cover.pulled { width:128px; flex:none; border-radius:2px 2px 0 0; margin:0 6px; }
+  .two { display:grid; grid-template-columns:1fr 1.25fr; gap:16px; align-items:start; margin-top:28px; }
+  .idx { padding-top:4px; }
+  .letter { font:600 20px/1.2 var(--serif); margin:16px 0 6px; }
+  .irow { display:flex; justify-content:space-between; padding:3px 0; }
+  .irow i { font-style:normal; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .stack { position:relative; margin-top:8px; }
+  .cover.back { position:absolute; width:auto; aspect-ratio:auto; box-shadow:none; }
+  .cover.back::before { display:none; }
+  .stack > .cover:not(.back) { z-index:1; }
+
+  .dim, small { color:var(--dim); }
+  
+  :root { --page:#f4ecd8; --ptext:#3b2f21; --mark:#eed684; --mat: rgba(250,246,236,.86); }
+  :root[data-theme="dark"] { --page:#2b2b2e; --ptext:#d6d6d8; --mark:#6b5a12; --mat: rgba(52,52,56,.86); }
+  small { display:block; font-size:12px; color:var(--dim); }
+  .tabs { display:flex; gap:4px; margin-bottom:8px; }
+  .tabs span { padding:4px 10px; border-radius:6px; color:var(--dim); }
+  .tabs span.on { background:var(--faint); color:var(--foreground); font-weight:600; }
+  .rwin { position:relative; background:var(--page); color:var(--ptext); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  .rpage { max-width:520px; margin:0 auto; padding:72px 0 56px; font:16px/1.5 Literata, var(--serif); }
+  .rpage h3 { font:600 20px/1.3 Literata, var(--serif); margin:0 0 20px; }
+  .rpage p { margin:0; text-indent:1.4em; } .rpage h3 + p { text-indent:0; }
+  .rpage mark { background:var(--mark); color:inherit; border-radius:2px; }
+  .rpage p { position:relative; }
+  .dot { position:absolute; right:-22px; top:4.6em; width:6px; height:6px; border-radius:50%; background:color-mix(in srgb,var(--ptext) 55%,transparent); }
+  .rfoot { position:absolute; left:0; right:0; bottom:16px; max-width:520px; margin:0 auto; display:flex; justify-content:space-between; font-size:12px; color:color-mix(in srgb,var(--ptext) 55%,transparent); }
+  .rtop, .rbot { position:absolute; left:10px; right:10px; background:var(--mat); backdrop-filter:blur(12px); border:1px solid color-mix(in srgb,var(--ptext) 12%,transparent); border-radius:14px; font-family:var(--font-sans); font-size:13px; }
+  .rtop { top:10px; display:flex; align-items:center; justify-content:space-between; padding:9px 14px; }
+  .ricons { display:flex; gap:14px; } .ricons i { font-style:normal; } .ricons i.on { font-weight:700; }
+  .rbot { bottom:10px; padding:12px 0 9px; text-align:center; }
+  .rbot small { color:color-mix(in srgb,var(--ptext) 62%,transparent); margin-top:8px; }
+  .scrub { position:relative; height:2px; max-width:520px; margin:0 auto; background:color-mix(in srgb,var(--ptext) 15%,transparent); }
+  .scrub i { display:block; height:100%; background:color-mix(in srgb,var(--ptext) 55%,transparent); }
+  .scrub u { position:absolute; top:0; width:2px; height:2px; background:var(--mat); }
+  .pop { position:absolute; top:58px; right:20px; width:236px; background:var(--card); color:var(--foreground); border:1px solid var(--border); border-radius:12px; padding:12px 14px 6px; font:13px/18px var(--font-sans); box-shadow:0 8px 28px rgba(0,0,0,.22); }
+  .sw4 { display:flex; justify-content:space-between; margin:10px 0 8px; }
+  .sw4 span { width:36px; height:36px; border-radius:50%; display:grid; place-items:center; font:600 13px/1 Literata,var(--serif); box-shadow:inset 0 0 0 1px var(--edge); }
+  .sw4 span.on { outline:2px solid var(--primary); outline-offset:2px; }
+  .prow { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--faint); }
+  .dim { color:var(--dim); }
+  .step { display:flex; gap:0; border:1px solid var(--border); border-radius:7px; overflow:hidden; }
+  .step i { font-style:normal; width:38px; height:26px; display:grid; place-items:center; } .step i + i { border-inline-start:1px solid var(--border); }
+  .toc { display:flex; justify-content:space-between; padding:6px 8px; border-radius:6px; }
+  .toc i { font-style:normal; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .toc.on { background:var(--faint); font-weight:600; } .toc.sub { padding-inline-start:24px; }
+</style>
+</head>
+<body>
+<script>if(location.hash==="#dark")document.documentElement.dataset.theme="dark"</script>
+
+<h2>Reading, controls hidden</h2>
+<div class="rwin">
+  <div class="rpage"><h3>Chapter 1. Loomings.</h3><p>Call me Ishmael. Some years ago—never mind how long precisely—having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation.</p>
+<p>Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul; whenever I find myself involuntarily pausing before coffin warehouses, and bringing up the rear of every funeral I meet; <mark>then, I account it high time to get to sea as soon as I can.</mark><i class="dot"></i> This is my substitute for pistol and ball.</p>
+<p>With a philosophical flourish Cato throws himself upon his sword; I quietly take to the ship. There is nothing surprising in this. If they but knew it, almost all men in their degree, some time or other, cherish very nearly the same feelings towards the ocean with me.</p></div>
+  <div class="rfoot"><span>Loomings</span><span>Page 3 of 612</span></div>
+</div>
+<p class="note">Nothing but the page and one quiet line. The page is Paper in light appearance and Grey in dark. A highlight sits behind its words and a small dot in the margin marks a note.</p>
+
+<h2>Controls shown, with text settings open</h2>
+<div class="rwin">
+  <div class="rtop"><span>‹ Library</span><b>Moby-Dick; or, The Whale</b><span class="ricons"><i>Contents</i><i>Search</i><i class="on">Aa</i><i>Bookmark</i><i>More</i></span></div>
+  <div class="rpage" style="padding-bottom:104px"><p>Call me Ishmael. Some years ago—never mind how long precisely—having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation.</p>
+<p>Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul; whenever I find myself involuntarily pausing before coffin warehouses, and bringing up the rear of every funeral I meet; <mark>then, I account it high time to get to sea as soon as I can.</mark><i class="dot"></i> This is my substitute for pistol and ball.</p>
+<p>With a philosophical flourish Cato throws himself upon his sword; I quietly take to the ship. There is nothing surprising in this. If they but knew it, almost all men in their degree, some time or other, cherish very nearly the same feelings towards the ocean with me.</p></div>
+  <div class="pop">
+    <small>For this book ▾</small>
+    <div class="sw4"><span style="background:#fff;color:#1a1a1a">Aa</span><span class="on" style="background:#f4ecd8;color:#3b2f21">Aa</span><span style="background:#2b2b2e;color:#d6d6d8">Aa</span><span style="background:#000;color:#c9c9c9">Aa</span></div>
+    <div class="prow"><span>Font</span><span class="dim">Literata ›</span></div>
+    <div class="prow"><span>Size</span><span class="step"><i style="font-size:11px">A</i><i style="font-size:17px">A</i></span></div>
+    <div class="prow"><span>More</span><span class="dim">›</span></div>
+  </div>
+  <div class="rbot"><div class="scrub"><i style="width:22%"></i><u style="left:8%"></u><u style="left:31%"></u><u style="left:55%"></u><u style="left:78%"></u></div><small>Chapter 1, 6 pages left in the chapter, 19 hours left in the book</small></div>
+</div>
+<p class="note">The bars float over the page in the platform's material and the page does not move when they appear. Text settings start with four rows: page colour, font, size and More.</p>
+
+<h2>Contents</h2>
+<div class="panel" style="max-width:340px">
+  <div class="tabs"><span class="on">Contents</span><span>Bookmarks</span><span>Highlights</span><span>Search</span></div>
+  <div class="toc"><span>Etymology</span><i>1</i></div>
+  <div class="toc"><span>Extracts</span><i>2</i></div>
+  <div class="toc on"><span>Chapter 1. Loomings.</span><i>3</i></div>
+  <div class="toc"><span>Chapter 2. The Carpet-Bag.</span><i>9</i></div>
+  <div class="toc"><span>Chapter 3. The Spouter-Inn.</span><i>13</i></div>
+  <div class="toc sub"><span>The landlord</span><i>15</i></div>
+</div>
+
+</body>
+</html>

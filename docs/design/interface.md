@@ -1,9 +1,15 @@
 # Interface design: a library in each platform's own style
 
 For [the interface guidelines issue](https://github.com/endqwerty/ebook-manager/issues/91).
-Read this page before you design or build a screen in any shell. It covers the
-library window and book details. The reader gets its own page when it is designed,
-and [its section here](#the-reader) only sets the direction.
+Read this page before you design or build a screen in any shell. It gives the
+rules every screen shares and covers the cover grid and book details. Three more
+pages build on it:
+
+- [The ways to show books](interface-views.md): home, list, table, a shelf of
+  spines, and the author and series indexes.
+- [The other screens](interface-screens.md): search, adding books, editing,
+  devices, highlights, settings and dialogs.
+- [The reader](interface-reader.md).
 
 Someone opening the app should feel they are in a library: quiet, ordered and
 warm, with the books as the thing they notice. The app should also look like it
@@ -45,7 +51,7 @@ Four things, each of which you can measure on a screen.
 | Warmth | A serif for the names of things. Covers drawn as objects with weight. Paper tones in the reader. |
 | Books first | The frame takes its colour from the system. The only strong colour in the window is on the covers and the one prominent action. |
 
-Things the app never draws: wood, leather, cloth or paper textures, a shelf under
+Things the app never draws: wood, leather, cloth or paper textures, a board under
 the books, page curls, gilt, drop caps or ornaments in the interface, and
 book-shaped custom controls. They date the app and fight the platform's materials.
 
@@ -60,12 +66,14 @@ and not the interface. See [Covers](#covers).
 
 ### Placement
 
-- On a wide window the sidebar lists places, in this order: Library (All books,
-  Reading now, Unread, Finished), then Collections, then Devices. A count sits at
-  the trailing edge of each row.
-- On a phone the three groups become three destinations in the platform's bar:
-  Library, Collections and Devices. The four Library places become a filter at
-  the top of the Library grid, using the platform's filter control.
+- On a wide window the sidebar lists places in four groups, in this order.
+  Library: Home, All books, Reading now, Unread, Finished, and Needs attention
+  when it is not empty. Browse: Authors, Series, Highlights. Then Collections,
+  then Devices. A count sits at the trailing edge of each row that holds books.
+- On a phone the platform's bar has four destinations: Home, Library,
+  Collections and Devices. In Library, Reading now, Unread and Finished become a
+  filter at the top, and Authors, Series and Highlights are in a Browse menu
+  beside it.
 - The screen's title names the place selected, with the number of books beside
   it. Where the platform's bar shows a large title that collapses on scroll, the
   bar owns the title. Elsewhere it sits at the top of the content at the leading
@@ -120,8 +128,9 @@ and not the interface. See [Covers](#covers).
 - The platform's UI font sets everything except the roles below. Use its named
   text styles. Never set a font size by hand, because named styles follow the
   user's text size setting and fixed sizes do not.
-- A serif sets three things: the screen title, the book's title in book details,
-  and the headline of an empty state. Nowhere else in the library window. Captions
+- A serif sets five things: the screen title, the book's title in book details,
+  the headline of an empty state, the letters of an alphabetical index, and a
+  passage quoted from a book. Nowhere else in the library window. Captions
   under covers, sidebar rows, buttons, menus and table cells stay in the UI font.
   The type on a binding drawn for a book with no cover is artwork and does not
   count.
@@ -276,18 +285,11 @@ number, and take it modulo 8. The result indexes this list from zero.
   are the platform's stack with a count. The covers left behind stay in place
   at half opacity until the drop.
 
-### Table view
+### Other views
 
-- The table is the second way to show the same books on a wide window, switched
-  from the toolbar. It is the platform's table control with its own headers,
-  sort indicator, row height and selection.
-- The first columns are Title, Author, Series, Added and Progress. Title is in
-  the emphasised body style and the rest are in body style in the secondary label
-  colour, so the title is what the eye finds in a row.
-- Title carries a small cover at its leading edge, 2:3, as tall as the row less
-  8 units, with the edge line, corners of 1 unit and no shadow or spine shade.
-- Progress is a percentage in tabular figures, empty for an unread book and a
-  check mark for a finished one.
+The same books can be shown as a list, a table or a shelf of spines. Those are in
+[The ways to show books](interface-views.md), and the rules in this section
+about selection, commands and dragging apply to all of them.
 
 ### Motion
 
@@ -347,7 +349,7 @@ roles and the motion above are drawn by the app, so the app must follow them.
 
 | Rule | Mac | iPhone and iPad | Windows 11 | GNOME | Android |
 |---|---|---|---|---|---|
-| Window structure | `NavigationSplitView` with a sidebar and an inspector for details | Tab bar on iPhone with Library, Collections, Devices and Search. Sidebar on iPad. | `NavigationView` at the left under a Mica window | `AdwNavigationSplitView`, with an `AdwToolbarView` inside each pane | `NavigationSuiteScaffold` with Library, Collections and Devices, and a list-detail layout from the expanded width up |
+| Window structure | `NavigationSplitView` with a sidebar and an inspector for details | Tab bar on iPhone with Home, Library, Collections, Devices and Search. Sidebar on iPad. | `NavigationView` at the left under a Mica window | `AdwNavigationSplitView`, with an `AdwToolbarView` inside each pane | `NavigationSuiteScaffold` with Home, Library, Collections and Devices, and a list-detail layout from the expanded width up |
 | Screen title and count | At the top of the content. The toolbar shows no title. | The navigation bar's large title in the serif design | `NavigationView`'s header, at the top of the content | At the top of the content. The header bar shows no title. | The title and subtitle of a large flexible top app bar |
 | Library filter on a phone | Not needed | A menu in the navigation bar | Not needed | A menu in the header bar on a narrow window | Filter chips under the top app bar |
 | Add | Toolbar, trailing, `.glassProminent` | Navigation bar, trailing, `.glassProminent` | An accent button at the trailing end of the header row | A labelled button at the start of the header bar, not accented, as GNOME header bars are | An extended floating action button |
@@ -505,7 +507,7 @@ The current releases are Android 17 and Compose Material 3 1.5.
   that targets SDK 35 or higher. Give the grid the padding its `Scaffold` passes
   in, which already accounts for the system bars. Adding the window insets again
   would inset it twice. System bar icons follow light and dark with the app.
-- The compact navigation bar holds Library, Collections and Devices. Reading
+- The compact navigation bar holds Home, Library, Collections and Devices. Reading
   now, Unread and Finished are filter chips under the top app bar in Library.
 - Add is an extended floating action button, the Material place for a screen's
   primary action.
@@ -526,14 +528,6 @@ The current releases are Android 17 and Compose Material 3 1.5.
   more contrast, and listen for changes with `addContrastChangeListener`.
   Earlier versions have no such setting and use the ordinary treatment.
 
-## The reader
-
-The reader is the warmest place in the app and the plainest. The frame hides
-while reading and returns on a tap or pointer movement. The page offers white,
-paper, grey and black. The default is paper in light appearance and grey in dark. Text is set
-in a serif with a line of 60 to 70 characters. Page turns slide or cross-fade and
-never curl. The reader's own design page will set the details.
-
 ## Decisions made without asking
 
 Each was the default taken to finish this page. Any can change.
@@ -542,7 +536,7 @@ Each was the default taken to finish this page. Any can change.
    alternative is a fixed library green on the prominent action. It was turned
    down because it breaks the first check on this page and fights the user's own
    choice on four of the five platforms.
-2. **The serif appears in three roles only.** Setting every book title under
+2. **The serif appears in five roles only.** Setting every book title under
    every cover in a serif would be more bookish, and also noisier and worse on
    low-density displays.
 3. **Every cover is the same size, 2:3.** Showing each image at its own
