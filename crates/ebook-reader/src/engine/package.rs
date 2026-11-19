@@ -1,7 +1,7 @@
 //! The container file, the package document and the protection check.
 
 use super::archive::Archive;
-use super::xml::{parse_tree, Element};
+use super::xml::{parse_tree_checked, Element};
 use super::{clean_inline, encoding, paths, truncate_chars};
 use crate::model::{Author, Identifier, Limits, Metadata};
 use crate::wire::{WireError, WireErrorKind};
@@ -51,7 +51,10 @@ impl Package {
 
 fn read_tree(archive: &mut Archive, path: &str, cap: u64) -> Result<Element, WireError> {
     let bytes = archive.read(path, cap)?;
-    Ok(parse_tree(&encoding::decode(&bytes)?))
+    match parse_tree_checked(&encoding::decode(&bytes)?) {
+        (tree, true) => Ok(tree),
+        (_, false) => Err(WireError::limit("number of elements in a package document")),
+    }
 }
 
 pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError> {
@@ -187,7 +190,11 @@ fn read_metadata(package: &Element) -> Metadata {
     let mut out = Metadata {
         epub_version: package
             .attr("version")
-            .map(clean_inline)
+            .map(|v| {
+                let mut v = clean_inline(v);
+                truncate_chars(&mut v, MAX_TEXT);
+                v
+            })
             .filter(|v| !v.is_empty()),
         ..Metadata::default()
     };
@@ -277,7 +284,11 @@ fn read_metadata(package: &Element) -> Metadata {
         let (urn_scheme, value) = split_urn(&raw);
         let scheme = e
             .attr_local("scheme")
-            .map(|s| clean_inline(s).to_lowercase())
+            .map(|s| {
+                let mut s = clean_inline(s).to_lowercase();
+                truncate_chars(&mut s, MAX_TEXT);
+                s
+            })
             .filter(|s| !s.is_empty())
             .or(urn_scheme);
         if value.is_empty() {
@@ -322,6 +333,22 @@ fn split_urn(raw: &str) -> (Option<String>, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::xml::parse_tree;
+
+    #[test]
+    fn caps_every_metadata_text_value() {
+        let long = "v".repeat(MAX_TEXT + 50);
+        let opf = format!(
+            r#"<package version="{long}"><metadata><identifier scheme="{long}">x</identifier></metadata></package>"#
+        );
+        let tree = parse_tree(&opf);
+        let m = read_metadata(tree.child("package").unwrap());
+        assert_eq!(m.epub_version.unwrap().chars().count(), MAX_TEXT);
+        assert_eq!(
+            m.identifiers[0].scheme.as_ref().unwrap().chars().count(),
+            MAX_TEXT
+        );
+    }
 
     #[test]
     fn splits_identifier_schemes_out_of_urns() {

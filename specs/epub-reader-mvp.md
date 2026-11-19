@@ -52,8 +52,8 @@ and media-overlay books, and every platform other than native Linux packages.
 - **M1** Inspecting a file returns its title, authors, identifiers, languages
   and EPUB version from the package document, with whitespace collapsed.
   A book with several titles gives the one marked as the main title, else the
-  first. Each text value is cut at 2,000 characters and each list at 64
-  entries.
+  first. Every text value, the version and identifier schemes included, is
+  cut at 2,000 characters and each list at 64 entries.
 - **M2** Authors are the creators with the author role or no role, in package
   order, each with the publisher's sort name when given. When no creator
   qualifies, all creators are returned. Each identifier has its value, a
@@ -80,7 +80,9 @@ and media-overlay books, and every platform other than native Linux packages.
   break at the very end of a block is dropped. Preformatted text keeps its
   spacing, including spaces at the ends of lines, and loses only the line
   breaks before its first and after its last line. Each table row is one block
-  with a tab between cells, so an empty cell keeps its column. Named and numeric character references are replaced. Control
+  with a tab before every cell after the first, so an empty cell keeps its
+  column wherever it stands. Paragraphs inside a cell are joined with a space.
+  A row with no text at all is left out. Named and numeric character references are replaced. Control
   characters are removed. Documents in UTF-8, UTF-16, ISO-8859-1 and
   Windows-1252 are decoded; HTML-style markup with unclosed or upper-case tags
   is read.
@@ -100,9 +102,12 @@ and media-overlay books, and every platform other than native Linux packages.
   not returned. A picture that stands alone in its block becomes a placeholder
   block with its text alternative. A picture inside a line of text adds its
   text alternative to that line, so a decorative initial still spells its word.
-  Picture data and addresses are not returned. A chapter that refers to a
-  picture, style sheet, script or media file at a remote address carries a
-  remote-references warning; nothing is fetched.
+  Picture data and addresses are not returned. A chapter carries a
+  remote-references warning when one of its elements names a remote address as
+  a source, linked resource, poster, object data or source-set candidate, or
+  when a style attribute or style element loads from one. Nothing is fetched.
+  Style sheet files are not inspected, and ordinary hyperlinks (R4) do not
+  count.
 - **R7** A reading position is a chapter index and block index with the text
   form `epubpos1:<chapter>:<block>`. The interface stores it and passes it back
   after a restart. A position past the last chapter becomes the start of the
@@ -142,20 +147,25 @@ to the reader.
 - **F6** Limits, with defaults: file size 512 MiB; 20,000 archive entries;
   8 MiB for a package or navigation document and 16 MiB for a chapter, counted
   on unpacked output rather than the size the archive declares; 10,000
-  reading-order items; 20,000 contents entries; 64 MiB unpacked in one call; a
-  200-to-1 unpacked-to-packed ratio for any entry that unpacks to more than
-  1 MiB; a 96 MiB reply. Passing one gives a limit error; in particular, contents that are too long or too large
+  reading-order items; 20,000 contents entries; 400,000 elements and text runs
+  in a package or contents document; 64 MiB unpacked in one call, counting
+  entries that failed part-way; a 200-to-1 unpacked-to-packed ratio for any
+  entry that unpacks to more than 4 MiB; a 96 MiB reply. The entry count is
+  read from the archive's end record before its directory is parsed. Passing a
+  limit gives a limit error; in particular, contents that are too long or too large
   are an error and never a shortened list. One call unpacks at most the
   container file, the encryption list, the package, the two contents documents
   and one chapter, so the per-document limits also bound the total. Nothing is
   unpacked to disk: archive entry names are only looked up, a looked-up name
   never starts with `/` or contains `..`, and an entry marked as a symbolic
   link is read as ordinary bytes. Compression other than stored and deflate is
-  refused as unsupported.
+  refused as unsupported, for a contents document as for any other.
 - **F7** Before reading the book the helper limits itself to 768 MiB of
   address space, the call's time allowance plus two in CPU seconds, 32 open
   files, no core dump and no further processes or threads, and does not run
-  if a limit cannot be set. Because the helper cannot start another process,
+  if a limit cannot be set. Where the application already runs under a lower
+  ceiling, that ceiling is kept. Because the helper cannot start another
+  process,
   the address-space limit bounds the whole sandbox. The host stops the sandbox after 15
   seconds of wall-clock time. A helper stopped by any of these is reported and
   the next call works.

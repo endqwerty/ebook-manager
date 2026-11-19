@@ -7,7 +7,7 @@ use crate::model::{Block, BlockKind, Chapter, ChapterInfo, ChapterWarning, Limit
 use crate::wire::{
     BookOutline, Payload, ProbeReport, Response, WireError, WireErrorKind, BOOK_IN_SANDBOX,
 };
-use rustix::process::{setrlimit, Resource, Rlimit};
+use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
 use std::fs::File;
 use std::io::Write;
 
@@ -38,6 +38,12 @@ fn usage() -> WireError {
 /// cannot be raised again. A limit that cannot be set is a reason not to run.
 fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
     let set = |resource, value: u64| {
+        // A ceiling inherited from the application that is already lower is
+        // kept: it cannot be raised, and it is at least as strict.
+        let value = match getrlimit(resource).maximum {
+            Some(ceiling) => value.min(ceiling),
+            None => value,
+        };
         setrlimit(
             resource,
             Rlimit {

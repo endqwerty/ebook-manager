@@ -78,6 +78,7 @@ const SKIP_TAGS: [&str; 9] = [
 #[derive(Default, Clone, Copy)]
 struct Fx {
     block: bool,
+    row: bool,
     skip: bool,
     head: bool,
     title: bool,
@@ -107,6 +108,8 @@ struct Current {
     has_image: bool,
     pending_space: bool,
     line_start: bool,
+    /// The block is a table row: its tabs are column separators.
+    row: bool,
 }
 
 struct Extractor<'a> {
@@ -130,6 +133,7 @@ struct Extractor<'a> {
     lists: Vec<Option<u32>>,
     item_fresh: Vec<bool>,
     cur: Current,
+    in_row: u32,
     row_cells: u32,
     remote: bool,
     anchors: Vec<String>,
@@ -160,6 +164,7 @@ pub fn extract(src: &str, max_blocks: usize, resolve: &dyn Fn(&str) -> Option<Li
         lists: Vec::new(),
         item_fresh: Vec::new(),
         cur: Current::default(),
+        in_row: 0,
         row_cells: 0,
         remote: false,
         anchors: Vec::new(),
@@ -196,6 +201,25 @@ fn is_remote(reference: &str) -> bool {
         .any(|p| r.starts_with(p))
 }
 
+/// Style text that loads something from a remote address.
+fn css_is_remote(css: &str) -> bool {
+    let css = css.to_ascii_lowercase();
+    let loads = css.contains("url(") || css.contains("@import");
+    let scheme = ["http://", "https://", "ftp://"]
+        .iter()
+        .any(|p| css.contains(p));
+    let relative = [
+        "url(//",
+        "url('//",
+        "url(\"//",
+        "@import '//",
+        "@import \"//",
+    ]
+    .iter()
+    .any(|p| css.contains(p));
+    (loads && scheme) || relative
+}
+
 fn hidden(attrs: &[(String, String)]) -> bool {
     if attr(attrs, "hidden").is_some() {
         return true;
@@ -217,7 +241,12 @@ impl Extractor<'_> {
         if n != "a" && n != "area" && !self.remote {
             self.remote = attrs.iter().any(|(key, value)| {
                 let key = key.rsplit(':').next().unwrap_or(key);
-                matches!(key, "src" | "href" | "poster" | "data") && is_remote(value)
+                match key {
+                    "src" | "href" | "poster" | "data" => is_remote(value),
+                    "srcset" => value.split([',', ' ', '\t', '\n']).any(is_remote),
+                    "style" => css_is_remote(value),
+                    _ => false,
+                }
             });
         }
         if self.skip > 0 {
@@ -244,8 +273,15 @@ impl Extractor<'_> {
 
     fn open(&mut self, n: &str, attrs: &[(String, String)], fx: &mut Fx) {
         if BLOCK_TAGS.contains(&n) {
-            self.flush();
-            fx.block = true;
+            let table_part = matches!(n, "table" | "thead" | "tbody" | "tfoot" | "tr" | "caption");
+            if self.in_row == 0 || table_part {
+                self.flush();
+                fx.block = true;
+            } else if !self.cur.spans.is_empty() && !self.cur.line_start {
+                // Inside a table cell a paragraph is a gap, not a new block:
+                // the row stays on one line.
+                self.cur.pending_space = true;
+            }
         }
         if let Some(id) =
             attr(attrs, "id").or_else(|| if n == "a" { attr(attrs, "name") } else { None })
@@ -290,7 +326,11 @@ impl Extractor<'_> {
                     anchors: Vec::new(),
                 });
             }
-            "tr" => self.row_cells = 0,
+            "tr" => {
+                self.row_cells = 0;
+                self.in_row += 1;
+                fx.row = true;
+            }
             "td" | "th" => {
                 // One tab before every cell after the first, so an empty
                 // cell still holds its column.
@@ -300,6 +340,7 @@ impl Extractor<'_> {
                     self.cur.line_start = true;
                 }
                 self.row_cells += 1;
+                self.cur.row = true;
             }
             "br" => {
                 if self.pre > 0 {
@@ -361,6 +402,9 @@ impl Extractor<'_> {
         if fx.block {
             self.flush();
         }
+        if fx.row {
+            self.in_row -= 1;
+        }
         if fx.skip {
             self.skip -= 1;
         }
@@ -411,6 +455,9 @@ impl Extractor<'_> {
                 self.title.push_str(text);
             }
         } else if self.skip > 0 || self.head > 0 {
+            if self.frames.last().is_some_and(|f| f.name == "style") && css_is_remote(text) {
+                self.remote = true;
+            }
         } else if self.pre > 0 {
             for c in text.chars() {
                 if c == '\r' || (is_dropped(c) && c != '\n' && c != '\t') {
@@ -542,6 +589,8 @@ impl Extractor<'_> {
         while let Some(last) = cur.spans.last_mut() {
             let kept = if pre {
                 last.text.trim_end_matches('\n').len()
+            } else if cur.row {
+                last.text.trim_end_matches(['\n', ' ']).len()
             } else {
                 last.text.trim_end_matches(['\n', ' ', '\t']).len()
             };
@@ -792,6 +841,37 @@ mod tests {
         }
         let head = extract("<html><head><link rel='stylesheet' href='https://fonts.example/css'/></head><body><p>x</p></body></html>", 10, &|_| None);
         assert!(head.remote_references);
+    }
+
+    #[test]
+    fn keeps_trailing_empty_cells_and_cells_with_paragraphs_on_one_row() {
+        assert_eq!(
+            lines("<table><tr><td></td><td>B</td><td></td></tr><tr><td>C</td><td></td><td>E</td></tr></table>"),
+            vec!["\tB\t", "C\t\tE"]
+        );
+        assert_eq!(
+            lines("<table><tr><td><p>Left</p><p>more</p></td><td><p>Right</p></td></tr></table><p>After</p>"),
+            vec!["Left more\tRight", "After"]
+        );
+    }
+
+    #[test]
+    fn notes_remote_references_in_source_sets_and_styles() {
+        for body in [
+            "<img src='a.png' srcset='a.png 1x, https://cdn.example/a2.png 2x' alt=''/>",
+            "<p style=\"background: url('http://example.com/bg.png')\">x</p>",
+            "<p style='background:url(//example.com/bg.png)'>x</p>",
+            "<style>@import url(https://fonts.example/css);</style><p>x</p>",
+        ] {
+            assert!(run(body).remote_references, "{body}");
+        }
+        for body in [
+            "<img src='a.png' srcset='a.png 1x, b.png 2x' alt=''/>",
+            "<p style='background:url(bg.png); color: red'>x</p>",
+            "<style>p { margin: 0 } /* see http://example.com */</style><p>x</p>",
+        ] {
+            assert!(!run(body).remote_references, "{body}");
+        }
     }
 
     #[test]

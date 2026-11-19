@@ -24,7 +24,7 @@ pub struct Limits {
     pub max_blocks_per_chapter: u32,
     /// Most unpacked bytes one helper run may take out of the archive.
     pub max_unpacked_bytes: u64,
-    /// Largest unpacked-to-packed ratio for an entry over 1 MiB unpacked.
+    /// Largest unpacked-to-packed ratio for an entry over 4 MiB unpacked.
     pub max_compression_ratio: u32,
     /// Largest reply the host accepts from the helper.
     pub max_output_bytes: u64,
