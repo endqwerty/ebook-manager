@@ -343,9 +343,11 @@ the helper's sandbox.
   reads thumbnails straight from that folder on a loader thread and never
   through the library's writer. The app writes one kind of file there and
   reads only that kind: a regular file and not a link, of at most 512 KiB,
-  whose PNG header, read before anything is decoded, says eight bits a
-  channel of red, green and blue, no alpha, no palette, not interlaced, and
-  no larger than 256 by 384. Its pixels must hash to the digest it is named
+  made of a PNG header, image data and an end and no other chunk, whose
+  header, read before anything is decoded, says eight bits a channel of
+  red, green and blue, no alpha, not interlaced, and no larger than 256 by
+  384. The app writes and reads these files with the `png` crate, so a
+  file holds nothing a palette or transparency chunk could change. Its pixels must hash to the digest it is named
   by, and the picture shown is made from those hashed pixels. Any other
   file counts as missing.
 - A book whose cover is missing, fails to decode or would need enlarging by
@@ -420,7 +422,8 @@ content opens the search bar with the typed text and moves focus to it.
 The window passes each key press and release to the search field's own key
 handling until the field is on screen with the focus, so the keys go
 through its input method and none typed while the bar opens is lost. The
-bar opens when there is text, so a dead key waits for its letter.
+bar opens when there is text, so a dead key waits for its letter, and
+while it waits Escape and Backspace cancel it and Space completes it.
 The Sort menu's More opens the sort editor as a popover of three rows. Every
 menu, popover and the table's column menu opens and works from the keyboard.
 
@@ -467,17 +470,37 @@ flowchart LR
   before the view is shown; if they scrolled or moved the focus while it
   was being found, the view is shown, the place they moved to is found
   once, and if they have moved again by then the view stays where they
-  put it.
+  put it. The scroll correction that follows a placement a frame or two
+  later gives way the same way, to any wheel, pointer or key in the books.
+- **A command acts on the books selected when it is given.** It takes
+  their IDs then, and the places whose rows have not arrived, and acts on
+  those whatever is selected by the time the rows come.
+- **The model's state is data.** `browse/core.rs` holds it as one enum and
+  handles everything that can happen to it in one function, from a state
+  and an event to a state and a list of effects, with no GTK in it. The
+  GObject calls the function and carries out the effects. The states are
+  loading, with an open in flight; showing a view, with or without an open
+  in flight; lost, a view that can no longer be read with the open that
+  will replace it; and error, with its text. The enum cannot hold a lost
+  view with nothing coming, an error beside a view, or loading with
+  nothing asked for.
 - **When a view cannot be read.** The read thread answers every request,
-  with what was asked for or with the reason it cannot be given, and drops
-  none. The model decides what a reason means. For a view it has already
-  replaced there is nothing to do. For the view on screen, the view is
-  lost: its loaded rows stay, each place waiting for a row is told none
-  will come, a command waiting on one says so, and the query is opened
-  again. If that fails the window shows why and offers Try Again, which
-  starts a new read thread if the last one stopped. A refresh that fails
-  leaves the open view as it was. When the catalogue file is replaced the
-  read thread asks for a new reader.
+  with what was asked for or with a refusal, and drops none. An open names
+  the view the model is showing, and the read thread says `Unchanged` only
+  of that view: asked about any other, it gives the view it holds or opens
+  one. For a view the model has already replaced a refusal means nothing.
+  For the view on screen it means the view is lost: its loaded rows stay,
+  each place waiting for a row is told none will come, a command waiting
+  on one says so, and the query is opened again. When the newest open
+  fails the window shows why, with Try Again and without the rows of an
+  older query, and a change to the catalogue or Try Again opens it afresh.
+  Try Again starts a new read thread if the last one stopped. When the
+  catalogue file is replaced the read thread asks for a new reader.
+  `the_model_and_the_read_thread_always_settle` drives the function and
+  the real read thread through several thousand seeded steps and checks,
+  each time the replies have drained, that the model shows the reader's
+  own view for its own query or an error, and that no place is left
+  waiting.
 - **When the catalogue changes** (an import, an edit, a saved position), the
   write thread tells the window after each job. The model asks the read
   thread whether the catalogue changed and, if so, reopens the same query
