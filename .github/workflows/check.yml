@@ -49,9 +49,11 @@ jobs:
         run: dbus-run-session -- xvfb-run -a cargo nextest run --workspace --locked --profile ci --no-fail-fast
 
       - name: Import, read, restart and export from the desktop
+        id: desktop
         run: /usr/bin/python3 apps/desktop/tests/smoke.py target/debug/ebook-manager "$RUNNER_TEMP/desktop-evidence"
 
       - name: Exercise mounted FAT32 card export
+        id: card
         run: |
           image="$RUNNER_TEMP/card.img"
           card="$RUNNER_TEMP/card"
@@ -66,9 +68,26 @@ jobs:
       - name: Report results and read the gate
         if: always()
         env:
+          DESKTOP_OUTCOME: ${{ steps.desktop.outcome }}
+          CARD_OUTCOME: ${{ steps.card.outcome }}
           MAINWORTHY_URL: ${{ vars.MAINWORTHY_URL }}
           MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
           MAINWORTHY_TOKEN: ${{ secrets.MAINWORTHY_TOKEN }}
         run: |
-          mainworthy report target/nextest/ci/junit.xml
+          python3 - "$RUNNER_TEMP/desktop-checks.xml" <<'PYTHON'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          suite = ET.Element("testsuite", name="Linux integration")
+          for name, outcome in [
+              ("Import, read, restart and export", os.environ["DESKTOP_OUTCOME"]),
+              ("Mounted FAT32 export", os.environ["CARD_OUTCOME"]),
+          ]:
+              case = ET.SubElement(suite, "testcase", name=name)
+              if outcome != "success":
+                  ET.SubElement(case, "failure", message=f"GitHub Actions step: {outcome}")
+          ET.ElementTree(suite).write(sys.argv[1], encoding="utf-8", xml_declaration=True)
+          PYTHON
+          mainworthy report target/nextest/ci/junit.xml "$RUNNER_TEMP/desktop-checks.xml"
           mainworthy gate
