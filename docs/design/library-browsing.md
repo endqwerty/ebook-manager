@@ -13,8 +13,10 @@ The desktop app shows every book as a row in one box, rebuilt on each
 keystroke. The library reads every book record to answer a search, reads every
 book again on each import, and reads every journal file each time it opens.
 That works for a few hundred books. A reader with 100,000 books waits on all
-three. The app also knows only a title and authors for each book, so it cannot
-sort by series or date, show a cover, or draw a spine.
+three. The catalogue also keeps only a title, authors and a package identifier
+for each book. The helper already returns languages and each author's sort
+name, and import discards them. Nothing reads a series, a date, a cover or a
+length, so the app cannot sort by them, show a cover or draw a spine.
 
 ## Goals
 
@@ -22,7 +24,9 @@ sort by series or date, show a cover, or draw a spine.
   with its own remembered sort of up to three keys
   ([LIB-20](../requirements/01-library.md#finding-and-viewing), LIB-21, LIB-29).
 - Typing in the search box filters by title, author and series
-  ([LIB-22](../requirements/01-library.md#finding-and-viewing)).
+  ([LIB-22](../requirements/01-library.md#finding-and-viewing)). Tags are the
+  one field LIB-22 names that this leaves out, because the catalogue has none
+  yet.
 - Every action works from the keyboard
   ([LIB-28](../requirements/01-library.md#finding-and-viewing)).
 - With 100,000 books the window shows the library within 2 seconds of launch
@@ -73,22 +77,32 @@ folder restores them without opening any EPUB.
 |---|---|---|
 | Title, authors | The helper, as today | Yes |
 | Sort title | Absent unless the reader sets it. The catalogue derives the filing form from the title. | Yes |
-| Author sort names | The EPUB's `file-as`, else derived, per author | Yes |
+| Author sort names | The `sort_name` the helper already returns, else derived, per author | Yes |
 | Series memberships: name and position text, in order. The first is the primary series. | EPUB 3 `belongs-to-collection` with `collection-type` `series` and `group-position`. For EPUB 2, the `calibre:series` and `calibre:series_index` `meta` names, known from inspecting files that calibre writes, which [Rule 1](../../AGENTS.md#rule-1-never-look-at-calibres-source-code) allows. | Yes |
 | Date added | The library, at first import, in UTC. A replacement keeps it. | No |
-| Date published, as the text the file gives, and first language | The helper | No |
+| Date published, as the text the file gives, first language, and whether pages run right to left | The helper | No |
+| Survey version | The library, when the helper's word count and cover facts were last asked for. See [Covers](#covers). | No |
 | Length in words | The helper, counting the text of linear spine documents. Unknown if any chapter was skipped or truncated. | No |
-| Cover facts: average colour, spine colour, digest of the thumbnail pixels | The helper. See [Covers](#covers). | No |
+| Cover facts: average colour, spine colour, digest of the thumbnail | The helper. See [Covers](#covers). | No |
 
 Helper-supplied values live in `Book.imported` as today, and the reader's
-edits in the fields beside it. A journal entry written before this change
-lacks the new fields and reads with them absent.
+edits in the fields beside it. Every new field is optional. A journal entry
+written before this change lacks them and reads with them absent, the date
+added included, and such a book sorts last by date added. A replacement keeps
+the reader's edits and the date added, as it keeps the title and authors
+today, and takes the new file's helper facts. A journal entry larger than the
+8 MiB that replay accepts is refused when it is written.
 
-`Change::Position` gains the time of reading in UTC and a fraction read from
-0 to 1. The desktop reader computes the fraction as chapters before this one
-plus the fraction of this chapter scrolled, over the number of linear
-chapters. A book is finished when the reader has shown the end of the last
-chapter, which stores a fraction of exactly 1.
+`Change::Position` keeps its chapter and offset, which the reader resumes
+from, and gains the time of reading in UTC and a fraction read from 0 to 1.
+Saving the same chapter and offset again writes no new entry, whatever the
+time. The desktop reader computes the fraction as the linear chapters before
+this one plus the fraction of this chapter scrolled, over the number of linear
+chapters. A position in a chapter that is not linear counts as the start of
+the next linear one. A book is finished when the reader has shown the end of
+the last linear chapter, which stores a fraction of exactly 1. A replaced
+version's position is not shown: the catalogue row's progress and last read
+are cleared when the version changes.
 
 ### The catalogue in SQLite
 
@@ -107,10 +121,18 @@ positions, sources, journal                  -- as today
 meta(key PRIMARY KEY, value)                 -- change counter, key profile, published tip
 ```
 
-Indexes on `sha256`, `identifier`, `sources.id` and each key column. Import
-looks up its duplicate and review candidates through those indexes and no
-longer lists the shelf. Applying a journal change writes `book`, `search` and
-the change counter in the same transaction as the journal row.
+Indexes on `sha256`, `identifier` and `sources.id`. Import looks up its
+duplicate and review candidates through those indexes, returns them in title
+order as today, and no longer lists the shelf. Applying a journal change
+writes `book`, `search` and the change counter in the same transaction as the
+journal row. A changed book is updated in place and never deleted and
+inserted again, so its `n` does not change while the catalogue file lives.
+
+`meta` also records a catalogue version. When the tables are missing or the
+version differs at open, the library empties `book`, `search` and `positions`
+and applies every row of the SQLite `journal` table again in order, in one
+transaction. That reads no files, and keeps pending rows, journal numbering
+and `sources`.
 
 **Sort keys** are bytes that compare with `memcmp`, so SQLite sorts and
 indexes them with no callback.
@@ -129,24 +151,36 @@ indexes them with no callback.
   Punctuation separates runs and is otherwise ignored. So `1.5` sorts before
   `2`, `2.2.1` before `2.10.1`, `1-5` after `1`, and `TPB1` after every number
   and before `TPB10`.
+- A date published sorts as text when it begins with a four-digit year, as
+  ISO 8601 dates do. Any other text counts as missing.
+- A sort by Series orders by the primary series' name, then its position.
 - A missing value sorts last in both directions.
+- A place with no saved sort uses Title, ascending.
 
 `meta` records the locale and a key version. When either differs at open, the
 library rebuilds the key columns from `data`.
 
 **Search text** is the title, each author and each series name, case-folded
 with Unicode NFKD and marks removed, joined by a separator that cannot be
-typed. A search splits the typed text on spaces and every word must appear
-somewhere in it.
+typed. A search folds the typed text the same way, splits it on whitespace,
+and every word must appear somewhere in the book's text. Text that is empty or
+only whitespace is no filter.
 
 ### Opening without reading the journal
 
-`Library::open` no longer reads every journal file. It compares one thing: the
-newest published journal file named by `meta` must exist with the same bytes
-as the catalogue's row, and the file after it must not exist. If so, the
-catalogue is current and open returns. Otherwise, or when SQLite is missing,
-it runs today's full replay. `Library::refresh`, behind the Refresh button,
-still verifies the whole chain.
+`Library::open` no longer reads every journal file. `meta` holds the published
+tip: the sequence number of the newest journal row whose file and sidecar are
+installed. Publication advances it only after both are flushed, in the order
+used today. At open the library checks that the tip's file exists with the
+same bytes as its journal row and that the file after it does not exist. If
+both hold, it publishes any rows after the tip, as today's open does for
+pending changes, and returns. A library with no changes has no tip and passes
+when file 1 does not exist. Otherwise, or when SQLite is missing, it runs
+today's full replay from the files.
+
+A file changed or removed earlier in the chain is no longer noticed at open.
+`Library::refresh`, which the window keeps as Refresh library, still verifies
+the whole chain.
 
 ### Asking for books
 
@@ -157,18 +191,23 @@ pub struct SortTerm { pub field: Field, pub descending: bool }
 pub enum Field { Title, Author, Series, Added, Published, LastRead, Progress }
 
 pub struct OpenView { pub token: ViewToken, pub count: u32, pub first: Vec<BrowseRow> }
-pub struct BrowseRow {            // everything a grid cell, list row or table row shows
+pub struct BrowseRow {            // everything a grid cell, list row, table row or spine shows
     pub id: String, pub version_id: String, pub title: String, pub authors: String,
-    pub series: Option<(String, String)>, pub added: i64, pub published: Option<String>,
+    pub author_sort: Option<String>,   // the first author's sort name
+    pub series: Option<(String, String)>, pub added: Option<i64>, pub published: Option<String>,
     pub last_read: Option<i64>, pub progress: Option<f32>,
     pub cover: Option<CoverRef>, pub cover_rgb: Option<u32>, pub spine_rgb: Option<u32>,
+    pub right_to_left: bool,
 }
 pub struct ShelfStrip {
     pub thickness: Box<[u8]>,          // one per book, in view order
     pub groups: Box<[(u32, String)]>,  // rank where a group starts, and its name
 }
 
-impl Library { pub fn browse_reader(&self) -> Result<BrowseReader>; }
+impl Library {
+    pub fn browse_reader(&self) -> Result<BrowseReader>;
+    pub fn book(&self, id: &str) -> Result<Book>;   // the full record, for Edit and Export
+}
 impl BrowseReader {
     pub fn open(&mut self, query: &BrowseQuery, cancel: &Cancel) -> Result<OpenView>;
     pub fn window(&mut self, view: ViewToken, start: u32, len: u32) -> Result<Vec<BrowseRow>>;
@@ -180,13 +219,23 @@ impl BrowseReader {
 
 A rank is a zero-based position in one view. A `BrowseReader` owns a read-only
 SQLite connection and can move to another thread. It holds one view at a time.
+`first` is the first 128 rows.
+
+`open` does all its reading in one read transaction, so the order, the filter
+and the first page see one state of the catalogue, and it records that state's
+change counter in the view. `window`, `locate` and `shelf` each read in their
+own transaction and first compare the counter. If the catalogue has changed
+they fail with `StaleView`, and the shell opens the query again. A row number
+`n` is stable, so nothing else can go wrong between calls.
 
 `open` works in two steps, and keeps the result of the first between calls.
 
 1. **Order.** For the sort, one query returns every book's `n` in order, as a
-   `Vec<u32>`. A million books is 4 MB. A sort on one indexed key reads the
-   index. Any other sort is sorted by SQLite on the key bytes. The tie-break is
-   always `n`. The order is reused until the sort or the catalogue changes.
+   `Vec<u32>`. A million books is 4 MB. SQLite sorts on the key bytes, with
+   the missing values last and `n` as the final tie-break. The order is reused
+   until the sort or the change counter changes. No key column has an index
+   to start with. If the Open sample misses its limit, the first step is an
+   index for the default sort.
 2. **Filter.** Empty text shows the order as it is. Otherwise one scan of
    `search` marks the matching `n` in a bitmap, and a pass over the order keeps
    the marked ones. The view is that list.
@@ -199,8 +248,12 @@ the group starts for a first sort key of Author (first letter of the sort
 name), Series (series name) or a date (year). Any other first key has no
 groups.
 
+A group for books with no author is named `Unknown author`, with no series
+`No series`, and with no date `No date`.
+
 A call with a token from an earlier `open` fails with `StaleView`. `open`
 checks `cancel` between steps and during the scan, and returns `Cancelled`.
+A cancelled or failed `open` leaves the earlier view in place and usable.
 
 **Limits and risks.** Each keystroke scans `search` once: about 5 MB of text
 at 100,000 books. At 1,000,000 the scan and the pass over the order are
@@ -218,36 +271,53 @@ the helper's sandbox.
   item with the `cover-image` property, else the item named by the EPUB 2
   `cover` `meta`), limits its compressed size and its decoded pixels, decodes
   JPEG, PNG, GIF or WebP, draws transparency over white, and scales it to fit
-  within 256 by 384. It returns raw RGB pixels with their width and height,
+  within 256 by 384 by averaging areas. It refuses a cover over 20 MiB
+  compressed or over 40 million pixels decoded, and the helper's existing
+  memory and time limits apply. It returns raw RGB pixels with their width and height,
   the average colour, and the spine colour: the most common colour, after
   rounding each channel to 5 bits, on the tenth of the image at the bound
   side, else on the whole image. The bound side is the left unless the
   package's page progression is right to left.
-- The host checks that the byte length equals width times height times 3 and
-  that neither side exceeds the limit, then writes the pixels as a PNG to
-  `cache/thumbs/<digest>.png` under the app data folder, where the digest is
-  the SHA-256 of the raw pixels. The library stores the digest and colours in
-  the book record. The shell reads thumbnails straight from that folder on a
-  loader thread and never through the library's writer.
+- The host checks that both sides are at least 1 and within the limit and
+  that the byte length equals width times height times 3, computed without
+  overflow. `ebook-reader` hands the desktop a checked thumbnail value. The
+  desktop writes it as a PNG to `cache/thumbs/<digest>.png` under the app data
+  folder, through a temporary file and a rename. The digest is the SHA-256 of
+  the width and height as big-endian 32-bit numbers followed by the pixels.
+  The library stores the digest and colours in the book record. The shell
+  reads thumbnails straight from that folder on a loader thread and never
+  through the library's writer.
 - A book whose cover is missing, fails to decode or would need enlarging by
   more than three times is still imported, with no cover facts. The shell
   draws its binding set in type.
 - The thumbnail folder is a cache. When a book has a digest and no file, the
   shell shows the average colour and asks for the thumbnail again from the
-  managed EPUB in the background.
-- At startup the desktop queues a low-priority survey of books that have no
-  word count and no cover facts recorded as attempted, so books imported
-  before this change gain them. The record notes that the survey ran, so a
-  book with no cover is not surveyed twice.
+  managed EPUB in the background. It installs the result only if its digest
+  equals the one in the record.
+- The word count and cover facts come from one helper request, the survey.
+  Import runs it after the metadata request. The record stores the survey
+  version that ran, 1 for now, whether or not a cover was found.
+  `Library::set_survey(id, version_id, facts)` stores the result only if the
+  book still has that version, and changes nothing else in the record. At
+  startup the desktop asks the catalogue, a page at a time, for books whose
+  survey version is absent or older, and surveys them one at a time on a
+  background thread. A book whose helper could not start is left unmarked and
+  tried at the next start.
 
 ### The Linux window
 
 The window becomes an `AdwApplicationWindow` with an `AdwToolbarView`. The
 screen title, `All books` with the count, is the first line of the content in
-the serif. The header bar holds, from the start: Add (a menu with Files and
-Folder), then the view switch as linked toggle buttons, the Sort menu, and a
-search button that reveals a `GtkSearchBar`. Typing anywhere in the content
-starts a search.
+the serif. The header bar holds Add (a menu with Files and Folder) at its start,
+where [the GNOME mapping](interface.md#how-each-rule-maps-to-a-platform) puts
+it. At its end, in the order [the controls section](interface-views.md#the-controls-above-the-books)
+gives, are the view switch as linked toggle buttons, the Sort menu, a search
+button that reveals a `GtkSearchBar`, and the window menu, which holds Small,
+Medium and Large cover sizes and Refresh library. On a window under 640 wide
+the view switch is a menu and Table is absent from it. Typing anywhere in the
+content opens the search bar with the typed text and moves focus to it.
+The Sort menu's More opens the sort editor as a popover of three rows. Every
+menu, popover and the table's column menu opens and works from the keyboard.
 
 ```mermaid
 flowchart LR
@@ -262,13 +332,19 @@ flowchart LR
   is not loaded, the model asks the read thread for the page of 128 that holds
   it, and fills the object's properties when the page arrives. Bound widgets
   update through property notifications. Loaded pages sit in a small cache,
-  and live objects are found again through weak references.
+  and live objects are found again through weak references. Every reply
+  carries its token, and the model drops a reply for a view it has replaced.
+  An object always knows its rank, and an action on a book whose row has not
+  arrived waits for that page.
 - **Changing the query.** A new search or sort cancels the one in flight and
   opens a view. The model swaps the count, the first page and the token
   together and emits one `items-changed`.
-- **Selection and focus** are kept by book ID in the model. After a view is
-  replaced, `locate` finds where the selected and focused books went. Books no
-  longer in the view leave the selection.
+- **Selection, focus and scroll position** are kept by book ID in the model:
+  the selected books, the focused book and the first book on screen. After a
+  view is replaced, `locate` finds where they went. Books no longer in the
+  view leave the selection, and the view scrolls to keep the focused book on
+  screen if it is still there, else the first book that was on screen, else
+  the top.
 - **When the catalogue changes** (an import, an edit, a saved position), the
   write thread tells the window. The model coalesces these, reopens the same
   query off the main thread, and swaps as above. During an import it reopens
@@ -285,8 +361,14 @@ flowchart LR
 - **Shelf** is a custom scrollable widget. It asks for the `ShelfStrip` once
   per view, packs rows for its width (a new row when the next spine does not
   fit, and at each group start), and stores each row's first rank and y
-  offset. Packing a million bytes takes about a millisecond, so a resize
-  repacks at once and keeps the first fully visible book at the top. It
+  offset. Every row is the same height, from the shelf table's spine, top
+  strip, board and gap, plus one caption line when the row starts a group. A
+  spine wider than the row has a row to itself. On a resize it repacks, then
+  scrolls so that the row now holding the book that was first on screen is
+  the top row, or as near as the end of the content allows. Up and Down move
+  focus to the spine in the next row whose centre is nearest. The family name
+  on a spine is the text before the comma in `author_sort`, and the spine
+  style and binding colour hash the book's `id`. It
   creates spine widgets only for the rows on screen and a little beyond, and
   reuses them. Each spine widget has an accessible name with the title, author
   and reading state, takes focus, and draws itself as
@@ -294,8 +376,9 @@ flowchart LR
   with a perspective transform and moves nothing else.
 - **Actions** are `GAction`s on the window with accelerators, also offered in
   the context menu on a book and the Menu key: Read (Return, double click),
-  Edit, Send to device, and the view, sort and search commands. The Edit
-  window gains sort title, author sort names, series and position.
+  Edit, Send to device, and the view, sort and search commands. An action
+  takes the book's ID and fetches the full record with `Library::book`. The
+  Edit window gains sort title, author sort names, series and position.
 - **Remembered choices**: the view, the sort for each view, the cover size and
   the table's columns, order and widths are saved in `settings.json` in the
   app's config folder.
@@ -309,10 +392,14 @@ a catalogue of N made-up books through the same function that applies a
 journal change, in large transactions, without writing journal files. It
 varies title length and script, repeats authors, puts a third of the books in
 series, leaves some dates empty and repeats some sort keys. It records the
-published tip as empty so that open takes the fast path.
+published tip as the last generated change and marks every row published.
+The benchmark's catalogue therefore has no journal files, so its Open sample
+starts from a copy made before any open and runs with the tip check told to
+pass. That switch exists only under the `fixture` feature.
 
 A `scale` test binary, built in release, generates 100,000 and 1,000,000
-books and measures, each as the median of several runs:
+books and measures each sample below five times with the file cache warm. The
+median must be within the limit:
 
 | Sample | What one sample is | Limit at 100,000 | Limit at 1,000,000 |
 |---|---|---|---|
@@ -321,14 +408,18 @@ books and measures, each as the median of several runs:
 | Window | Thirty random pages of 128, the last page included | 20 ms each | 50 ms each |
 | Shelf | `shelf` for the default view | 200 ms | 2 s |
 | Re-sort | `open` with a three-key sort not used before | 1 s | 10 s |
+| Import | The catalogue lookups of one import: by digest, by source path and by identifier | 10 ms | 10 ms |
 
 Each sample checks its result against an answer computed from the generator's
-own list, so a fast wrong answer fails. CI runs it as a separate job from the
-tests. The limits are first proposals, to be replaced with measured values
+own list, so a fast wrong answer fails. CI runs it as its own step after the
+tests and reports its outcome to Mainworthy as a case named Scale benchmark,
+the way the desktop and card steps are reported. The limits are first proposals, to be replaced with measured values
 and their margin when the benchmark first runs. The limits at 1,000,000 mean
 "still works", not "fast".
 
-The window's own start is measured in the desktop smoke run: with a 100,000
+The window's own start is measured from the third pull request on, when the
+window is paged. Until then the desktop keeps `Library::search` and its
+current window, and is no faster than today. It is measured in the desktop smoke run: with a 100,000
 book catalogue in place, the time from starting the process to the first
 titles being readable through the accessibility tree must be under 2 seconds
 plus the driver's own polling interval.
@@ -372,9 +463,12 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
     `reopen_reads_one_journal_file_unless_the_tip_moved`
     in `tests/library.rs`.
 13. When the catalogue is rebuilt from the portable folder alone, then every
-    new fact, sort and reading fraction is as before.
+    new fact, the order each sort gives and the reading fraction are as
+    before. When a change was committed and the app stopped before its file
+    was installed, then the next open installs it without Refresh.
     `portable_only_rebuild_restores_bytes_metadata_and_position` in
-    `tests/library.rs`, extended.
+    `tests/library.rs`, extended, and the two existing interrupted
+    publication tests there, which reopen without refreshing.
 14. When a second copy of a known file, path or package identifier is
     imported into a large library, then the outcome is as today and the import
     lists no books. The existing import tests, and the `scale` binary's import
@@ -428,7 +522,7 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 | `…/browse.rs` | `BrowseReader` and its types. |
 | `…/fixture.rs` | The generator, behind the `fixture` feature. |
 | `crates/ebook-library/tests/browse.rs`, `tests/scale.rs` | Behaviour 1 to 11 and 16. |
-| `crates/ebook-reader` | Series, sort names, date, direction and word count in `Metadata`; the cover request; decoders run only in the helper. |
+| `crates/ebook-reader` | Series, date and page direction in `Metadata`; the survey request for word count and cover; decoders run only in the helper. |
 | `apps/desktop/src/main.rs` | The window, header bar and actions. |
 | `…/browse.rs` | The read thread and `BookListModel`. |
 | `…/cover.rs` | The `Cover` widget and the thumbnail loader. |
@@ -443,17 +537,20 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 Four pull requests. The first two touch different crates and are built at the
 same time.
 
-1. **Catalogue and benchmark** (open). The record's new fields with nothing
-   yet filling the helper-supplied ones, the catalogue tables, sort keys, fast
-   open, indexed import lookups, `BrowseReader`, the fixture and the benchmark
-   job. The desktop keeps its current window and calls `open` and `window` in
-   place of `search`. Behaviour 1 to 14 and 16.
+1. **Catalogue and benchmark** (open). The record's new fields and
+   `set_survey`, with nothing yet filling the helper-supplied ones, the
+   catalogue tables, sort keys, fast open, indexed import lookups,
+   `BrowseReader`, `Library::book`, the fixture and the benchmark step. The
+   desktop is not changed, and `Library::search` stays for it until the third
+   pull request deletes it. Behaviour 1 to 14 and 16.
    Closes [#28](https://github.com/endqwerty/ebook-manager/issues/28).
 2. **Helper facts and covers** (open). Everything under `crates/ebook-reader`.
    Behaviour 15.
-3. **The window** (open). After 1 and 2. Import passes the facts in, the
-   thumbnail cache, the survey, the model, Grid, List and Table, the controls,
-   actions and remembered choices. Behaviour 17 without the shelf.
+3. **The window** (open). After 1 and 2. Import passes the helper's facts
+   into `ParsedMetadata`, the reader saves the fraction read, the thumbnail
+   cache, the survey, the model, Grid, List and Table, the controls, actions
+   and remembered choices, and the launch time check. Behaviour 17 without the
+   shelf.
    Closes [#25](https://github.com/endqwerty/ebook-manager/issues/25).
 4. **The shelf** (open). After 3. Behaviour 18.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).
