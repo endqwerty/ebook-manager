@@ -32,6 +32,11 @@ pub struct SpineItem {
 pub struct Package {
     pub metadata: Metadata,
     pub spine: Vec<SpineItem>,
+    /// Some linear reading-order entry names no manifest item, so it is
+    /// missing from `spine`.
+    pub unresolved_linear: bool,
+    /// The manifest item the package declares as its cover image.
+    pub cover: Option<ManifestItem>,
     /// Container path of the EPUB 3 navigation document, if declared.
     pub nav: Option<String>,
     /// Container path of the NCX, if declared.
@@ -91,6 +96,7 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
     metadata.protected = protected;
 
     let mut manifest: HashMap<&str, ManifestItem> = HashMap::new();
+    let mut cover_by_property = None;
     let mut nav = None;
     let mut ncx_by_type = None;
     if let Some(m) = package.child("manifest") {
@@ -107,6 +113,11 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
                 .trim()
                 .to_ascii_lowercase();
             let properties = item.attr("properties").unwrap_or("").to_owned();
+            if cover_by_property.is_none()
+                && properties.split_whitespace().any(|p| p == "cover-image")
+            {
+                cover_by_property = Some(id);
+            }
             if nav.is_none() && properties.split_whitespace().any(|p| p == "nav") {
                 nav = Some(local.path.clone());
             }
@@ -122,6 +133,7 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
     }
 
     let mut spine = Vec::new();
+    let mut unresolved_linear = false;
     let mut ncx = None;
     if let Some(s) = package.child("spine") {
         ncx = s
@@ -133,22 +145,45 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
             return Err(WireError::limit("number of chapters"));
         }
         for itemref in refs {
+            let linear = itemref.attr("linear").is_none_or(|l| l.trim() != "no");
             let Some(item) = itemref.attr("idref").and_then(|id| manifest.get(id)) else {
+                unresolved_linear |= linear;
                 continue;
             };
             spine.push(SpineItem {
                 path: item.path.clone(),
                 media_type: item.media_type.clone(),
-                linear: itemref.attr("linear").is_none_or(|l| l.trim() != "no"),
+                linear,
             });
         }
     }
+    let cover_id = cover_by_property.or_else(|| epub2_cover(package));
+    let cover = cover_id.and_then(|id| manifest.remove(id)).or_else(|| {
+        // Some books name the cover's file rather than its manifest id.
+        let content = epub2_cover(package)?;
+        let local = paths::resolve(&opf_path, content)?;
+        let id = *manifest.iter().find(|(_, i)| i.path == local.path)?.0;
+        manifest.remove(id)
+    });
     Ok(Package {
         metadata,
         spine,
+        unresolved_linear,
+        cover,
         nav,
         ncx: ncx.or(ncx_by_type),
     })
+}
+
+/// The EPUB 2 convention `<meta name="cover" content="...">`.
+fn epub2_cover(package: &Element) -> Option<&str> {
+    package
+        .child("metadata")?
+        .elements()
+        .find(|e| e.name == "meta" && e.attr("name").map(str::trim) == Some("cover"))?
+        .attr("content")
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
 }
 
 fn collect<'a>(root: &'a Element, name: &str, out: &mut Vec<&'a Element>) {

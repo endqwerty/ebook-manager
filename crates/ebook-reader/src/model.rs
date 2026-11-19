@@ -30,6 +30,10 @@ pub struct Limits {
     pub max_output_bytes: u64,
     /// Address-space limit the helper puts on itself.
     pub memory_bytes: u64,
+    /// Largest cover image file, as unpacked, that a survey decodes.
+    pub max_cover_bytes: u64,
+    /// Most pixels, width times height, a cover image may declare.
+    pub max_cover_pixels: u64,
 }
 
 impl Default for Limits {
@@ -47,6 +51,8 @@ impl Default for Limits {
             max_compression_ratio: 200,
             max_output_bytes: 96 * MIB,
             memory_bytes: 768 * MIB,
+            max_cover_bytes: 20 * MIB,
+            max_cover_pixels: 40_000_000,
         }
     }
 }
@@ -96,6 +102,105 @@ pub struct Identifier {
     pub value: String,
     /// This is the identifier the package names as its unique identifier.
     pub is_unique_id: bool,
+}
+
+/// A colour with 8-bit red, green and blue channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Rgb {
+    /// `0xRRGGBB`.
+    pub fn to_u32(self) -> u32 {
+        u32::from(self.r) << 16 | u32::from(self.g) << 8 | u32::from(self.b)
+    }
+}
+
+/// What [`crate::Reader::survey`] found. The two facts are independent: an
+/// unusable cover leaves the word count, and an unknown count leaves the cover.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Survey {
+    /// Words in the linear reading order. `None` when any linear item could
+    /// not be found, was not text this build reads, or was cut at a limit.
+    pub words: Option<u32>,
+    /// `None` when the book declares no cover, or its cover could not be used.
+    pub cover: Option<SurveyedCover>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurveyedCover {
+    pub thumbnail: Thumbnail,
+    /// The mean colour of the thumbnail.
+    pub average: Rgb,
+    /// The most common colour on the tenth of the cover at the bound side.
+    pub spine: Rgb,
+}
+
+/// A cover scaled to fit within [`Thumbnail::MAX_WIDTH`] by
+/// [`Thumbnail::MAX_HEIGHT`], as rows of RGB pixels, top row first, three
+/// bytes a pixel, no padding. Only this crate can make one, after checking
+/// that both sides are within range and the pixels fill them exactly.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Thumbnail {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+impl Thumbnail {
+    pub const MAX_WIDTH: u32 = 256;
+    pub const MAX_HEIGHT: u32 = 384;
+
+    /// `None` unless `1 <= width <= MAX_WIDTH`, `1 <= height <= MAX_HEIGHT`
+    /// and `pixels` holds exactly `width * height * 3` bytes.
+    pub(crate) fn new(width: u32, height: u32, pixels: Vec<u8>) -> Option<Thumbnail> {
+        let sides_fit =
+            (1..=Self::MAX_WIDTH).contains(&width) && (1..=Self::MAX_HEIGHT).contains(&height);
+        let expected = usize::try_from(width)
+            .ok()?
+            .checked_mul(usize::try_from(height).ok()?)?
+            .checked_mul(3)?;
+        (sides_fit && pixels.len() == expected).then_some(Thumbnail {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// `width * height * 3` bytes: red, green, blue, row by row.
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// The pixel at column `x`, row `y`, or `None` outside the image.
+    pub fn pixel(&self, x: u32, y: u32) -> Option<Rgb> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let at = (y as usize * self.width as usize + x as usize) * 3;
+        Some(Rgb {
+            r: self.pixels[at],
+            g: self.pixels[at + 1],
+            b: self.pixels[at + 2],
+        })
+    }
+}
+
+impl fmt::Debug for Thumbnail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Thumbnail({}x{})", self.width, self.height)
+    }
 }
 
 /// One reading-order item.

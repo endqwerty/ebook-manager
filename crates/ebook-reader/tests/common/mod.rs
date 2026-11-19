@@ -359,3 +359,64 @@ pub fn package(p: Parts) -> Vec<u8> {
     files.extend_from_slice(p.files);
     zip(&files)
 }
+
+/// An EPUB 3 book with one chapter of `text` and `image` as its declared
+/// cover, stored under `name` with the given media type.
+pub fn with_cover(image: &[u8], name: &str, media_type: &str, spine_attrs: &str) -> Vec<u8> {
+    let manifest = format!(
+        r#"<item id="cov" href="images/{name}" media-type="{media_type}" properties="cover-image"/>"#
+    );
+    let path = format!("OEBPS/images/{name}");
+    package(Parts {
+        manifest: &manifest,
+        spine_attrs,
+        chapters: &["<p>Three short words.</p>"],
+        files: &[(&path, image)],
+        ..Parts::default()
+    })
+}
+
+pub const RED: [u8; 3] = [200, 30, 30];
+pub const GREEN: [u8; 3] = [30, 160, 60];
+pub const BLUE: [u8; 3] = [30, 30, 200];
+
+/// A cover with a red tenth on the left, a blue tenth on the right and
+/// green between, encoded in `format`.
+pub fn striped(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+    picture(width, height, format, |x, _| {
+        let c = if x < width / 10 {
+            RED
+        } else if x >= width - width / 10 {
+            BLUE
+        } else {
+            GREEN
+        };
+        [c[0], c[1], c[2], 255]
+    })
+}
+
+/// Encode a picture painted pixel by pixel as RGBA. JPEG drops the alpha.
+pub fn picture(
+    width: u32,
+    height: u32,
+    format: image::ImageFormat,
+    paint: impl Fn(u32, u32) -> [u8; 4],
+) -> Vec<u8> {
+    let rgba = image::RgbaImage::from_fn(width, height, |x, y| image::Rgba(paint(x, y)));
+    let img = if format == image::ImageFormat::Jpeg {
+        image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(rgba).to_rgb8())
+    } else {
+        image::DynamicImage::ImageRgba8(rgba)
+    };
+    let mut out = Cursor::new(Vec::new());
+    img.write_to(&mut out, format).unwrap();
+    out.into_inner()
+}
+
+/// Channels within `tolerance` of each other, for lossy formats.
+pub fn near(actual: ebook_reader::Rgb, expected: [u8; 3], tolerance: u8) -> bool {
+    [actual.r, actual.g, actual.b]
+        .iter()
+        .zip(expected)
+        .all(|(a, e)| a.abs_diff(e) <= tolerance)
+}

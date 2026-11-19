@@ -5,6 +5,7 @@ mod common;
 
 use common::*;
 use ebook_reader::{Reader, ReaderConfig, ReaderError, Unsupported};
+use image::ImageFormat;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -846,4 +847,201 @@ fn a_lower_inherited_soft_memory_limit_is_kept() {
     cfg.limits.max_blocks_per_chapter = 1_000_000;
     let roomy = Reader::new(cfg).unwrap().open(&heavy).unwrap();
     assert_eq!(roomy.read_chapter(0).unwrap().blocks.len(), 450_000);
+}
+
+fn survey_with(cfg: ReaderConfig, bytes: &[u8]) -> ebook_reader::Survey {
+    let dir = Scratch::new();
+    Reader::new(cfg)
+        .unwrap()
+        .survey(&dir.file("b.epub", bytes))
+        .unwrap()
+}
+
+/// V4: a cover that cannot be used gives no cover, never an error, and the
+/// word count is still returned.
+#[test]
+fn unusable_covers_leave_the_word_count() {
+    let png = striped(100, 150, ImageFormat::Png);
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        // 50 by 75 would have to grow more than three times.
+        ("tiny", striped(50, 75, ImageFormat::Png), "image/png"),
+        ("corrupt", {
+            let mut b = png.clone();
+            b.truncate(40);
+            b.extend_from_slice(&[0xAB; 64]);
+            b
+        }, "image/png"),
+        ("svg", br#"<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900"/></svg>"#.to_vec(), "image/svg+xml"),
+        // The cover is declared but its file is not in the book.
+        ("missing", Vec::new(), "image/png"),
+    ];
+    for (what, image, media) in cases {
+        let bytes = if what == "missing" {
+            package(Parts {
+                manifest: r#"<item id="cov" href="gone.png" media-type="image/png" properties="cover-image"/>"#,
+                chapters: &["<p>Three short words.</p>"],
+                ..Parts::default()
+            })
+        } else {
+            with_cover(&image, "cover.img", media, "")
+        };
+        let s = survey_with(config(), &bytes);
+        assert_eq!(s.cover, None, "{what}");
+        assert_eq!(s.words, Some(3), "{what}");
+    }
+    // The same picture, intact, is used.
+    assert!(
+        survey_with(config(), &with_cover(&png, "c.png", "image/png", ""))
+            .cover
+            .is_some()
+    );
+}
+
+/// V4, F6: a cover file over the size limit, or declaring more pixels than
+/// the limit, is not decoded.
+#[test]
+fn oversized_covers_are_not_decoded() {
+    let noisy = picture(120, 180, ImageFormat::Png, |x, y| {
+        let v = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)) as u8;
+        [v, v.rotate_left(3), v.rotate_left(5), 255]
+    });
+    let book = with_cover(&noisy, "c.png", "image/png", "");
+    assert!(noisy.len() > 4096, "{}", noisy.len());
+    assert!(survey_with(config(), &book).cover.is_some());
+
+    let mut small_file = config();
+    small_file.limits.max_cover_bytes = 4096;
+    let s = survey_with(small_file, &book);
+    assert_eq!((s.cover, s.words), (None, Some(3)));
+
+    let mut few_pixels = config();
+    few_pixels.limits.max_cover_pixels = 120 * 180 - 1;
+    let s = survey_with(few_pixels, &book);
+    assert_eq!((s.cover, s.words), (None, Some(3)));
+
+    // A header that claims 60,000 by 60,000 pixels, with no data behind it.
+    let mut huge = b"GIF89a".to_vec();
+    huge.extend_from_slice(&60_000u16.to_le_bytes());
+    huge.extend_from_slice(&60_000u16.to_le_bytes());
+    huge.extend_from_slice(&[0x00, 0, 0]);
+    huge.extend_from_slice(&[0x2C, 0, 0, 0, 0]);
+    huge.extend_from_slice(&60_000u16.to_le_bytes());
+    huge.extend_from_slice(&60_000u16.to_le_bytes());
+    huge.extend_from_slice(&[0x00, 0x08, 0x02, 0x4C, 0x01, 0x00, 0x3B]);
+    let s = survey_with(config(), &with_cover(&huge, "c.gif", "image/gif", ""));
+    assert_eq!((s.cover, s.words), (None, Some(3)));
+}
+
+/// V2: the count is unknown when a linear chapter is missing, not text this
+/// build reads, or cut at the block limit. The cover is still returned.
+#[test]
+fn an_incomplete_reading_order_has_no_word_count() {
+    let image = striped(300, 450, ImageFormat::Png);
+    let cover = r#"<item id="cov" href="c.png" media-type="image/png" properties="cover-image"/>"#;
+    let unknown = |manifest: &str, spine_extra: &str, cfg: ReaderConfig| {
+        let manifest = format!("{cover}{manifest}");
+        let bytes = package(Parts {
+            manifest: &manifest,
+            spine_extra,
+            chapters: &["<p>One.</p><p>Two.</p>"],
+            files: &[("OEBPS/c.png", &image)],
+            ..Parts::default()
+        });
+        let s = survey_with(cfg, &bytes);
+        assert!(s.cover.is_some());
+        s.words
+    };
+    assert_eq!(unknown("", "", config()), Some(2));
+    let absent = r#"<item id="gone" href="gone.xhtml" media-type="application/xhtml+xml"/>"#;
+    assert_eq!(
+        unknown(absent, r#"<itemref idref="gone"/>"#, config()),
+        None
+    );
+    // A non-linear item that is missing does not matter.
+    assert_eq!(
+        unknown(absent, r#"<itemref idref="gone" linear="no"/>"#, config()),
+        Some(2)
+    );
+    assert_eq!(
+        unknown("", r#"<itemref idref="undeclared"/>"#, config()),
+        None
+    );
+    let audio = r#"<item id="snd" href="s.mp3" media-type="audio/mpeg"/>"#;
+    assert_eq!(unknown(audio, r#"<itemref idref="snd"/>"#, config()), None);
+    let mut short = config();
+    short.limits.max_blocks_per_chapter = 1;
+    assert_eq!(unknown("", "", short), None);
+}
+
+/// V1: a protected book's survey is an answer with nothing in it.
+#[test]
+fn a_protected_book_surveys_as_unknown() {
+    let encryption = br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/c0.xhtml"/></enc:CipherData></enc:EncryptedData></encryption>"#;
+    let s = survey_with(
+        config(),
+        &simple(
+            &["<p>Locked.</p>"],
+            &[("META-INF/encryption.xml", encryption)],
+        ),
+    );
+    assert_eq!((s.words, s.cover), (None, None));
+}
+
+/// V5: the host refuses a cover reply whose pixels do not fill its size, or
+/// whose size is zero or over the thumbnail's bounds.
+#[test]
+fn malformed_cover_replies_are_refused() {
+    let dir = Scratch::new();
+    let book = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let fake = |name: &str, width: u32, height: u32, len: usize| {
+        let pixels = vec!["7"; len].join(",");
+        let reply = format!(
+            r#"{{"Ok":{{"Survey":{{"words":9,"cover":{{"width":{width},"height":{height},"pixels":[{pixels}],"average":{{"r":1,"g":2,"b":3}},"spine":{{"r":4,"g":5,"b":6}}}}}}}}}}"#
+        );
+        let reply_file = dir.file(&format!("{name}.json"), reply.as_bytes());
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}';;\n*) cat '{}';;\nesac\n",
+            reply_file.display()
+        );
+        let path = dir.file(name, script.as_bytes());
+        Command::new("/bin/chmod")
+            .arg("+x")
+            .arg(&path)
+            .status()
+            .unwrap();
+        let cfg = ReaderConfig {
+            bwrap_path: Some(path),
+            ..config()
+        };
+        let mut outcome = None;
+        settle(|| match Reader::new(cfg.clone()) {
+            Ok(r) => {
+                outcome = Some(r.survey(&book));
+                String::new()
+            }
+            Err(e) => format!("{e:?}"),
+        });
+        outcome.expect("a reader over the stand-in")
+    };
+
+    let good = fake("good", 2, 3, 18).unwrap();
+    assert_eq!(good.words, Some(9));
+    let cover = good.cover.unwrap();
+    assert_eq!((cover.thumbnail.width(), cover.thumbnail.height()), (2, 3));
+    assert_eq!(cover.spine, ebook_reader::Rgb { r: 4, g: 5, b: 6 });
+
+    for (name, w, h, len) in [
+        ("short", 2, 3, 17),
+        ("long", 2, 3, 19),
+        ("zero-wide", 0, 3, 0),
+        ("zero-high", 2, 0, 0),
+        ("too-wide", 257, 1, 257 * 3),
+        ("too-high", 1, 385, 385 * 3),
+        ("overflowing", u32::MAX, u32::MAX, 3),
+    ] {
+        match fake(name, w, h, len) {
+            Err(ReaderError::HelperFailed { .. }) => {}
+            other => panic!("{name}: expected a refusal, got {other:?}"),
+        }
+    }
 }
