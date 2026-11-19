@@ -380,6 +380,9 @@ def run(binary, fixture, root):
                 after = first_row_titles(body, 1)
                 assert after and after[0] != before[0], (before, after)
                 scrolled = settled()
+                # Still moved once the view is still: a view put back after
+                # the wheel would match what was there before it.
+                assert {n for n, _ in scrolled} != {n for n, _ in placed}, (placed, scrolled)
                 print(f"PASS import wheel moved the top title from {before[0]!r} to {after[0]!r}", flush=True)
                 # Rows, not blanks: every cell on screen names its book.
                 assert all(name.startswith("Book ") for name, _ in scrolled), scrolled

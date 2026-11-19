@@ -895,7 +895,11 @@ pub fn open(app: &adw::Application) {
     model.set_hooks(Hooks {
         before_replace: Box::new(move || {
             if let Some(library) = for_replace.upgrade() {
-                library.close_menus();
+                // Only a menu that points at a book or a column has to go
+                // when the books are replaced. The header's menus point at
+                // nothing in the view, and closing them here would shut
+                // them once a second for as long as an import runs.
+                library.close_context_menu();
                 library.placed.set(library.placed.get() + 1);
             }
         }),
