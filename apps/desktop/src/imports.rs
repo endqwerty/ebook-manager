@@ -38,7 +38,7 @@ fn stage(source: PathBuf, thumbnails: &Path) -> Result<Candidate> {
     let survey = reader.survey(staged.path()).ok().map(|survey| {
         let facts = thumbs::facts(&survey);
         if let (Some(cover), Some(found)) = (&facts.cover, &survey.cover) {
-            let _ = thumbs::write(thumbnails, &cover.digest, &found.thumbnail);
+            let _ = thumbs::write(thumbnails, &cover.digest, (&found.thumbnail).into());
         }
         facts
     });
