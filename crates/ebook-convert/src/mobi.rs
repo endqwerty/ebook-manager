@@ -36,6 +36,10 @@ const LOSS_BAD_CHARACTERS: &str = "Byte sequences that are not valid text were r
 const LOSS_SHORT_TEXT: &str =
     "The text was shorter than its declared length; the end may be missing.";
 const LOSS_TRUNCATED_MARKUP: &str = "Markup cut off at the end of the text was removed.";
+const LOSS_UNKNOWN_REFERENCE: &str =
+    "Unrecognised named character references such as &mdash; were kept as written.";
+/// A quoted attribute value longer than this is treated as an unclosed quote.
+const MAX_QUOTED_VALUE: usize = 1024;
 
 pub fn decode(bytes: &[u8]) -> Result<ParsedBook, DecodeError> {
     if bytes.len() > MAX_INPUT_BYTES {
@@ -685,7 +689,7 @@ fn build_sections(
     while !rest.is_empty() {
         let lt = rest.find('<').unwrap_or(rest.len());
         if skip_until.is_none() {
-            b.push_text(&decode_entities(&rest[..lt]));
+            b.push_text(&decode_entities(&rest[..lt], losses));
         }
         rest = &rest[lt..];
         if rest.is_empty() {
@@ -701,7 +705,7 @@ fn build_sections(
             }
             continue;
         }
-        let Some(gt) = rest.find('>') else {
+        let Some(gt) = tag_end(rest) else {
             losses.note(LOSS_TRUNCATED_MARKUP);
             break;
         };
@@ -840,7 +844,37 @@ impl Tag {
     }
 }
 
-fn decode_entities(s: &str) -> std::borrow::Cow<'_, str> {
+/// Finds the `>` that closes the tag at the start of `s`, skipping any `>` inside
+/// an attribute value quoted after `=`. A quote that does not close within
+/// `MAX_QUOTED_VALUE` bytes is treated as stray, and the first `>` ends the tag.
+fn tag_end(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut after_equals = false;
+    let mut i = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'>' => return Some(i),
+            b'=' => after_equals = true,
+            quote @ (b'"' | b'\'') if after_equals => {
+                let window = &bytes[i + 1..bytes.len().min(i + 1 + MAX_QUOTED_VALUE)];
+                match window.iter().position(|&b| b == quote) {
+                    Some(close) => i += 1 + close,
+                    None => return s.find('>'),
+                }
+                after_equals = false;
+            }
+            b if b.is_ascii_whitespace() => {}
+            _ => after_equals = false,
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Decodes `&name;`, `&#NNN;` and `&#xHH;` references. A named reference this
+/// decoder does not know is kept as written and reported once. An `&` that does
+/// not start a reference ending in `;` is plain text.
+fn decode_entities<'s>(s: &'s str, losses: &mut Losses) -> std::borrow::Cow<'s, str> {
     if !s.contains('&') {
         return std::borrow::Cow::Borrowed(s);
     }
@@ -849,12 +883,20 @@ fn decode_entities(s: &str) -> std::borrow::Cow<'_, str> {
     while let Some(amp) = rest.find('&') {
         out.push_str(&rest[..amp]);
         rest = &rest[amp..];
-        let end = rest.bytes().take(12).position(|b| b == b';');
-        let decoded = end.and_then(|end| entity(&rest[1..end]).map(|c| (c, end)));
-        match decoded {
-            Some((c, end)) => {
+        match reference(rest) {
+            Some((Reference::Char(c), len)) => {
                 out.push(c);
-                rest = &rest[end + 1..];
+                rest = &rest[len..];
+            }
+            Some((Reference::BadNumber, len)) => {
+                losses.note(LOSS_BAD_CHARACTERS);
+                out.push('\u{FFFD}');
+                rest = &rest[len..];
+            }
+            Some((Reference::UnknownName, len)) => {
+                losses.note(LOSS_UNKNOWN_REFERENCE);
+                out.push_str(&rest[..len]);
+                rest = &rest[len..];
             }
             None => {
                 out.push('&');
@@ -866,23 +908,54 @@ fn decode_entities(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-fn entity(name: &str) -> Option<char> {
-    if let Some(number) = name.strip_prefix('#') {
-        let code = match number.strip_prefix(['x', 'X']) {
-            Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-            None => number.parse::<u32>().ok()?,
-        };
-        return Some(char::from_u32(code).unwrap_or('\u{FFFD}'));
+enum Reference {
+    Char(char),
+    BadNumber,
+    UnknownName,
+}
+
+/// Reads the reference at the start of `s` (which begins with `&`) and returns
+/// it with its length in bytes, `;` included.
+fn reference(s: &str) -> Option<(Reference, usize)> {
+    const MAX_NAME: usize = 32;
+    let body = &s[1..];
+    let (digits, radix, skip) = match body.strip_prefix('#') {
+        Some(number) => match number.strip_prefix(['x', 'X']) {
+            Some(_) => (&body[2..], 16, 2),
+            None => (number, 10, 1),
+        },
+        None => (body, 0, 0),
+    };
+    let run = digits
+        .bytes()
+        .take(MAX_NAME + 1)
+        .take_while(|b| match radix {
+            16 => b.is_ascii_hexdigit(),
+            10 => b.is_ascii_digit(),
+            _ => b.is_ascii_alphanumeric(),
+        })
+        .count();
+    if run == 0 || run > MAX_NAME || digits.as_bytes().get(run) != Some(&b';') {
+        return None;
     }
-    Some(match name {
+    let len = 1 + skip + run + 1;
+    let token = &digits[..run];
+    if radix != 0 {
+        let c = u32::from_str_radix(token, radix)
+            .ok()
+            .and_then(char::from_u32);
+        return Some((c.map_or(Reference::BadNumber, Reference::Char), len));
+    }
+    let c = match token {
         "amp" => '&',
         "lt" => '<',
         "gt" => '>',
         "quot" => '"',
         "apos" => '\'',
         "nbsp" => '\u{00A0}',
-        _ => return None,
-    })
+        _ => return Some((Reference::UnknownName, len)),
+    };
+    Some((Reference::Char(c), len))
 }
 
 fn invalid(reason: &str) -> DecodeError {

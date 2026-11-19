@@ -332,6 +332,128 @@ fn unknown_markup_comments_and_entities() {
         .losses
         .iter()
         .any(|l| l.contains("Unrecognised markup")));
+    assert_eq!(unknown_reference_losses(&book), 1);
+}
+
+const UNKNOWN_REFERENCE: &str =
+    "Unrecognised named character references such as &mdash; were kept as written.";
+
+fn unknown_reference_losses(book: &ParsedBook) -> usize {
+    book.losses
+        .iter()
+        .filter(|l| *l == UNKNOWN_REFERENCE)
+        .count()
+}
+
+#[test]
+fn unknown_named_references_are_kept_and_reported_once() {
+    let f = MobiFixture {
+        markup: page(
+            "<p>a &mdash; b &eacute; c &copy; d &mdash;</p><mbp:pagebreak/><p>&eacute;t&eacute;</p>",
+        ),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(
+        paragraphs(&book),
+        [
+            "a &mdash; b &eacute; c &copy; d &mdash;",
+            "&eacute;t&eacute;"
+        ]
+    );
+    assert_eq!(unknown_reference_losses(&book), 1);
+    assert_eq!(book.losses.len(), 1, "{:?}", book.losses);
+}
+
+#[test]
+fn ampersands_that_are_not_references_are_plain_text() {
+    let long_name = "a".repeat(33);
+    let f = MobiFixture {
+        markup: page(&format!(
+            "<p>AT&T &amp; R&D; & more &#; &#x; &{long_name}; &amp;amp;</p>"
+        )),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(
+        paragraphs(&book),
+        [format!("AT&T & R&D; & more &#; &#x; &{long_name}; &amp;")]
+    );
+    assert_eq!(
+        unknown_reference_losses(&book),
+        1,
+        "R&D; is a named reference"
+    );
+}
+
+#[test]
+fn numeric_references_outside_unicode_are_replaced_and_reported() {
+    let f = MobiFixture {
+        markup: page("<p>&#xD800;|&#99999999999;|&#x1F30A;|&#233;</p>"),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(paragraphs(&book), ["\u{FFFD}|\u{FFFD}|\u{1F30A}|\u{e9}"]);
+    assert!(book
+        .losses
+        .iter()
+        .any(|l| l == "Byte sequences that are not valid text were replaced."));
+    assert_eq!(unknown_reference_losses(&book), 0);
+}
+
+#[test]
+fn greater_than_inside_quoted_attributes_stays_in_the_tag() {
+    let f = MobiFixture {
+        images: vec![JPEG.to_vec()],
+        markup: page(
+            "<p title=\"a > b\">One</p>\
+<p class = 'x>y'>Two<img alt=\"<1> & >2\" recindex=\"1\"></p>\
+<a href=\"x>y\" filepos=0000000001>Three</a>\
+<p data-note=it's>Four</p>",
+        ),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(paragraphs(&book), ["One", "Two", "Three", "Four"]);
+    let blocks = &book.sections[0].blocks;
+    assert!(blocks.iter().any(|b| matches!(b, Block::Image(0))));
+    assert!(!book.losses.iter().any(|l| l.contains("cut off")));
+}
+
+#[test]
+/// A quote with no partner within 1024 bytes is stray, so the first `>` ends
+/// the tag. A partner within that window closes the value, as in HTML.
+fn unclosed_quote_in_a_tag_ends_at_the_first_greater_than() {
+    let words = "no quotes here ".repeat(80);
+    let long = "z".repeat(2000);
+    let f = MobiFixture {
+        markup: page(&format!(
+            "<p title=\"oops>Kept one</p><p>{words}</p><p title=\"{long}>Kept two</p><p>Kept three</p>"
+        )),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(
+        paragraphs(&book),
+        ["Kept one", words.trim(), "Kept two", "Kept three"]
+    );
+
+    let f = MobiFixture {
+        markup: page("<p title=\"oops>Swallowed</p><p class=\"next\">Kept</p>"),
+        ..Default::default()
+    };
+    assert_eq!(paragraphs(&ok(&f)), ["Kept"]);
+}
+
+#[test]
+fn quoted_value_cut_off_at_the_end_keeps_earlier_text() {
+    let f = MobiFixture {
+        markup: "<p>kept</p><p title=\"never closed".into(),
+        ..Default::default()
+    };
+    let book = ok(&f);
+    assert_eq!(paragraphs(&book), ["kept"]);
+    assert!(book.losses.iter().any(|l| l.contains("cut off")));
 }
 
 #[test]

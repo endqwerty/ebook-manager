@@ -49,6 +49,8 @@ files, no network, no global state. Its tests and the generated sample live in
   numeric references are decoded.
 - JPEG and PNG images, each record stored once.
 
+Named character references outside the supported set stay visible as written and are reported once per book. A numeric reference outside Unicode becomes � and is reported. A quoted attribute may contain `>`. The decoder looks ahead at most 1,024 bytes for its closing quote.
+
 ### What it refuses or reports
 
 | Input | Result |
