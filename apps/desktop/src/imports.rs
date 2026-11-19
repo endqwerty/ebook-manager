@@ -45,6 +45,7 @@ fn stage(source: PathBuf) -> Result<Candidate> {
             let scheme = i.scheme.unwrap_or_default();
             format!("{}:{scheme}{}", scheme.len(), i.value)
         }),
+        ..Default::default()
     };
     Ok(Candidate {
         staged,

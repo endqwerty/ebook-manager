@@ -65,10 +65,15 @@ jobs:
           TMPDIR="$card" cargo nextest run --release --locked -p ebook-device --test export \
             -E 'test(=retries_keep_one_copy_and_collisions_preserve_the_original)'
 
+      - name: Measure catalogue browsing at both library sizes
+        id: scale
+        run: cargo run --release --locked -p ebook-library --features fixture --bin scale
+
       - name: Report results and read the gate
         if: always()
         env:
           DESKTOP_OUTCOME: ${{ steps.desktop.outcome }}
+          SCALE_OUTCOME: ${{ steps.scale.outcome }}
           CARD_OUTCOME: ${{ steps.card.outcome }}
           MAINWORTHY_URL: ${{ vars.MAINWORTHY_URL }}
           MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
@@ -82,6 +87,7 @@ jobs:
           suite = ET.Element("testsuite", name="Linux integration")
           for name, outcome in [
               ("Import, read, restart and export", os.environ["DESKTOP_OUTCOME"]),
+              ("Scale benchmark", os.environ["SCALE_OUTCOME"]),
               ("Mounted FAT32 export", os.environ["CARD_OUTCOME"]),
           ]:
               case = ET.SubElement(suite, "testcase", name=name)

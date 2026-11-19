@@ -1,0 +1,13 @@
+PRAGMA trusted_schema=OFF; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+BEGIN;
+CREATE TABLE IF NOT EXISTS book(n INTEGER PRIMARY KEY,id TEXT UNIQUE,sha256 TEXT,identifier TEXT,data TEXT,title TEXT,authors TEXT,author_sort TEXT,series TEXT,position TEXT,title_key BLOB,author_key BLOB,series_key BLOB,position_key BLOB,added INTEGER,published TEXT,last_read INTEGER,progress REAL,words INTEGER,language TEXT,spine_rgb INTEGER,cover_rgb INTEGER,cover_digest TEXT,version_id TEXT,rtl INTEGER,survey_version INTEGER);
+CREATE INDEX IF NOT EXISTS digest ON book(sha256);
+CREATE INDEX IF NOT EXISTS package ON book(identifier);
+CREATE TABLE IF NOT EXISTS search(n INTEGER PRIMARY KEY,folded TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS positions(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sources(path BLOB PRIMARY KEY,id TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS source_book ON sources(id);
+CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,id TEXT UNIQUE NOT NULL,data TEXT NOT NULL,published INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value);
+INSERT OR IGNORE INTO meta VALUES('version',1),('counter',0),('tip',0);
+COMMIT;

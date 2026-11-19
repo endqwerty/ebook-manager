@@ -99,10 +99,10 @@ today, and takes the new file's helper facts. A journal entry larger than the
 from, and gains the time of reading in UTC and a fraction read from 0 to 1.
 Saving the same chapter, offset and fraction again writes no new entry,
 whatever the time. The fraction is part of that comparison because the end of
-a long last block changes the fraction and not the offset. The desktop reader computes the fraction as the linear chapters before
-this one plus the fraction of this chapter scrolled, over the number of linear
-chapters. A position in a chapter that is not linear counts as the start of
-the next linear one. A book is finished when the reader has shown the end of
+a long last block changes the fraction and not the offset. The fraction is whatever the reader reports, and the library
+stores it as given. [The reader's design](https://github.com/endqwerty/ebook-manager/issues/29)
+weighs chapters by their size. A position in a chapter that is not linear
+counts as the start of the next linear one. A book is finished when the reader has shown the end of
 the last linear chapter, which stores a fraction of exactly 1. A replaced
 version's position is not shown: the catalogue row's progress and last read
 are cleared when the version changes.
@@ -170,7 +170,10 @@ library rebuilds the key columns from `data`.
 with Unicode NFKD and marks removed, joined by a separator that cannot be
 typed. A search folds the typed text the same way, splits it on whitespace,
 and every word must appear somewhere in the book's text. Text that is empty or
-only whitespace is no filter.
+only whitespace is no filter. Removing marks makes some scripts match more
+than a reader of them would expect: a kana search ignores voicing marks and a
+Devanagari search ignores vowel signs. A ligature letter such as `Œ` is not
+found by typing `oe`.
 
 ### Opening without reading the journal
 
@@ -185,7 +188,8 @@ when file 1 does not exist. Otherwise it runs today's `refresh`, which
 compares every file with its SQLite row, applies files SQLite lacks, and
 publishes rows that have no file, so a missing file never discards a
 committed change. A rebuild from the portable folder sets the tip to the last
-file it applied.
+file it applied. A separate marker records the first successful recovery.
+Until then, reopening retries the full check, including when file 1 is absent.
 
 A file changed or removed earlier in the chain is no longer noticed at open.
 `Library::refresh`, which the window keeps as Refresh library, still verifies
@@ -253,12 +257,27 @@ they fail with `StaleView`, and the shell opens the query again. A row number
 gives the ranks of books by ID, for keeping selection and scroll position.
 `shelf` returns each book's spine thickness in view order,
 `min(48, 16 + round(words / 12000))` or 24 when the length is unknown, and
-the group starts for a first sort key of Author (first letter of the sort
-name), Series (series name) or a date (year). Any other first key has no
+the group starts for a first sort key of Author (the first letter of the sort
+name; see below), Series (series name) or a date (year). Any other first key has no
 groups.
 
 A group for books with no author is named `Unknown author`, with no series
 `No series`, and with no date `No date`.
+
+An author's letter is the first character of the sort name, compared as the
+locale compares letters, so `A`, `a` and in English `Å` are one group and in
+Swedish `Å` is its own. Where the locale files the first two characters
+differently from the first alone, the pair is the letter: Danish `Aa`, Czech
+`Ch`, Welsh `Ng`. A name that begins with anything but a letter is in the
+group `#`. The name is read in composed form and marks before its first
+letter are skipped. This is a rule of thumb and not a locale's alphabet. It
+does not know a letter of three characters (Hungarian `Dzs` is with `Dz`), a
+doubled pair (`Ccs`), or which of two letters filed together names the group
+(Swedish `Ü` with `Y`, a ligature such as `Æ` in English, a Thai vowel
+written before its consonant), and it capitalises without the locale's rules
+(Turkish dotted `i`). In those cases a caption can differ from what a reader
+of that language expects or appear twice. A locale's own index is
+[its own issue](https://github.com/endqwerty/ebook-manager/issues/100).
 
 A call with a token from an earlier `open` fails with `StaleView`. `open`
 checks `cancel` between steps and during the scan, and returns `Cancelled`.
@@ -452,21 +471,37 @@ A `scale` test binary, built in release, generates 100,000 and 1,000,000
 books and measures each sample below five times with the file cache warm. The
 median must be within the limit:
 
-| Sample | What one sample is | Limit at 100,000 | Limit at 1,000,000 |
-|---|---|---|---|
-| Open | `Library::open` on the existing catalogue, then `open` of the default view and its first page | 1 s | 5 s |
-| Search | `open` of a query to its count and first page, for a one-letter query, a common word, a rare word and no match | 100 ms | 1 s |
-| Window | Thirty random pages of 128, the last page included | 20 ms each | 50 ms each |
-| Shelf | `shelf` for the default view | 200 ms | 2 s |
-| Re-sort | `open` with a three-key sort not used before | 1 s | 10 s |
-| Import | The catalogue lookups of one import: by digest, by source path and by identifier | 10 ms | 10 ms |
+Each cell gives the median and range in milliseconds across five warm repetitions,
+followed by the enforced median limit. The window sample uses the slowest of
+30 pages in each repetition, including the final page.
 
-Each sample checks its result against an answer computed from the generator's
-own list, so a fast wrong answer fails. CI runs it as its own step after the
-tests and reports its outcome to Mainworthy as a case named Scale benchmark,
-the way the desktop and card steps are reported. The limits are first proposals, to be replaced with measured values
-and their margin when the benchmark first runs. The limits at 1,000,000 mean
-"still works", not "fast".
+| Sample | 100,000 books, median [range] / limit | 1,000,000 books, median [range] / limit |
+|---|---:|---:|
+| Open writer, default order and first page | 76.7 [63.1–108.9] / 300 | 658 [650–769] / 3,500 |
+| Search for `a` | 28.2 [15.1–28.5] / 85 | 150 [148–157] / 800 |
+| Search for `atlas` | 28.4 [15.6–28.5] / 85 | 152 [150–182] / 800 |
+| Search for `book 4094` | 29.6 [16.0–30.7] / 85 | 167 [158–258] / 800 |
+| Search with no match | 27.3 [14.6–28.3] / 85 | 150 [146–303] / 800 |
+| Window of 128 rows | 0.59 [0.35–0.67] / 2 | 0.53 [0.47–0.59] / 3 |
+| Shelf | 54.3 [29.5–55.7] / 150 | 281 [278–301] / 1,500 |
+| Re-sort by date added, author, title | 120 [74–137] / 400 | 929 [893–1,435] / 5,000 |
+| Import lookups by digest, source and identifier | 0.107 [0.089–0.131] / 1 | 0.095 [0.092–0.137] / 1 |
+
+The limits allow roughly five times the upper end of the first local run,
+rounded to practical units for a shared runner. The table shows a subsequent
+run against those limits. Including fixture creation and an incremental
+release build, the step took 68 seconds locally. It checks IDs, counts,
+window contents, shelf thicknesses and all three import matches against the
+fixture's inputs. The import sample gives each lookup a different matching book.
+
+A separate 100,000-book run measured CPU time and read calls on Linux.
+Opening took 59 ms wall time and 59 ms CPU. Re-sorting took 75 ms for each.
+Both read cached pages and sorted keys on one thread. Searches spent 16–17 ms
+scanning and filtering, including about 1,000–1,200 reads per query. Shelf
+read the book rows in row-number order (20,050 reads, 28 ms CPU). A window
+needed 135 reads for its primary-key fetches and import needed 25 for its
+indexed lookups. None of these samples fetched bytes from physical storage.
+CI reports the step as **Scale benchmark**.
 
 The window's own start is measured from the third pull request on, when the
 window is paged. Until then the desktop keeps `Library::search` and its
@@ -559,7 +594,7 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
   100,000 by arithmetic, and the benchmark will say if that is wrong.
 - **A registered SQLite collation in place of key bytes.** Every comparison
   would call back into ICU, and an index would be unusable by any tool that
-  opens the file without the callback.
+  opens the file without the callback. ICU4X 2.4.0 exposes numeric ordering and directly emits comparable bytes. [Numeric ordering](https://docs.rs/icu_collator/2.4.0/icu_collator/struct.CollatorPreferences.html#structfield.numeric_ordering) and [sort-key output](https://docs.rs/icu_collator/2.4.0/icu_collator/struct.CollatorBorrowed.html#method.write_sort_key_to).
 - **Reading thumbnails through the library.** A scroll would queue behind an
   import.
 - **Decoding covers in the app.** Image decoders are a common place for memory
@@ -576,7 +611,7 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 | `…/sortkey.rs` | Filing form, article table, collation keys, position keys, folding. |
 | `…/browse.rs` | `BrowseReader` and its types. |
 | `…/fixture.rs` | The generator, behind the `fixture` feature. |
-| `crates/ebook-library/tests/browse.rs`, `tests/scale.rs` | Behaviour 1 to 11 and 16. |
+| `crates/ebook-library/tests/browse.rs`, `src/bin/scale.rs` | Behaviour 1 to 11 and 16. |
 | `crates/ebook-reader` | Series, date and page direction in `Metadata`; the survey request for word count and cover; decoders run only in the helper. |
 | `apps/desktop/src/main.rs` | The window, header bar and actions. |
 | `…/browse.rs` | The read thread and `BookListModel`. |
@@ -584,7 +619,7 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 | `…/views/grid.rs`, `list.rs`, `table.rs`, `shelf.rs` | One file per view. |
 | `…/settings.rs` | Remembered choices. |
 | `…/imports.rs`, `reader.rs` | Pass the new facts in; save the fraction read. |
-| `.github/workflows/check.yml` | The benchmark job. |
+| `.github/workflows/check.yml` | The benchmark step. |
 | `specs/` | `library-mvp.md` and `desktop-mvp.md` updated, each in the pull request that changes the behaviour. |
 
 ## Tasks
@@ -592,7 +627,7 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 Four pull requests. The first two touch different crates and are built at the
 same time.
 
-1. **Catalogue and benchmark** (open). The record's new fields and
+1. **Catalogue and benchmark** (done). The record's new fields and
    `set_survey`, with nothing yet filling the helper-supplied ones, the
    catalogue tables, sort keys, fast open, indexed import lookups,
    `BrowseReader`, `Library::book`, `unsurveyed`, the fixture and the
@@ -613,9 +648,6 @@ same time.
 
 ## Open questions
 
-- **Does `icu_collator` produce sort keys in its current release?** Assumed
-  yes. If it does not, register a collation instead and note the cost in this
-  page.
 - **How should words be counted in Chinese, Japanese and Korean text?**
   Assumed: each Han, kana or hangul character counts as half a word.
 - **Is one journal file per change workable at a million books?** Assumed

@@ -1,4 +1,13 @@
 //! Single-device library for stable EPUB inputs already examined by the reader helper.
+mod browse;
+pub use browse::*;
+mod catalogue;
+mod record;
+pub use record::*;
+#[cfg(feature = "fixture")]
+pub mod fixture;
+mod journal;
+mod sortkey;
 use anyhow::{Context, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -29,29 +38,6 @@ impl std::fmt::Display for PublicationPending {
     }
 }
 impl std::error::Error for PublicationPending {}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ParsedMetadata {
-    pub title: String,
-    pub authors: Vec<String>,
-    pub identifier: Option<String>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Book {
-    pub id: String,
-    pub edition_id: String,
-    pub file_id: String,
-    pub version_id: String,
-    pub title: String,
-    pub authors: Vec<String>,
-    pub imported: ParsedMetadata,
-    pub sha256: String,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReadingPosition {
-    pub version_id: String,
-    pub chapter: u32,
-    pub offset: u32,
-}
 #[derive(Debug, Clone)]
 pub enum ImportChoice {
     Review,
@@ -68,7 +54,7 @@ pub enum ImportOutcome {
 
 #[derive(Serialize, Deserialize)]
 enum Change {
-    Book(Book),
+    Book(Box<Book>),
     Position {
         id: String,
         position: ReadingPosition,
@@ -87,48 +73,6 @@ fn uid() -> String {
 }
 fn uuid_ok(s: &str) -> bool {
     Uuid::parse_str(s).is_ok_and(|v| v.to_string() == s)
-}
-fn fields(title: &str, authors: &[String]) -> Result<()> {
-    ensure!(
-        !title.trim().is_empty()
-            && title.len() <= 8192
-            && authors.len() <= 128
-            && authors.iter().all(|a| a.len() <= 4096),
-        "invalid title or author metadata"
-    );
-    Ok(())
-}
-impl ParsedMetadata {
-    fn validate(&self) -> Result<()> {
-        fields(&self.title, &self.authors)?;
-        ensure!(
-            self.identifier
-                .as_ref()
-                .is_none_or(|s| !s.trim().is_empty() && s.len() <= 8192),
-            "invalid identifier"
-        );
-        Ok(())
-    }
-}
-impl Book {
-    fn validate(&self) -> Result<()> {
-        ensure!(
-            [&self.id, &self.edition_id, &self.file_id, &self.version_id]
-                .into_iter()
-                .all(|s| uuid_ok(s)),
-            "invalid book identity"
-        );
-        ensure!(
-            self.sha256.len() == 64
-                && self
-                    .sha256
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "invalid digest"
-        );
-        fields(&self.title, &self.authors)?;
-        self.imported.validate()
-    }
 }
 fn directory(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
@@ -193,6 +137,7 @@ fn digest(r: &mut impl Read) -> Result<String> {
 }
 
 pub struct Library {
+    keys: sortkey::Keys,
     db: Connection,
     portable: PathBuf,
     _lock: File,
@@ -233,47 +178,62 @@ impl Library {
         ] {
             check_optional_file(&root.join(name))?;
         }
-        let db = Connection::open(root.join("library.sqlite"))?;
-        db.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA synchronous=FULL;
-            CREATE TABLE IF NOT EXISTS books(id TEXT PRIMARY KEY,data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS positions(id TEXT PRIMARY KEY,data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS sources(path BLOB PRIMARY KEY,id TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,id TEXT UNIQUE NOT NULL,data TEXT NOT NULL,published INTEGER NOT NULL);")?;
+        let db = catalogue::open(&root.join("library.sqlite"))?;
+        let keys = sortkey::Keys::new()?;
         let mut lib = Self {
             db,
+            keys,
             portable,
             _lock: lock,
         };
-        lib.refresh()?;
+        let tx = lib.db.transaction()?;
+        if tx
+            .query_row("SELECT value FROM meta WHERE key='profile'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+            .as_ref()
+            != Some(&lib.keys.profile)
+        {
+            let mut rows = tx.prepare("SELECT data FROM book ORDER BY n")?;
+            for data in rows.query_map([], |r| r.get::<_, String>(0))? {
+                catalogue::project(&tx, &serde_json::from_str(&data?)?, &lib.keys)?;
+            }
+            drop(rows);
+            tx.execute(
+                "INSERT OR REPLACE INTO meta VALUES('profile',?)",
+                [&lib.keys.profile],
+            )?;
+            tx.execute("UPDATE meta SET value=value+1 WHERE key='counter'", [])?;
+        }
+        tx.commit()?;
+        lib.recover()?;
         Ok(lib)
     }
-    fn book(&self, id: &str) -> Result<Book> {
+    pub fn book(&self, id: &str) -> Result<Book> {
         let data: String = self
             .db
-            .query_row("SELECT data FROM books WHERE id=?", [id], |r| r.get(0))?;
+            .query_row("SELECT data FROM book WHERE id=?", [id], |r| r.get(0))?;
         let b: Book = serde_json::from_str(&data)?;
         b.validate()?;
         Ok(b)
     }
     pub fn search(&self, query: &str) -> Result<Vec<Book>> {
-        let q = query.trim().to_lowercase();
-        let mut out = Vec::new();
-        for row in self
-            .db
-            .prepare("SELECT data FROM books")?
-            .query_map([], |r| r.get::<_, String>(0))?
-        {
-            let b: Book = serde_json::from_str(&row?)?;
-            b.validate()?;
-            if std::iter::once(&b.title)
-                .chain(&b.authors)
-                .any(|s| s.to_lowercase().contains(&q))
-            {
-                out.push(b)
+        let mut reader = self.browse_reader()?;
+        let view = reader.open(
+            &BrowseQuery {
+                text: query.into(),
+                ..Default::default()
+            },
+            &Cancel::default(),
+        )?;
+        let mut books = Vec::with_capacity(view.count as usize);
+        for start in (0..view.count).step_by(128) {
+            for row in reader.window(view.token, start, 128)? {
+                books.push(self.book(&row.id)?);
             }
         }
-        out.sort_by_cached_key(|b| (b.title.to_lowercase(), b.id.clone()));
-        Ok(out)
+        Ok(books)
     }
     fn directory(&self, part: &str) -> Result<PathBuf> {
         ensure!(
@@ -320,23 +280,12 @@ impl Library {
         );
         let sha = digest(&mut tmp.reopen()?)?;
         let key = source.as_os_str().as_encoded_bytes();
-        let prev: Option<String> = self
-            .db
-            .query_row("SELECT id FROM sources WHERE path=?", [key], |r| r.get(0))
-            .optional()?;
-        let mut candidates = Vec::new();
-        let mut exact = Vec::new();
-        for b in self.search("")? {
-            if b.sha256 == sha {
-                exact.push(b.clone());
-            }
-            if prev.as_ref() == Some(&b.id)
-                || b.sha256 == sha
-                || (meta.identifier.is_some() && meta.identifier == b.imported.identifier)
-            {
-                candidates.push(b);
-            }
-        }
+        let (prev, candidates) = self.import_candidates(key, &sha, meta.identifier.as_deref())?;
+        let exact: Vec<_> = candidates
+            .iter()
+            .filter(|b| b.sha256 == sha)
+            .cloned()
+            .collect();
         let duplicate = match (&choice, exact.as_slice()) {
             (ImportChoice::Replace(id), _) => exact.iter().find(|b| &b.id == id),
             (_, [b])
@@ -376,6 +325,15 @@ impl Library {
                 authors: meta.authors.clone(),
                 imported: meta.clone(),
                 sha256: sha.clone(),
+                added: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_secs()
+                        .try_into()?,
+                ),
+                sort_title: None,
+                author_sorts: None,
+                series: None,
             },
         };
         if replaced {
@@ -390,12 +348,35 @@ impl Library {
             book.sha256 = sha;
         }
         self.store_blob(tmp, &book)?;
-        self.commit(Change::Book(book.clone()), Some((key, &book.id)))?;
+        self.commit(Change::Book(Box::new(book.clone())), Some((key, &book.id)))?;
         Ok(if replaced {
             ImportOutcome::Replaced(book)
         } else {
             ImportOutcome::Added(book)
         })
+    }
+    fn import_candidates(
+        &self,
+        key: &[u8],
+        sha: &str,
+        identifier: Option<&str>,
+    ) -> Result<(Option<String>, Vec<Book>)> {
+        let prev: Option<String> = self
+            .db
+            .query_row("SELECT id FROM sources WHERE path=?", [key], |r| r.get(0))
+            .optional()?;
+        let mut candidates = Vec::new();
+        for data in self
+            .db
+            .prepare_cached("SELECT data FROM book WHERE sha256=? OR id=? OR identifier=?")?
+            .query_map(params![sha, prev, identifier], |r| r.get::<_, String>(0))?
+        {
+            let b: Book = serde_json::from_str(&data?)?;
+            b.validate()?;
+            candidates.push(b);
+        }
+        candidates.sort_by_cached_key(|b| (b.title.to_lowercase(), b.id.clone()));
+        Ok((prev, candidates))
     }
     fn store_blob(&self, tmp: NamedTempFile, b: &Book) -> Result<()> {
         let path = self.blob(b)?;
@@ -414,15 +395,47 @@ impl Library {
         let mut b = self.book(id)?;
         b.title = title.into();
         b.authors = authors.into();
-        self.commit(Change::Book(b.clone()), None)?;
+        self.commit(Change::Book(Box::new(b.clone())), None)?;
         Ok(b)
+    }
+    /// Replace user-controlled filing and series overrides. None resumes imported values.
+    pub fn edit_filing(
+        &mut self,
+        id: &str,
+        sort_title: Option<String>,
+        author_sorts: Option<Vec<Option<String>>>,
+        series: Option<Vec<(String, Option<String>)>>,
+    ) -> Result<Book> {
+        let mut book = self.book(id)?;
+        book.sort_title = sort_title;
+        book.author_sorts = author_sorts;
+        book.series = series;
+        self.commit(Change::Book(Box::new(book.clone())), None)?;
+        Ok(book)
+    }
+    pub fn unsurveyed(&self, limit: u32) -> Result<Vec<Book>> {
+        self.db
+            .prepare("SELECT data FROM book WHERE coalesce(survey_version,0)<1 ORDER BY n LIMIT ?")?
+            .query_map([limit], |r| r.get::<_, String>(0))?
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect()
+    }
+    pub fn set_survey(&mut self, id: &str, version_id: &str, facts: SurveyFacts) -> Result<()> {
+        let mut book = self.book(id)?;
+        if book.version_id == version_id && book.imported.survey.as_ref() != Some(&facts) {
+            book.imported.survey = Some(facts);
+            self.commit(Change::Book(Box::new(book)), None)?;
+        }
+        Ok(())
     }
     pub fn save_position(&mut self, id: &str, pos: &ReadingPosition) -> Result<()> {
         ensure!(
             self.book(id)?.version_id == pos.version_id,
             "reading position belongs to another version"
         );
-        if self.load_position(id)?.as_ref() == Some(pos) {
+        if self.load_position(id)?.is_some_and(|old| {
+            old.chapter == pos.chapter && old.offset == pos.offset && old.fraction == pos.fraction
+        }) {
             return self
                 .publish()
                 .context(PublicationPending { book_id: id.into() });
@@ -446,168 +459,11 @@ impl Library {
             .transpose()?
             .filter(|p: &ReadingPosition| p.version_id == b.version_id))
     }
-    fn commit(&mut self, change: Change, source: Option<(&[u8], &str)>) -> Result<()> {
-        let book_id = match &change {
-            Change::Book(b) => b.id.clone(),
-            Change::Position { id, .. } => id.clone(),
-        };
-        let tx = self.db.transaction()?;
-        let parent = tip(&tx)?;
-        let e = Entry {
-            format: 1,
-            id: uid(),
-            parent,
-            change,
-        };
-        let data = serde_json::to_string(&e)?;
-        append(&tx, &e, &data)?;
-        if let Some((path, id)) = source {
-            tx.execute(
-                "INSERT OR REPLACE INTO sources VALUES(?,?)",
-                params![path, id],
-            )?;
-        }
-        tx.commit()?;
-        self.publish().context(PublicationPending { book_id })
-    }
-    fn publish(&mut self) -> Result<()> {
-        let dir = self.directory("changes")?;
-        let pending = self
-            .db
-            .prepare("SELECT seq,data FROM journal WHERE published=0 ORDER BY seq")?
-            .query_map([], |r| Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (seq, data) in pending {
-            let path = dir.join(format!("{seq:020}.json"));
-            if path.try_exists()? {
-                ensure!(
-                    read_entry(&path)? == data.as_bytes(),
-                    "conflicting portable change"
-                );
-            } else {
-                install(&path, data.as_bytes())?;
-            }
-            let e: Entry = serde_json::from_str(&data)?;
-            if let Change::Book(b) = e.change {
-                self.sidecar(&b)?;
-            }
-            File::open(&dir)?.sync_all()?;
-            self.db
-                .execute("UPDATE journal SET published=1 WHERE seq=?", [seq])?;
-        }
-        Ok(())
-    }
-    fn sidecar(&self, b: &Book) -> Result<()> {
-        b.validate()?;
-        let dir = self.directory("sidecars")?;
-        let path = dir.join(format!("{}-{}.json", b.id, sidecar_digest(b)?));
-        let data = serde_json::to_vec_pretty(b)?;
-        if path.try_exists()? {
-            let edited = regular(&path)?;
-            if edited.metadata()?.len() != data.len() as u64 || read_entry(&path)? != data {
-                preserve(&path, "proposal")?;
-            }
-        }
-        if !path.try_exists()? {
-            install(&path, &data)?;
-        }
-        File::open(dir)?.sync_all()?;
-        Ok(())
-    }
-    pub fn refresh(&mut self) -> Result<()> {
-        let dir = self.directory("changes")?;
-        let mut ordered = BTreeMap::new();
-        for item in dir.read_dir()? {
-            let item = item?;
-            let name = item.file_name();
-            if item.path().extension().is_none_or(|ext| ext != "json") {
-                continue;
-            }
-            let name = name.to_str().context("invalid journal filename")?;
-            let seq: u64 = name
-                .strip_suffix(".json")
-                .context("unknown journal file")?
-                .parse()?;
-            ensure!(
-                name == format!("{seq:020}.json"),
-                "unexpected journal filename"
-            );
-            ordered.insert(seq, item.path());
-        }
-        let published_count = ordered.len() as u64;
-        let tx = self.db.transaction()?;
-        for (idx, (seq, path)) in ordered.into_iter().enumerate() {
-            ensure!(seq == idx as u64 + 1, "portable journal gap");
-            let data = String::from_utf8(read_entry(&path)?)?;
-            let existing: Option<String> = tx
-                .query_row("SELECT data FROM journal WHERE seq=?", [seq], |r| r.get(0))
-                .optional()?;
-            if let Some(old) = existing {
-                ensure!(old == data, "conflicting journal history");
-                continue;
-            }
-            let e: Entry = serde_json::from_str(&data)?;
-            append(&tx, &e, &data)?;
-        }
-        tx.execute(
-            "UPDATE journal SET published=0 WHERE seq > ?",
-            [published_count],
-        )?;
-        tx.commit()?;
-        self.publish()
-    }
 }
 // Keep the prior name recoverable before installing verified replacement contents.
 fn preserve(path: &Path, label: &str) -> Result<()> {
     let backup = path.with_extension(format!("{label}-{}", uid()));
     fs::rename(path, &backup)?;
     File::open(path.parent().context("missing parent directory")?)?.sync_all()?;
-    Ok(())
-}
-fn sidecar_digest(b: &Book) -> Result<String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec_pretty(b)?)
-    ))
-}
-fn tip(db: &Connection) -> Result<Option<String>> {
-    Ok(db
-        .query_row(
-            "SELECT id FROM journal ORDER BY seq DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .optional()?)
-}
-fn append(db: &Connection, e: &Entry, data: &str) -> Result<()> {
-    ensure!(
-        e.format == 1 && uuid_ok(&e.id) && e.parent == tip(db)?,
-        "incompatible journal history"
-    );
-    match &e.change {
-        Change::Book(b) => {
-            b.validate()?;
-            db.execute(
-                "INSERT OR REPLACE INTO books VALUES(?,?)",
-                params![b.id, serde_json::to_string(b)?],
-            )?;
-        }
-        Change::Position { id, position } => {
-            let raw: String =
-                db.query_row("SELECT data FROM books WHERE id=?", [id], |r| r.get(0))?;
-            ensure!(
-                serde_json::from_str::<Book>(&raw)?.version_id == position.version_id,
-                "position version mismatch"
-            );
-            db.execute(
-                "INSERT OR REPLACE INTO positions VALUES(?,?)",
-                params![id, serde_json::to_string(position)?],
-            )?;
-        }
-    }
-    db.execute(
-        "INSERT INTO journal(id,data,published) VALUES(?,?,0)",
-        params![e.id, data],
-    )?;
     Ok(())
 }
