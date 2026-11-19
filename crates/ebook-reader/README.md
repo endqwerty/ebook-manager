@@ -70,7 +70,8 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
 `PATH` is never searched. When `ReaderConfig::helper_path` is set, only that
 path is used. Otherwise the first existing file wins:
 
-1. The `EBOOK_READER_HELPER` environment variable, if it is an absolute path
+1. In debug builds only: the `EBOOK_READER_HELPER` environment variable, if
+   it is an absolute path. Release builds ignore it.
 2. `<directory of the running program>/ebook-reader-helper`
 3. `<directory of the running program>/../libexec/ebook-manager/ebook-reader-helper`
 
@@ -82,26 +83,48 @@ cargo build --release --manifest-path crates/ebook-reader/Cargo.toml --bin ebook
 ```
 
 `bwrap` is taken from `ReaderConfig::bwrap_path`, else `/usr/bin/bwrap`, else
-`/bin/bwrap`.
+`/bin/bwrap`. It must be bubblewrap 0.8.0 or later (for `--disable-userns`),
+on Linux 5.11 or later. Older systems get `SandboxUnavailable`.
 
 ## The sandbox
 
-The helper runs with new user, PID, network, IPC, UTS and cgroup namespaces, no
-capabilities, an empty environment and a read-only root that contains only:
+Before bubblewrap starts, the child process marks every descriptor above
+stderr close-on-exec and asks the kernel to kill it when the application
+exits, so no open file, socket or process handle of the application reaches
+the sandbox. This is the crate's only `unsafe` block, in `src/spawn.rs`. The
+kill-on-exit request follows the calling thread, so do not let the thread that
+made a call end before the call returns; every call here blocks, which keeps
+that true.
+
+The helper runs with new user, PID, network, IPC, UTS and cgroup namespaces,
+no way to create further user namespaces, no capabilities, an empty
+environment and a read-only root that contains only:
 
 - `/helper`: the helper program
 - `/book.epub`: the one file being read
 - `/usr/lib`, `/usr/lib64`, `/lib`, `/lib64`: the host's libraries, for the loader
 
-Before reading anything the helper limits its own address space, CPU time, open
-files and core dumps, and stops if any of those cannot be set. It then checks that `/proc`, `/home`, `/etc` and similar
-paths are absent, that it cannot write, and that it has no network route. The
+Before reading anything the helper limits its own address space, CPU time,
+open files, core dumps and process count, and stops if any of those cannot be
+set. It then checks that `/proc`, `/home`, `/etc` and similar paths are
+absent, that it cannot write, that it has no network route and that it cannot
+start another process. The last check is what lets the address-space limit
+stand for the whole sandbox. The
 host adds a wall-clock deadline and a cap on the reply size, and kills the
 sandbox when either is passed. Defaults are in `Limits` and
 `ReaderConfig::default()`.
 
-Not yet in place: a seccomp system-call filter, Landlock, a cgroup memory
-limit, and any sandbox for Flatpak, where `bwrap` cannot be nested this way.
+Not yet in place, in the order worth closing:
+
+1. A seccomp system-call filter. The helper can still make any system call an
+   unprivileged process may.
+2. A private library directory or a static helper. The host's library
+   directories are readable inside the sandbox.
+3. A cgroup. The memory bound is on address space per process, not on
+   resident memory, and there is no kernel-enforced group to clean up.
+4. Landlock, as a second layer under the mount setup.
+5. Flatpak, where `bwrap` cannot be nested this way. The reader fails closed
+   there.
 
 ## Side effects
 
@@ -113,7 +136,7 @@ disk, nothing is cached and no network connection is made.
 ```sh
 cargo test                     # unit tests and end-to-end tests through the real sandbox
 cargo test --release
-cargo run --example epub-dump -- book.epub      # needs EBOOK_READER_HELPER or an installed layout
+cargo run --example epub-dump -- book.epub      # debug build: set EBOOK_READER_HELPER to the built helper
 ```
 
 The end-to-end tests need a working `bwrap` with unprivileged user namespaces

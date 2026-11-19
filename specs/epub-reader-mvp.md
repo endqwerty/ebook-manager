@@ -23,18 +23,29 @@ and media-overlay books, and every platform other than native Linux packages.
   A helper that cannot set its own resource limits (F7) counts as not isolated.
 - **S2** The helper checks its confinement at the start of every run and
   refuses to open a book when it can see `/proc`, `/home`, `/etc`, `/tmp`,
-  `/run`, `/var`, `/root`, `/sys` or `/dev`, can write to its filesystem, or
-  has a network route.
+  `/run`, `/var`, `/root`, `/sys` or `/dev`, can write to its filesystem, has
+  a network route, or can start another process.
 - **S3** Inside the sandbox the helper can read the one book file, itself and
   the host's library directories. It has no network, no other host files, no
-  writable storage, no capabilities and an empty environment.
+  writable storage, no capabilities and an empty environment. It inherits
+  none of the application's open files, sockets or other descriptors beyond
+  its three standard streams, cannot create further user namespaces, and is
+  killed when the application exits, including while the sandbox is starting.
 - **S4** A configured helper path is used alone: if nothing is there, no other
-  place is tried. Without one, the helper is found, in order, at the absolute
-  path in `EBOOK_READER_HELPER`, beside the running program, or in
-  `../libexec/ebook-manager/` relative to it. `PATH` is not searched. `bwrap`
+  place is tried. Without one, the helper is found, in order, beside the
+  running program or in `../libexec/ebook-manager/` relative to it. A debug
+  build first tries the absolute path in `EBOOK_READER_HELPER`; a release
+  build ignores that variable. `PATH` is not searched. `bwrap`
   is used from the configured path, `/usr/bin/bwrap` or `/bin/bwrap`.
 - **S5** Each call runs one helper process that ends with the call. A helper
   that fails affects only that call.
+- **S6** The helper's reply is checked before the interface sees it. A book
+  outline with no chapters, or with more chapters or contents entries than
+  the limits allow, is refused. Chapter indices are renumbered, contents
+  targets outside the book are removed, nesting depth and heading levels are
+  brought into range, a chapter with more blocks than the limit is cut and
+  flagged, links other than the kinds in R4 are removed, and control
+  characters are stripped from every string.
 
 ## Import metadata
 
@@ -131,8 +142,9 @@ to the reader.
 - **F6** Limits, with defaults: file size 512 MiB; 20,000 archive entries;
   8 MiB for a package or navigation document and 16 MiB for a chapter, counted
   on unpacked output rather than the size the archive declares; 10,000
-  reading-order items; 20,000 contents entries; a 96 MiB reply. Passing one
-  gives a limit error; in particular, contents that are too long or too large
+  reading-order items; 20,000 contents entries; 64 MiB unpacked in one call; a
+  200-to-1 unpacked-to-packed ratio for any entry that unpacks to more than
+  1 MiB; a 96 MiB reply. Passing one gives a limit error; in particular, contents that are too long or too large
   are an error and never a shortened list. One call unpacks at most the
   container file, the encryption list, the package, the two contents documents
   and one chapter, so the per-document limits also bound the total. Nothing is
@@ -142,7 +154,9 @@ to the reader.
   refused as unsupported.
 - **F7** Before reading the book the helper limits itself to 768 MiB of
   address space, the call's time allowance plus two in CPU seconds, 32 open
-  files and no core dump, and does not run if a limit cannot be set. The host stops the sandbox after 15
+  files, no core dump and no further processes or threads, and does not run
+  if a limit cannot be set. Because the helper cannot start another process,
+  the address-space limit bounds the whole sandbox. The host stops the sandbox after 15
   seconds of wall-clock time. A helper stopped by any of these is reported and
   the next call works.
 - **F8** If the file's size or modification time changes after a book is

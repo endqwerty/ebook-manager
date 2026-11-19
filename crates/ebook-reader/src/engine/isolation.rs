@@ -2,6 +2,7 @@
 
 use std::net::UdpSocket;
 use std::path::Path;
+use std::process::Stdio;
 
 /// Returns why the process does not look sandboxed, or `Ok` when it does.
 pub fn verify() -> Result<(), String> {
@@ -22,6 +23,19 @@ pub fn verify() -> Result<(), String> {
         if socket.connect("192.0.2.1:9").is_ok() {
             return Err("the network is reachable".into());
         }
+    }
+    // The process limit is what makes the memory limit cover the whole
+    // sandbox. Prove it holds here rather than trust that it was set.
+    let child = std::process::Command::new(crate::wire::HELPER_IN_SANDBOX)
+        .arg("none")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Ok(mut child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("the helper can start other processes".into());
     }
     Ok(())
 }

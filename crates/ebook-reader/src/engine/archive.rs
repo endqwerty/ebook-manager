@@ -8,10 +8,15 @@ use std::fs::File;
 use std::io::Read;
 use zip::{CompressionMethod, ZipArchive};
 
+const RATIO_FLOOR: u64 = 1024 * 1024;
+
 pub struct Archive {
     zip: ZipArchive<File>,
     folded: Option<HashMap<String, Option<usize>>>,
     encrypted_entries: bool,
+    unpacked: u64,
+    max_unpacked: u64,
+    max_ratio: u64,
 }
 
 impl Archive {
@@ -40,6 +45,9 @@ impl Archive {
             zip,
             folded: None,
             encrypted_entries,
+            unpacked: 0,
+            max_unpacked: limits.max_unpacked_bytes,
+            max_ratio: u64::from(limits.max_compression_ratio.max(1)),
         })
     }
 
@@ -79,6 +87,7 @@ impl Archive {
         let index = self
             .index_of(name)
             .ok_or_else(|| WireError::invalid(format!("missing file in book: {}", short(name))))?;
+        let packed;
         {
             let raw = self
                 .zip
@@ -102,7 +111,12 @@ impl Archive {
             if raw.size() > cap {
                 return Err(WireError::limit(format!("size of {}", short(name))));
             }
+            packed = raw.compressed_size();
         }
+        // Never unpack more than this run's remaining allowance.
+        let left = self.max_unpacked.saturating_sub(self.unpacked);
+        let over_budget = cap > left;
+        let cap = cap.min(left);
         let entry = self
             .zip
             .by_index(index)
@@ -113,8 +127,23 @@ impl Archive {
             .take(cap.saturating_add(1))
             .read_to_end(&mut out)
             .map_err(|e| WireError::invalid(format!("damaged entry {}: {e}", short(name))))?;
-        if out.len() as u64 > cap {
-            return Err(WireError::limit(format!("size of {}", short(name))));
+        let size = out.len() as u64;
+        if size > cap {
+            let what = if over_budget {
+                "total unpacked size".to_owned()
+            } else {
+                format!("size of {}", short(name))
+            };
+            return Err(WireError::limit(what));
+        }
+        self.unpacked += size;
+        // A megabyte or more of output from almost no input is the shape of a
+        // decompression bomb, whatever sizes the archive declares.
+        if size > RATIO_FLOOR && size / packed.max(1) > self.max_ratio {
+            return Err(WireError::limit(format!(
+                "compression ratio of {}",
+                short(name)
+            )));
         }
         Ok(out)
     }

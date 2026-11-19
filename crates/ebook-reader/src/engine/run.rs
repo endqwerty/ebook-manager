@@ -55,6 +55,9 @@ fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
     set(Resource::As, limits.memory_bytes)?;
     set(Resource::Cpu, cpu_seconds.max(1))?;
     set(Resource::Core, 0)?;
+    // The helper is one process with one thread. With this, it cannot become
+    // more, so the address-space limit above bounds the whole sandbox.
+    set(Resource::Nproc, 1)?;
     set(Resource::Nofile, 32)
 }
 

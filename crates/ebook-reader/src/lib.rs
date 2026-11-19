@@ -3,11 +3,12 @@
 //! The host API ([`Reader`], [`Book`]) never parses book bytes itself. Every call
 //! starts the `ebook-reader-helper` binary inside a bubblewrap sandbox and reads
 //! back plain, presentation-ready data. See the crate README for the contract.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod error;
 mod host;
 mod model;
+mod spawn;
 #[doc(hidden)]
 pub mod wire;
 
