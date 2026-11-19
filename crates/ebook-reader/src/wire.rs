@@ -1,6 +1,6 @@
 //! The helper's reply format. Private to this crate's two halves.
 
-use crate::model::{Chapter, ChapterInfo, Metadata, Rgb, TocEntry};
+use crate::model::{Chapter, ChapterContent, ChapterInfo, Metadata, ResourceKind, Rgb, TocEntry};
 use serde::{Deserialize, Serialize};
 
 /// Where the sandbox places the helper and the book.
@@ -20,6 +20,65 @@ pub enum Payload {
     Book(BookOutline),
     Chapter(Chapter),
     Survey(WireSurvey),
+    Content(ChapterContent),
+    Resource(WireResource),
+}
+
+/// A resource as the helper sends it. The host checks the bytes against the
+/// kind before it becomes a [`crate::Resource`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WireResource {
+    pub kind: ResourceKind,
+    /// The bytes in base64, which costs a third more than the bytes where a
+    /// JSON array of numbers would cost three times more.
+    pub base64: String,
+}
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        for (i, shift) in [18u32, 12, 6, 0].into_iter().enumerate() {
+            if i <= chunk.len() {
+                out.push(BASE64[(n >> shift & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// `None` for anything but canonical padded base64.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let text = text.as_bytes();
+    if !text.len().is_multiple_of(4) {
+        return None;
+    }
+    let value = |c: u8| BASE64.iter().position(|b| *b == c).map(|p| p as u32);
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let last = text.len() / 4;
+    for (at, chunk) in text.chunks(4).enumerate() {
+        let padding = chunk.iter().rev().take_while(|c| **c == b'=').count();
+        if padding > 2 || (padding > 0 && at + 1 != last) {
+            return None;
+        }
+        let mut n = 0u32;
+        for c in &chunk[..4 - padding] {
+            n = n << 6 | value(*c)?;
+        }
+        n <<= 6 * padding as u32;
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&bytes[..3 - padding]);
+    }
+    Some(out)
 }
 
 /// A survey as the helper sends it. The host checks the cover before it
@@ -83,5 +142,24 @@ impl WireError {
     }
     pub fn limit(detail: impl Into<String>) -> Self {
         Self::new(WireErrorKind::Limit, detail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_decode, base64_encode};
+
+    #[test]
+    fn base64_round_trips_every_length_and_refuses_bad_text() {
+        for len in 0..40usize {
+            let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + 250) as u8).collect();
+            assert_eq!(base64_decode(&base64_encode(&bytes)), Some(bytes));
+        }
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+        assert_eq!(base64_encode(b"Ma"), "TWE=");
+        assert_eq!(base64_encode(b"M"), "TQ==");
+        for bad in ["TWF", "TW=u", "T===", "TQ==TWFu", "TW!u", "TWFu\n"] {
+            assert_eq!(base64_decode(bad), None, "{bad}");
+        }
     }
 }

@@ -2,8 +2,13 @@
 
 use super::archive::Archive;
 use super::package::{self, Package};
-use super::{encoding, is_text_document, isolation, paths, survey, text, toc, truncate_chars};
-use crate::model::{Block, BlockKind, Chapter, ChapterInfo, ChapterWarning, Limits, Link, Target};
+use super::{
+    encoding, is_text_document, isolation, markup, paths, resource, survey, text, toc,
+    truncate_chars,
+};
+use crate::model::{
+    Block, BlockKind, Chapter, ChapterContent, ChapterInfo, ChapterWarning, Limits, Link, Target,
+};
 use crate::wire::{
     BookOutline, Payload, ProbeReport, Response, WireError, WireErrorKind, BOOK_IN_SANDBOX,
 };
@@ -13,7 +18,8 @@ use std::io::Write;
 
 /// Run the helper. `args` excludes the program name:
 /// `probe` | `metadata <limits>` | `open <limits>` | `survey <limits>` |
-/// `chapter <limits> <index>`,
+/// `chapter <limits> <index>` | `content <limits> <index>` |
+/// `resource <limits> <id>`,
 /// followed by the CPU-seconds allowance where a limits argument is present.
 pub fn main(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("overflow-probe") {
@@ -100,6 +106,15 @@ fn dispatch(args: &[String]) -> Result<Payload, WireError> {
             let index: u32 = args.get(3).and_then(|s| s.parse().ok()).ok_or_else(usage)?;
             chapter(&mut archive, &package, &limits, index).map(Payload::Chapter)
         }
+        "content" => {
+            let index: u32 = args.get(3).and_then(|s| s.parse().ok()).ok_or_else(usage)?;
+            content(&mut archive, &package, &limits, index).map(Payload::Content)
+        }
+        "resource" => {
+            let id: u32 = args.get(3).and_then(|s| s.parse().ok()).ok_or_else(usage)?;
+            readable(&package)?;
+            resource::read(&mut archive, &package, &limits, id).map(Payload::Resource)
+        }
         _ => Err(usage()),
     }
 }
@@ -146,6 +161,11 @@ fn open(
             index: index as u32,
             title: title.map(str::to_owned),
             linear: item.linear,
+            size: archive
+                .stated_size(&item.path)
+                .unwrap_or(0)
+                .min(limits.max_chapter_bytes)
+                .min(u64::from(u32::MAX)) as u32,
         })
         .collect();
     Ok(BookOutline {
@@ -203,25 +223,7 @@ fn chapter(
     let source = encoding::decode(&bytes)?;
     drop(bytes);
     let chapters = package.chapter_index();
-    let resolve = |href: &str| -> Option<Link> {
-        let href = href.trim();
-        if paths::is_external(href) {
-            let lower = href.to_ascii_lowercase();
-            let allowed = ["http://", "https://", "mailto:"]
-                .iter()
-                .any(|p| lower.starts_with(p));
-            let tidy = !href.chars().any(|c| c.is_control() || c.is_whitespace());
-            return (allowed && tidy && href.len() <= 2048)
-                .then(|| Link::External(href.to_owned()));
-        }
-        let local = paths::resolve(&item.path, href)?;
-        let chapter = *chapters.get(local.path.as_str())?;
-        let anchor = local.fragment.map(|mut f| {
-            truncate_chars(&mut f, 256);
-            f
-        });
-        Some(Link::Internal(Target { chapter, anchor }))
-    };
+    let resolve = |href: &str| resolve_link(&chapters, &item.path, href);
     let extracted = text::extract(&source, limits.max_blocks_per_chapter as usize, &resolve);
     out.truncated = extracted.truncated;
     if extracted.remote_references {
@@ -241,6 +243,114 @@ fn chapter(
             .or(extracted.head_title);
     }
     out.blocks = extracted.blocks;
+    Ok(out)
+}
+
+/// A hyperlink's address as the reader may use it: a place in the book, or
+/// an `http`, `https` or `mailto` address.
+fn resolve_link(
+    chapters: &std::collections::HashMap<&str, u32>,
+    base: &str,
+    href: &str,
+) -> Option<Link> {
+    let href = href.trim();
+    if paths::is_external(href) {
+        let lower = href.to_ascii_lowercase();
+        let allowed = ["http://", "https://", "mailto:"]
+            .iter()
+            .any(|p| lower.starts_with(p));
+        let tidy = !href.chars().any(|c| c.is_control() || c.is_whitespace());
+        return (allowed && tidy && href.len() <= 2048).then(|| Link::External(href.to_owned()));
+    }
+    let local = paths::resolve(base, href)?;
+    let chapter = *chapters.get(local.path.as_str())?;
+    let anchor = local.fragment.map(|mut f| {
+        truncate_chars(&mut f, 256);
+        f
+    });
+    Some(Link::Internal(Target { chapter, anchor }))
+}
+
+fn content(
+    archive: &mut Archive,
+    package: &Package,
+    limits: &Limits,
+    index: u32,
+) -> Result<ChapterContent, WireError> {
+    readable(package)?;
+    let item = package.spine.get(index as usize).ok_or_else(|| {
+        WireError::new(
+            WireErrorKind::ChapterOutOfRange,
+            package.spine.len().to_string(),
+        )
+    })?;
+    let toc = toc::load(archive, package, limits)?;
+    let mut out = ChapterContent {
+        index,
+        title: toc_title(&toc, index),
+        markup: String::new(),
+        length: 0,
+        styles: Vec::new(),
+        language: package.metadata.languages.first().cloned(),
+        right_to_left: false,
+        truncated: false,
+        warnings: Vec::new(),
+    };
+    let pictures = resource::pictures(package);
+    if item.media_type.starts_with("image/") {
+        match pictures.get(item.path.as_str()) {
+            Some(id) if archive.contains(&item.path) => {
+                out.markup = format!(r#"<img src="/r/{id}" alt=""/>"#);
+            }
+            Some(_) => {
+                return Err(WireError::invalid(
+                    "a picture in the reading order is missing",
+                ))
+            }
+            None => out.warnings.push(ChapterWarning::UnsupportedContent),
+        }
+        return Ok(out);
+    }
+    if !is_text_document(&item.media_type, &item.path) {
+        out.warnings.push(ChapterWarning::UnsupportedContent);
+        return Ok(out);
+    }
+    let bytes = archive.read(&item.path, limits.max_chapter_bytes)?;
+    let source = encoding::decode(&bytes)?;
+    drop(bytes);
+    let chapters = package.chapter_index();
+    let link = |href: &str| match resolve_link(&chapters, &item.path, href)? {
+        Link::Internal(t) => Some(markup::Href::Chapter(t.chapter, t.anchor)),
+        Link::External(address) => Some(markup::Href::External(address)),
+    };
+    let picture = |reference: &str| resource::resolve(&pictures, &item.path, reference);
+    let done = markup::sanitise(
+        &source,
+        limits.max_markup_nodes as usize,
+        &markup::Resolver {
+            link: &link,
+            picture: &picture,
+        },
+    );
+    out.truncated = done.truncated;
+    if done.remote_references {
+        out.warnings.push(ChapterWarning::RemoteReferences);
+    }
+    if done.malformed {
+        out.warnings.push(ChapterWarning::MalformedMarkup);
+    }
+    if done.unsupported {
+        out.warnings.push(ChapterWarning::UnsupportedContent);
+    }
+    if out.title.is_none() {
+        out.title = done.first_heading.or(done.head_title);
+    }
+    if done.language.is_some() {
+        out.language = done.language;
+    }
+    out.right_to_left = done.right_to_left;
+    out.markup = done.markup;
+    out.length = done.length;
     Ok(out)
 }
 

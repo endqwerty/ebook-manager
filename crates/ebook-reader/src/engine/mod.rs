@@ -9,6 +9,7 @@ pub mod isolation;
 pub mod markup;
 pub mod package;
 pub mod paths;
+pub mod resource;
 pub mod run;
 pub mod survey;
 pub mod text;

@@ -64,6 +64,21 @@ match chapter.clamp_block(pos.block) {
 A chapter read can succeed and still carry `warnings` or `truncated`; those
 are notes for the reader, not failures.
 
+Showing a chapter in a web view:
+
+```rust
+let content = book.read_content(0)?;                  // markup, length, language, warnings
+// content.markup: children of an XHTML <body>. Wrap it in your own document.
+//   <a href="/c/3#note1">      a place in the book: chapter 3, anchor note1
+//   <a data-external="https://…">  an outside address, inert; ask before opening
+//   <img src="/r/12" alt="…"/>  a picture: ResourceId(12)
+let picture = book.read_resource(ResourceId(12))?;    // kind and undecoded bytes
+```
+
+A place inside a chapter is an offset into its text in UTF-16 code units,
+from 0 to `content.length`. `book.chapters()[i].size` weighs chapters for a
+progress figure.
+
 Every call blocks while one helper process runs, usually a few milliseconds.
 Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
 
@@ -76,11 +91,27 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   missing, or when the helper's isolation check fails inside the sandbox. There
   is no unsandboxed fallback. The helper also refuses to read a book when run
   outside a sandbox.
-- **Inert output.** Results hold text, style flags, anchor names and link
-  targets. No markup, script, style sheet, encoded image or file path from the
-  book reaches the caller. `Link::External` is text; ask the user before
+- **Inert output, with two exceptions.** Results hold text, style flags,
+  anchor names and link targets. No script, style sheet or file path from the
+  book reaches the caller. Markup and encoded pictures reach it only through
+  `read_content` and `read_resource`, described next. `Link::External` is text; ask the user before
   opening it. The one picture is the survey's cover, as raw RGB pixels that
   the helper decoded and scaled in the sandbox.
+- **Content markup is written by the helper, not copied.** `read_content`
+  returns well-formed XML built from an allow-list of elements and
+  attributes (C1 and C2 in the spec). It holds no script, no handler
+  attribute, no style, no frame, form control or embedded object, and no
+  address other than `/c/<chapter>#<anchor>`, `/r/<id>` and the inert
+  `data-external`. The host does not parse it again. It is still the book's
+  content, so show it only where no script runs and nothing else loads, and
+  serve it as `application/xhtml+xml` so no parser repairs it into something
+  else. `styles` is always empty for now.
+- **Resources are checked, not decoded.** `read_resource` returns bytes only
+  for a PNG, JPEG, GIF or WebP manifest item of at most
+  `Limits::max_resource_bytes` (32 MiB) whose first bytes are that type's
+  signature. The helper and the host each check. Whoever decodes the bytes
+  is parsing untrusted input and needs its own containment. A resource id
+  never becomes a path outside the helper.
 - **Checked thumbnails.** `Thumbnail` has private fields and no public
   constructor. The host builds one only after checking both sides are 1 or
   more and within 256 by 384 and that the pixels are exactly width times
@@ -184,6 +215,10 @@ counts) and `tests/failures.rs` (unusable covers, cover limits, unknown
 counts, and a stand-in sandbox whose malformed cover replies the host must
 refuse).
 
+The content statements (C1 to C8) are checked in `tests/content.rs`, which
+parses every returned chapter as strict XML, and in the unit tests of
+`src/engine/markup.rs`.
+
 The end-to-end tests need a working `bwrap` with unprivileged user namespaces
 and fail without one. On GitHub's `ubuntu-latest` runners the distribution's
 `bubblewrap` package is enough.
@@ -196,6 +231,7 @@ book shows a markup habit the tests do not cover; never commit a real book.
 - `src/model.rs`, `src/error.rs`: public types
 - `src/host.rs`: discovery, sandbox launch, limits, reply checks
 - `src/engine/`: parsing, run only inside the helper; `survey.rs` counts
-  words and `cover.rs` decodes and shrinks the cover
+  words, `cover.rs` decodes and shrinks the cover, `markup.rs` writes
+  chapter markup and `resource.rs` names and reads pictures
 - `src/bin/helper.rs`: the helper program
 - `examples/epub-dump.rs`: prints a book as text
