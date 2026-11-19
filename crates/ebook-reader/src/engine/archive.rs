@@ -47,7 +47,9 @@ impl Archive {
             }
             self.folded = Some(map);
         }
-        self.folded.as_ref().and_then(|m| m.get(&name.to_lowercase()).copied().flatten())
+        self.folded
+            .as_ref()
+            .and_then(|m| m.get(&name.to_lowercase()).copied().flatten())
     }
 
     pub fn contains(&mut self, name: &str) -> bool {
@@ -65,7 +67,10 @@ impl Archive {
                 .by_index_raw(index)
                 .map_err(|e| WireError::invalid(format!("unreadable entry: {e}")))?;
             if raw.encrypted() {
-                return Err(WireError::new(WireErrorKind::Protected, "encrypted ZIP entry"));
+                return Err(WireError::new(
+                    WireErrorKind::Protected,
+                    "encrypted ZIP entry",
+                ));
             }
             match raw.compression() {
                 CompressionMethod::Stored | CompressionMethod::Deflated => {}

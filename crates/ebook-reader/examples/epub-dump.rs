@@ -13,7 +13,10 @@ fn main() -> ExitCode {
         eprintln!("usage: epub-dump <book.epub> [chapter-number]");
         return ExitCode::from(2);
     };
-    match run(Path::new(path), args.get(2).and_then(|n| n.parse::<u32>().ok())) {
+    match run(
+        Path::new(path),
+        args.get(2).and_then(|n| n.parse::<u32>().ok()),
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
@@ -31,23 +34,44 @@ fn run(path: &Path, only: Option<u32>) -> Result<(), ebook_reader::ReaderError> 
         println!("author: {}", a.name);
     }
     for i in &meta.identifiers {
-        println!("identifier: {}:{}", i.scheme.as_deref().unwrap_or("?"), i.value);
+        println!(
+            "identifier: {}:{}",
+            i.scheme.as_deref().unwrap_or("?"),
+            i.value
+        );
     }
     println!("chapters: {}", book.chapters().len());
     for entry in book.toc() {
-        let to = entry.target.as_ref().map(|t| format!(" -> {}", t.chapter + 1)).unwrap_or_default();
-        println!("toc: {}{}{}", "  ".repeat(entry.depth as usize), entry.title, to);
+        let to = entry
+            .target
+            .as_ref()
+            .map(|t| format!(" -> {}", t.chapter + 1))
+            .unwrap_or_default();
+        println!(
+            "toc: {}{}{}",
+            "  ".repeat(entry.depth as usize),
+            entry.title,
+            to
+        );
     }
     for info in book.chapters() {
         if only.is_some_and(|n| n != info.index + 1) {
             continue;
         }
         let chapter = book.read_chapter(info.index)?;
-        println!("\n=== {} · {} ===", info.index + 1, chapter.title.as_deref().unwrap_or("untitled"));
+        println!(
+            "\n=== {} · {} ===",
+            info.index + 1,
+            chapter.title.as_deref().unwrap_or("untitled")
+        );
         for block in &chapter.blocks {
             match block.kind {
-                BlockKind::Heading { level } => println!("{} {}", "#".repeat(level as usize), block.text()),
-                BlockKind::ListItem { ordinal: Some(n), .. } => println!("{n}. {}", block.text()),
+                BlockKind::Heading { level } => {
+                    println!("{} {}", "#".repeat(level as usize), block.text())
+                }
+                BlockKind::ListItem {
+                    ordinal: Some(n), ..
+                } => println!("{n}. {}", block.text()),
                 BlockKind::ListItem { .. } => println!("- {}", block.text()),
                 BlockKind::Quote => println!("> {}", block.text()),
                 BlockKind::Separator => println!("* * *"),

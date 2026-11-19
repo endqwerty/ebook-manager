@@ -18,23 +18,38 @@ pub enum Unsupported {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReaderError {
     /// The helper program was not at any of the documented places.
-    HelperNotFound { searched: Vec<PathBuf> },
+    HelperNotFound {
+        searched: Vec<PathBuf>,
+    },
     /// The sandbox could not be started or did not isolate. Nothing was parsed.
-    SandboxUnavailable { reason: String },
+    SandboxUnavailable {
+        reason: String,
+    },
     /// The file is missing, not a regular file or cannot be read.
-    SourceUnreadable { detail: String },
+    SourceUnreadable {
+        detail: String,
+    },
     /// The file changed after the book was opened.
     SourceChanged,
     Unsupported(Unsupported),
     /// The file is an EPUB but is damaged or incomplete.
-    InvalidBook { detail: String },
+    InvalidBook {
+        detail: String,
+    },
     /// The book is larger or more complex than the configured limits allow.
-    LimitExceeded { what: String },
+    LimitExceeded {
+        what: String,
+    },
     /// The helper did not finish in time and was stopped.
     Timeout,
     /// The helper stopped without a usable answer.
-    HelperFailed { detail: String },
-    ChapterOutOfRange { index: u32, count: u32 },
+    HelperFailed {
+        detail: String,
+    },
+    ChapterOutOfRange {
+        index: u32,
+        count: u32,
+    },
 }
 
 impl fmt::Display for ReaderError {
@@ -76,7 +91,11 @@ impl fmt::Display for ReaderError {
                 write!(f, "The book reader stopped unexpectedly ({detail}).")
             }
             ReaderError::ChapterOutOfRange { index, count } => {
-                write!(f, "Chapter {} does not exist; this book has {count}.", index + 1)
+                write!(
+                    f,
+                    "Chapter {} does not exist; this book has {count}.",
+                    index + 1
+                )
             }
         }
     }

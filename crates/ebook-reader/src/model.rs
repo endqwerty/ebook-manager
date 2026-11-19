@@ -202,7 +202,9 @@ pub enum Link {
 /// A reading position the host stores and passes back.
 ///
 /// The text form is `epubpos1:<chapter>:<block>`. Both numbers are zero-based.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct Position {
     pub chapter: u32,
     pub block: u32,

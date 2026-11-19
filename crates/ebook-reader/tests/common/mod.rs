@@ -11,7 +11,10 @@ use zip::CompressionMethod;
 pub const HELPER: &str = env!("CARGO_BIN_EXE_ebook-reader-helper");
 
 pub fn config() -> ReaderConfig {
-    ReaderConfig { helper_path: Some(PathBuf::from(HELPER)), ..ReaderConfig::default() }
+    ReaderConfig {
+        helper_path: Some(PathBuf::from(HELPER)),
+        ..ReaderConfig::default()
+    }
 }
 
 pub fn reader() -> Reader {
@@ -50,8 +53,16 @@ impl Drop for Scratch {
 pub fn zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, data) in files {
-        let method = if *name == "mimetype" { CompressionMethod::Stored } else { CompressionMethod::Deflated };
-        w.start_file(*name, SimpleFileOptions::default().compression_method(method)).unwrap();
+        let method = if *name == "mimetype" {
+            CompressionMethod::Stored
+        } else {
+            CompressionMethod::Deflated
+        };
+        w.start_file(
+            *name,
+            SimpleFileOptions::default().compression_method(method),
+        )
+        .unwrap();
         w.write_all(data).unwrap();
     }
     w.finish().unwrap().into_inner()
@@ -169,7 +180,10 @@ pub fn epub3() -> Vec<u8> {
 <p style="display:none">invisible ink</p>
 <p>The end.</p>"#,
     );
-    let notes = xhtml("Notes", r#"<p id="n1">1. A note outside the reading line.</p>"#);
+    let notes = xhtml(
+        "Notes",
+        r#"<p id="n1">1. A note outside the reading line.</p>"#,
+    );
     zip(&[
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER.as_bytes()),
@@ -181,7 +195,10 @@ pub fn epub3() -> Vec<u8> {
         ("OEBPS/text/chapter 2.xhtml", ch2.as_bytes()),
         ("OEBPS/text/chapter3.xhtml", ch3.as_bytes()),
         ("OEBPS/text/notes.xhtml", notes.as_bytes()),
-        ("OEBPS/images/cover.png", b"\x89PNG\r\n\x1a\nnot really a picture"),
+        (
+            "OEBPS/images/cover.png",
+            b"\x89PNG\r\n\x1a\nnot really a picture",
+        ),
     ])
 }
 
@@ -228,7 +245,12 @@ pub fn epub2() -> Vec<u8> {
     let two = xhtml("Two", "<h2>The South Road</h2><p>Home again.</p>");
     zip(&[
         ("mimetype", b"application/epub+zip"),
-        ("META-INF/container.xml", CONTAINER.replace("OEBPS/content.opf", "content.opf").as_bytes()),
+        (
+            "META-INF/container.xml",
+            CONTAINER
+                .replace("OEBPS/content.opf", "content.opf")
+                .as_bytes(),
+        ),
         ("content.opf", opf.as_bytes()),
         ("toc.ncx", ncx.as_bytes()),
         ("one.html", &one),
@@ -241,7 +263,9 @@ pub fn simple(chapters: &[&str], extra: &[(&str, &[u8])]) -> Vec<u8> {
     let mut manifest = String::new();
     let mut spine = String::new();
     for i in 0..chapters.len() {
-        manifest.push_str(&format!(r#"<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>"#));
+        manifest.push_str(&format!(
+            r#"<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>"#
+        ));
         spine.push_str(&format!(r#"<itemref idref="c{i}"/>"#));
     }
     let opf = format!(
@@ -249,8 +273,11 @@ pub fn simple(chapters: &[&str], extra: &[(&str, &[u8])]) -> Vec<u8> {
 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">simple-1</dc:identifier><dc:title>Simple</dc:title><dc:language>en</dc:language></metadata>
 <manifest>{manifest}</manifest><spine>{spine}</spine></package>"#
     );
-    let docs: Vec<(String, String)> =
-        chapters.iter().enumerate().map(|(i, b)| (format!("OEBPS/c{i}.xhtml"), xhtml("c", b))).collect();
+    let docs: Vec<(String, String)> = chapters
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (format!("OEBPS/c{i}.xhtml"), xhtml("c", b)))
+        .collect();
     let mut files: Vec<(&str, &[u8])> = vec![
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", CONTAINER.as_bytes()),

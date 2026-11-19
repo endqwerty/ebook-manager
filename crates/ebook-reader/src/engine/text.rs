@@ -19,15 +19,58 @@ const MAX_DEPTH: usize = 400;
 const MAX_ANCHORS: usize = 100_000;
 
 const BLOCK_TAGS: [&str; 47] = [
-    "address", "article", "aside", "blockquote", "body", "caption", "center", "dd", "details",
-    "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
-    "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "html", "li", "main", "menu",
-    "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "tfoot", "thead", "tr",
-    "ul", "legend", "optgroup", "option",
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "caption",
+    "center",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "li",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "tfoot",
+    "thead",
+    "tr",
+    "ul",
+    "legend",
+    "optgroup",
+    "option",
 ];
 /// Elements whose content is never reading text.
-const SKIP_TAGS: [&str; 9] =
-    ["script", "style", "template", "svg", "iframe", "object", "audio", "video", "canvas"];
+const SKIP_TAGS: [&str; 9] = [
+    "script", "style", "template", "svg", "iframe", "object", "audio", "video", "canvas",
+];
 
 #[derive(Default, Clone, Copy)]
 struct Fx {
@@ -183,7 +226,9 @@ impl Extractor<'_> {
             self.flush();
             fx.block = true;
         }
-        if let Some(id) = attr(attrs, "id").or_else(|| if n == "a" { attr(attrs, "name") } else { None }) {
+        if let Some(id) =
+            attr(attrs, "id").or_else(|| if n == "a" { attr(attrs, "name") } else { None })
+        {
             self.anchor(id);
         }
         match n {
@@ -196,7 +241,9 @@ impl Extractor<'_> {
                 fx.list = true;
             }
             "ol" => {
-                let start = attr(attrs, "start").and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(1);
+                let start = attr(attrs, "start")
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(1);
                 self.lists.push(Some(start.saturating_sub(1)));
                 fx.list = true;
             }
@@ -216,7 +263,11 @@ impl Extractor<'_> {
                 fx.pre = true;
             }
             "hr" => {
-                self.emit(Block { kind: BlockKind::Separator, spans: Vec::new(), anchors: Vec::new() });
+                self.emit(Block {
+                    kind: BlockKind::Separator,
+                    spans: Vec::new(),
+                    anchors: Vec::new(),
+                });
             }
             "td" | "th" => {
                 if !self.cur.spans.is_empty() {
@@ -270,9 +321,13 @@ impl Extractor<'_> {
             self.overflow -= 1;
             return;
         }
-        let Some(at) = self.frames.iter().rposition(|f| f.name == name) else { return };
+        let Some(at) = self.frames.iter().rposition(|f| f.name == name) else {
+            return;
+        };
         while self.frames.len() > at {
-            let Some(frame) = self.frames.pop() else { break };
+            let Some(frame) = self.frames.pop() else {
+                break;
+            };
             self.close(frame.fx);
         }
     }
@@ -393,7 +448,9 @@ impl Extractor<'_> {
             return BlockKind::Preformatted;
         }
         if let Some(level) = self.headings.last() {
-            return BlockKind::Heading { level: (*level).clamp(1, 6) };
+            return BlockKind::Heading {
+                level: (*level).clamp(1, 6),
+            };
         }
         if let Some(fresh) = self.item_fresh.last_mut() {
             if *fresh {
@@ -436,7 +493,15 @@ impl Extractor<'_> {
         }
         let mut text = String::new();
         text.push(c);
-        self.cur.spans.push(Span { text, bold, italic, code, superscript, subscript, link });
+        self.cur.spans.push(Span {
+            text,
+            bold,
+            italic,
+            code,
+            superscript,
+            subscript,
+            link,
+        });
     }
 
     fn flush(&mut self) {
@@ -469,7 +534,11 @@ impl Extractor<'_> {
             cur.kind.unwrap_or(BlockKind::Paragraph)
         };
         let spans = if blank { Vec::new() } else { cur.spans };
-        self.emit(Block { kind, spans, anchors: Vec::new() });
+        self.emit(Block {
+            kind,
+            spans,
+            anchors: Vec::new(),
+        });
     }
 
     fn emit(&mut self, mut block: Block) {
@@ -488,12 +557,17 @@ mod tests {
     use crate::model::Target;
 
     fn run(body: &str) -> Extracted {
-        let doc = format!("<html><head><title>Doc</title><style>p{{}}</style></head><body>{body}</body></html>");
+        let doc = format!(
+            "<html><head><title>Doc</title><style>p{{}}</style></head><body>{body}</body></html>"
+        );
         extract(&doc, 1000, &|href| {
             if href.starts_with("http") {
                 Some(Link::External(href.to_owned()))
             } else {
-                Some(Link::Internal(Target { chapter: 7, anchor: None }))
+                Some(Link::Internal(Target {
+                    chapter: 7,
+                    anchor: None,
+                }))
             }
         })
     }
@@ -509,7 +583,10 @@ mod tests {
             vec!["The quick brown fox jumps over."]
         );
         assert_eq!(lines("<p>a<span>b</span>c</p>"), vec!["abc"]);
-        assert_eq!(lines("<p>non&nbsp;breaking &amp; kept</p>"), vec!["non\u{a0}breaking & kept"]);
+        assert_eq!(
+            lines("<p>non&nbsp;breaking &amp; kept</p>"),
+            vec!["non\u{a0}breaking & kept"]
+        );
     }
 
     #[test]
@@ -528,11 +605,35 @@ mod tests {
                 (BlockKind::Paragraph, "tail".into()),
                 (BlockKind::Quote, "Quoted".into()),
                 (BlockKind::Separator, "".into()),
-                (BlockKind::ListItem { depth: 1, ordinal: None }, "a".into()),
-                (BlockKind::ListItem { depth: 1, ordinal: None }, "b".into()),
+                (
+                    BlockKind::ListItem {
+                        depth: 1,
+                        ordinal: None
+                    },
+                    "a".into()
+                ),
+                (
+                    BlockKind::ListItem {
+                        depth: 1,
+                        ordinal: None
+                    },
+                    "b".into()
+                ),
                 (BlockKind::Paragraph, "more".into()),
-                (BlockKind::ListItem { depth: 1, ordinal: Some(3) }, "c".into()),
-                (BlockKind::ListItem { depth: 1, ordinal: Some(4) }, "d".into()),
+                (
+                    BlockKind::ListItem {
+                        depth: 1,
+                        ordinal: Some(3)
+                    },
+                    "c".into()
+                ),
+                (
+                    BlockKind::ListItem {
+                        depth: 1,
+                        ordinal: Some(4)
+                    },
+                    "d".into()
+                ),
             ]
         );
         assert_eq!(x.blocks[0].anchors, vec!["c1"]);
@@ -541,7 +642,10 @@ mod tests {
 
     #[test]
     fn keeps_line_breaks_and_preformatted_spacing() {
-        assert_eq!(lines("<p>Roses are red,<br/>\n  Violets are blue<br></p>"), vec!["Roses are red,\nViolets are blue"]);
+        assert_eq!(
+            lines("<p>Roses are red,<br/>\n  Violets are blue<br></p>"),
+            vec!["Roses are red,\nViolets are blue"]
+        );
         let x = run("<pre>\n  let x = 1;\r\n\tlet y = 2;\n</pre>");
         assert_eq!(x.blocks[0].kind, BlockKind::Preformatted);
         assert_eq!(x.blocks[0].text(), "  let x = 1;\n\tlet y = 2;");
@@ -557,7 +661,13 @@ mod tests {
         let out = s.iter().find(|s| s.text == "out").unwrap();
         assert_eq!(out.link, Some(Link::External("http://example.com/".into())));
         let inn = s.iter().find(|s| s.text == "in").unwrap();
-        assert_eq!(inn.link, Some(Link::Internal(Target { chapter: 7, anchor: None })));
+        assert_eq!(
+            inn.link,
+            Some(Link::Internal(Target {
+                chapter: 7,
+                anchor: None
+            }))
+        );
         assert!(s.last().unwrap().superscript);
     }
 
@@ -585,12 +695,18 @@ mod tests {
         assert_eq!(x.blocks[1].text(), "The start");
         assert_eq!(x.blocks[2].kind, BlockKind::Image);
         assert!(x.blocks[2].spans.is_empty());
-        assert!(!serde_json::to_string(&x.blocks).unwrap().contains("tracker"));
+        assert!(!serde_json::to_string(&x.blocks)
+            .unwrap()
+            .contains("tracker"));
     }
 
     #[test]
     fn survives_markup_that_is_not_well_formed() {
-        let x = extract("<html><body><p>One<p>Two <b>bold</i> still</p><br>Three &bogus; <td>cell", 100, &|_| None);
+        let x = extract(
+            "<html><body><p>One<p>Two <b>bold</i> still</p><br>Three &bogus; <td>cell",
+            100,
+            &|_| None,
+        );
         let got: Vec<String> = x.blocks.iter().map(Block::text).collect();
         assert_eq!(got, vec!["One", "Two bold still", "Three &bogus;\tcell"]);
     }
@@ -605,11 +721,19 @@ mod tests {
 
     #[test]
     fn removes_control_characters() {
-        assert_eq!(lines("<p>a&#27;[31mb&#7;c&#x200B;d</p>"), vec!["a[31mbc\u{200b}d"]);
+        assert_eq!(
+            lines("<p>a&#27;[31mb&#7;c&#x200B;d</p>"),
+            vec!["a[31mbc\u{200b}d"]
+        );
     }
 
     #[test]
     fn joins_table_cells_on_one_line_per_row() {
-        assert_eq!(lines("<table><tr><th>Name</th><th>Age</th></tr><tr><td>Ann</td><td>9</td></tr></table>"), vec!["Name\tAge", "Ann\t9"]);
+        assert_eq!(
+            lines(
+                "<table><tr><th>Name</th><th>Age</th></tr><tr><td>Ann</td><td>9</td></tr></table>"
+            ),
+            vec!["Name\tAge", "Ann\t9"]
+        );
     }
 }

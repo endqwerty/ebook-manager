@@ -67,8 +67,10 @@ impl Reader {
     pub fn new(config: ReaderConfig) -> Result<Reader, ReaderError> {
         let helper = find_helper(config.helper_path.as_deref())?;
         let bwrap = find_bwrap(config.bwrap_path.as_deref())?;
-        let limits_json = serde_json::to_string(&config.limits)
-            .map_err(|e| ReaderError::HelperFailed { detail: e.to_string() })?;
+        let limits_json =
+            serde_json::to_string(&config.limits).map_err(|e| ReaderError::HelperFailed {
+                detail: e.to_string(),
+            })?;
         let reader = Reader {
             inner: Arc::new(Inner {
                 helper,
@@ -80,11 +82,15 @@ impl Reader {
         };
         match reader.run(None, &["probe"]) {
             Ok(Payload::Probe(report)) if report.isolated => Ok(reader),
-            Ok(_) => Err(ReaderError::SandboxUnavailable { reason: "unexpected probe reply".into() }),
+            Ok(_) => Err(ReaderError::SandboxUnavailable {
+                reason: "unexpected probe reply".into(),
+            }),
             Err(ReaderError::SandboxUnavailable { reason }) => {
                 Err(ReaderError::SandboxUnavailable { reason })
             }
-            Err(other) => Err(ReaderError::SandboxUnavailable { reason: other.to_string() }),
+            Err(other) => Err(ReaderError::SandboxUnavailable {
+                reason: other.to_string(),
+            }),
         }
     }
 
@@ -113,12 +119,19 @@ impl Reader {
     fn run(&self, book: Option<&Path>, op: &[&str]) -> Result<Payload, ReaderError> {
         let inner = &*self.inner;
         let mut cmd = Command::new(&inner.bwrap);
-        cmd.args(["--unshare-all", "--die-with-parent", "--new-session", "--clearenv"]);
+        cmd.args([
+            "--unshare-all",
+            "--die-with-parent",
+            "--new-session",
+            "--clearenv",
+        ]);
         cmd.args(["--cap-drop", "ALL"]);
         for dir in LIBRARY_DIRS {
             cmd.args(["--ro-bind-try", dir, dir]);
         }
-        cmd.arg("--ro-bind").arg(&inner.helper).arg(HELPER_IN_SANDBOX);
+        cmd.arg("--ro-bind")
+            .arg(&inner.helper)
+            .arg(HELPER_IN_SANDBOX);
         if let Some(book) = book {
             cmd.arg("--ro-bind").arg(book).arg(BOOK_IN_SANDBOX);
         }
@@ -128,11 +141,13 @@ impl Reader {
         args.extend(op[1..].iter().map(OsString::from));
         cmd.args(args);
         cmd.env_clear();
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ReaderError::SandboxUnavailable { reason: format!("cannot start bwrap: {e}") })?;
+        let mut child = cmd.spawn().map_err(|e| ReaderError::SandboxUnavailable {
+            reason: format!("cannot start bwrap: {e}"),
+        })?;
         let outcome = collect(&mut child, inner.limits.max_output_bytes, inner.timeout);
         let _ = child.kill();
         let _ = child.wait();
@@ -153,23 +168,37 @@ impl Reader {
         if stdout.is_empty() && note.starts_with("bwrap:") {
             return Err(ReaderError::SandboxUnavailable { reason: note });
         }
-        Err(ReaderError::HelperFailed { detail: format!("{status}; {note}") })
+        Err(ReaderError::HelperFailed {
+            detail: format!("{status}; {note}"),
+        })
     }
 }
 
 type Collected = (Vec<u8>, Vec<u8>, String);
 
 /// Read the helper's reply with a size cap and a deadline.
-fn collect(child: &mut Child, max_output: u64, timeout: Duration) -> Result<Collected, ReaderError> {
+fn collect(
+    child: &mut Child,
+    max_output: u64,
+    timeout: Duration,
+) -> Result<Collected, ReaderError> {
     let deadline = Instant::now() + timeout;
-    let failed = |what: &str| ReaderError::HelperFailed { detail: what.to_owned() };
-    let stdout = child.stdout.take().ok_or_else(|| failed("no output pipe"))?;
+    let failed = |what: &str| ReaderError::HelperFailed {
+        detail: what.to_owned(),
+    };
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| failed("no output pipe"))?;
     let stderr = child.stderr.take().ok_or_else(|| failed("no error pipe"))?;
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = Vec::new();
-        let result = stdout.take(max_output + 1).read_to_end(&mut buf).map(|_| buf);
+        let result = stdout
+            .take(max_output + 1)
+            .read_to_end(&mut buf)
+            .map(|_| buf);
         let _ = tx.send(result);
     });
     let (etx, erx) = mpsc::channel();
@@ -186,7 +215,9 @@ fn collect(child: &mut Child, max_output: u64, timeout: Duration) -> Result<Coll
         Err(_) => return Err(ReaderError::Timeout),
     };
     if out.len() as u64 > max_output {
-        return Err(ReaderError::LimitExceeded { what: "size of the reader's reply".into() });
+        return Err(ReaderError::LimitExceeded {
+            what: "size of the reader's reply".into(),
+        });
     }
     let status = loop {
         match child.try_wait() {
@@ -196,12 +227,16 @@ fn collect(child: &mut Child, max_output: u64, timeout: Duration) -> Result<Coll
             Err(e) => return Err(failed(&format!("waiting for helper: {e}"))),
         }
     };
-    let err = erx.recv_timeout(Duration::from_millis(200)).unwrap_or_default();
+    let err = erx
+        .recv_timeout(Duration::from_millis(200))
+        .unwrap_or_default();
     Ok((out, err, status))
 }
 
 fn unexpected() -> ReaderError {
-    ReaderError::HelperFailed { detail: "unexpected reply".into() }
+    ReaderError::HelperFailed {
+        detail: "unexpected reply".into(),
+    }
 }
 
 fn from_wire(e: WireError) -> ReaderError {
@@ -214,7 +249,9 @@ fn from_wire(e: WireError) -> ReaderError {
         WireErrorKind::Encoding => ReaderError::Unsupported(Unsupported::Encoding),
         WireErrorKind::Invalid => ReaderError::InvalidBook { detail },
         WireErrorKind::Limit => ReaderError::LimitExceeded { what: detail },
-        WireErrorKind::ChapterOutOfRange => ReaderError::HelperFailed { detail: "chapter index".into() },
+        WireErrorKind::ChapterOutOfRange => ReaderError::HelperFailed {
+            detail: "chapter index".into(),
+        },
         WireErrorKind::NotIsolated => ReaderError::SandboxUnavailable { reason: detail },
         WireErrorKind::Usage => ReaderError::HelperFailed { detail },
     }
@@ -225,10 +262,17 @@ fn find_helper(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
     if let Some(p) = configured {
         candidates.push(p.to_owned());
     } else {
-        if let Some(p) = std::env::var_os(HELPER_ENV).map(PathBuf::from).filter(|p| p.is_absolute()) {
+        if let Some(p) = std::env::var_os(HELPER_ENV)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+        {
             candidates.push(p);
         }
-        if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(Path::parent) {
+        if let Some(dir) = std::env::current_exe()
+            .ok()
+            .as_deref()
+            .and_then(Path::parent)
+        {
             candidates.push(dir.join(HELPER_NAME));
             candidates.push(dir.join("../libexec/ebook-manager").join(HELPER_NAME));
         }
@@ -240,7 +284,9 @@ fn find_helper(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
             }
         }
     }
-    Err(ReaderError::HelperNotFound { searched: candidates })
+    Err(ReaderError::HelperNotFound {
+        searched: candidates,
+    })
 }
 
 fn find_bwrap(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
@@ -252,7 +298,9 @@ fn find_bwrap(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
         .iter()
         .find(|p| p.is_absolute() && p.is_file())
         .cloned()
-        .ok_or_else(|| ReaderError::SandboxUnavailable { reason: "bubblewrap (bwrap) is not installed".into() })
+        .ok_or_else(|| ReaderError::SandboxUnavailable {
+            reason: "bubblewrap (bwrap) is not installed".into(),
+        })
 }
 
 /// The file a book was opened from, with what is needed to notice a change.
@@ -265,18 +313,28 @@ struct Source {
 
 impl Source {
     fn check(path: &Path, limits: &Limits) -> Result<Source, ReaderError> {
-        let unreadable = |e: std::io::Error| ReaderError::SourceUnreadable { detail: e.kind().to_string() };
+        let unreadable = |e: std::io::Error| ReaderError::SourceUnreadable {
+            detail: e.kind().to_string(),
+        };
         let path = path.canonicalize().map_err(unreadable)?;
         let meta = std::fs::metadata(&path).map_err(unreadable)?;
         if !meta.is_file() {
-            return Err(ReaderError::SourceUnreadable { detail: "not a regular file".into() });
+            return Err(ReaderError::SourceUnreadable {
+                detail: "not a regular file".into(),
+            });
         }
         // Fail here, with a clear reason, rather than inside the sandbox.
         std::fs::File::open(&path).map_err(unreadable)?;
         if meta.len() > limits.max_file_bytes {
-            return Err(ReaderError::LimitExceeded { what: "file size".into() });
+            return Err(ReaderError::LimitExceeded {
+                what: "file size".into(),
+            });
         }
-        Ok(Source { path, len: meta.len(), modified: meta.modified().ok() })
+        Ok(Source {
+            path,
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        })
     }
 
     fn unchanged(&self) -> bool {
@@ -299,7 +357,11 @@ pub struct Book {
 
 impl Book {
     fn new(reader: Reader, source: Source, outline: BookOutline) -> Book {
-        let BookOutline { mut metadata, mut chapters, mut toc } = outline;
+        let BookOutline {
+            mut metadata,
+            mut chapters,
+            mut toc,
+        } = outline;
         scrub_metadata(&mut metadata);
         let count = chapters.len() as u32;
         for (i, c) in chapters.iter_mut().enumerate() {
@@ -317,7 +379,13 @@ impl Book {
                 scrub(a);
             }
         }
-        Book { reader, source, metadata, chapters, toc }
+        Book {
+            reader,
+            source,
+            metadata,
+            chapters,
+            toc,
+        }
     }
 
     pub fn metadata(&self) -> &Metadata {
@@ -361,7 +429,10 @@ impl Book {
     pub fn clamp(&self, pos: Position) -> Position {
         let last = self.chapters.len().saturating_sub(1) as u32;
         if pos.chapter > last {
-            Position { chapter: last, block: 0 }
+            Position {
+                chapter: last,
+                block: 0,
+            }
         } else {
             pos
         }
@@ -388,7 +459,9 @@ impl Book {
                     }
                     Some(Link::External(url)) => {
                         let lower = url.to_ascii_lowercase();
-                        ["http://", "https://", "mailto:"].iter().any(|p| lower.starts_with(p))
+                        ["http://", "https://", "mailto:"]
+                            .iter()
+                            .any(|p| lower.starts_with(p))
                             && !url.chars().any(|c| c.is_control() || c.is_whitespace())
                     }
                     None => true,

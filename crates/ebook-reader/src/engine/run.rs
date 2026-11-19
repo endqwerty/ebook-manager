@@ -21,7 +21,10 @@ pub fn main(args: &[String]) -> i32 {
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    match serde_json::to_writer(&mut out, &response).map_err(|e| e.to_string()).and_then(|_| out.flush().map_err(|e| e.to_string())) {
+    match serde_json::to_writer(&mut out, &response)
+        .map_err(|e| e.to_string())
+        .and_then(|_| out.flush().map_err(|e| e.to_string()))
+    {
         Ok(()) => 0,
         Err(_) => 3,
     }
@@ -33,7 +36,13 @@ fn usage() -> WireError {
 
 fn restrict(limits: &Limits, cpu_seconds: u64) {
     let set = |resource, value: u64| {
-        let _ = setrlimit(resource, Rlimit { current: Some(value), maximum: Some(value) });
+        let _ = setrlimit(
+            resource,
+            Rlimit {
+                current: Some(value),
+                maximum: Some(value),
+            },
+        );
     };
     set(Resource::As, limits.memory_bytes);
     set(Resource::Cpu, cpu_seconds.max(1));
@@ -70,7 +79,10 @@ fn dispatch(args: &[String]) -> Result<Payload, WireError> {
 
 fn readable(package: &Package) -> Result<(), WireError> {
     if package.metadata.protected {
-        return Err(WireError::new(WireErrorKind::Protected, "the book declares encrypted content"));
+        return Err(WireError::new(
+            WireErrorKind::Protected,
+            "the book declares encrypted content",
+        ));
     }
     if package.spine.is_empty() {
         return Err(WireError::invalid("the book lists no chapters"));
@@ -78,7 +90,11 @@ fn readable(package: &Package) -> Result<(), WireError> {
     Ok(())
 }
 
-fn open(archive: &mut Archive, package: Package, limits: &Limits) -> Result<BookOutline, WireError> {
+fn open(
+    archive: &mut Archive,
+    package: Package,
+    limits: &Limits,
+) -> Result<BookOutline, WireError> {
     readable(&package)?;
     let toc = toc::load(archive, &package, limits);
     let chapters = (0..package.spine.len() as u32)
@@ -88,7 +104,11 @@ fn open(archive: &mut Archive, package: Package, limits: &Limits) -> Result<Book
             linear: package.spine[index as usize].linear,
         })
         .collect();
-    Ok(BookOutline { metadata: package.metadata, chapters, toc })
+    Ok(BookOutline {
+        metadata: package.metadata,
+        chapters,
+        toc,
+    })
 }
 
 fn toc_title(toc: &[crate::model::TocEntry], chapter: u32) -> Option<String> {
@@ -100,7 +120,9 @@ fn toc_title(toc: &[crate::model::TocEntry], chapter: u32) -> Option<String> {
 fn is_text_document(media_type: &str, path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     matches!(media_type, "application/xhtml+xml" | "text/html")
-        || [".xhtml", ".html", ".htm", ".xml"].iter().any(|ext| lower.ends_with(ext))
+        || [".xhtml", ".html", ".htm", ".xml"]
+            .iter()
+            .any(|ext| lower.ends_with(ext))
 }
 
 fn chapter(
@@ -111,7 +133,10 @@ fn chapter(
 ) -> Result<Chapter, WireError> {
     readable(package)?;
     let item = package.spine.get(index as usize).ok_or_else(|| {
-        WireError::new(WireErrorKind::ChapterOutOfRange, package.spine.len().to_string())
+        WireError::new(
+            WireErrorKind::ChapterOutOfRange,
+            package.spine.len().to_string(),
+        )
     })?;
     let toc = toc::load(archive, package, limits);
     let mut out = Chapter {
@@ -122,7 +147,11 @@ fn chapter(
         warnings: Vec::new(),
     };
     if item.media_type.starts_with("image/") && item.media_type != "image/svg+xml" {
-        out.blocks.push(Block { kind: BlockKind::Image, spans: Vec::new(), anchors: Vec::new() });
+        out.blocks.push(Block {
+            kind: BlockKind::Image,
+            spans: Vec::new(),
+            anchors: Vec::new(),
+        });
         return Ok(out);
     }
     if !is_text_document(&item.media_type, &item.path) {
@@ -137,9 +166,12 @@ fn chapter(
         let href = href.trim();
         if paths::is_external(href) {
             let lower = href.to_ascii_lowercase();
-            let allowed = ["http://", "https://", "mailto:"].iter().any(|p| lower.starts_with(p));
+            let allowed = ["http://", "https://", "mailto:"]
+                .iter()
+                .any(|p| lower.starts_with(p));
             let tidy = !href.chars().any(|c| c.is_control() || c.is_whitespace());
-            return (allowed && tidy && href.len() <= 2048).then(|| Link::External(href.to_owned()));
+            return (allowed && tidy && href.len() <= 2048)
+                .then(|| Link::External(href.to_owned()));
         }
         let local = paths::resolve(&item.path, href)?;
         let chapter = *chapters.get(local.path.as_str())?;

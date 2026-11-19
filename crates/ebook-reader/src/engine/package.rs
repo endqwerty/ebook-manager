@@ -12,8 +12,10 @@ const MAX_LIST: usize = 64;
 const MAX_MANIFEST: usize = 50_000;
 
 /// Algorithms that only scramble embedded fonts. They do not protect the text.
-const FONT_OBFUSCATION: [&str; 2] =
-    ["http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC"];
+const FONT_OBFUSCATION: [&str; 2] = [
+    "http://www.idpf.org/2008/embedding",
+    "http://ns.adobe.com/pdf/enc#RC",
+];
 
 pub struct ManifestItem {
     pub path: String,
@@ -54,7 +56,10 @@ fn read_tree(archive: &mut Archive, path: &str, cap: u64) -> Result<Element, Wir
 
 pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError> {
     if !archive.contains("META-INF/container.xml") {
-        return Err(WireError::new(WireErrorKind::NotEpub, "no META-INF/container.xml"));
+        return Err(WireError::new(
+            WireErrorKind::NotEpub,
+            "no META-INF/container.xml",
+        ));
     }
     let container = read_tree(archive, "META-INF/container.xml", limits.max_package_bytes)?;
     let mut rootfiles = Vec::new();
@@ -62,7 +67,8 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
     let opf_path = rootfiles
         .iter()
         .filter(|r| {
-            r.attr("media-type").is_none_or(|m| m.trim() == "application/oebps-package+xml")
+            r.attr("media-type")
+                .is_none_or(|m| m.trim() == "application/oebps-package+xml")
         })
         .chain(rootfiles.iter())
         .filter_map(|r| r.attr("full-path"))
@@ -86,9 +92,17 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
     let mut ncx_by_type = None;
     if let Some(m) = package.child("manifest") {
         for item in m.elements().filter(|e| e.name == "item").take(MAX_MANIFEST) {
-            let (Some(id), Some(href)) = (item.attr("id"), item.attr("href")) else { continue };
-            let Some(local) = paths::resolve(&opf_path, href) else { continue };
-            let media_type = item.attr("media-type").unwrap_or("").trim().to_ascii_lowercase();
+            let (Some(id), Some(href)) = (item.attr("id"), item.attr("href")) else {
+                continue;
+            };
+            let Some(local) = paths::resolve(&opf_path, href) else {
+                continue;
+            };
+            let media_type = item
+                .attr("media-type")
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
             let properties = item.attr("properties").unwrap_or("").to_owned();
             if nav.is_none() && properties.split_whitespace().any(|p| p == "nav") {
                 nav = Some(local.path.clone());
@@ -96,20 +110,29 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
             if ncx_by_type.is_none() && media_type == "application/x-dtbncx+xml" {
                 ncx_by_type = Some(local.path.clone());
             }
-            manifest.entry(id).or_insert(ManifestItem { path: local.path, media_type, properties });
+            manifest.entry(id).or_insert(ManifestItem {
+                path: local.path,
+                media_type,
+                properties,
+            });
         }
     }
 
     let mut spine = Vec::new();
     let mut ncx = None;
     if let Some(s) = package.child("spine") {
-        ncx = s.attr("toc").and_then(|id| manifest.get(id)).map(|i| i.path.clone());
+        ncx = s
+            .attr("toc")
+            .and_then(|id| manifest.get(id))
+            .map(|i| i.path.clone());
         let refs: Vec<&Element> = s.elements().filter(|e| e.name == "itemref").collect();
         if refs.len() > limits.max_spine_items as usize {
             return Err(WireError::limit("number of chapters"));
         }
         for itemref in refs {
-            let Some(item) = itemref.attr("idref").and_then(|id| manifest.get(id)) else { continue };
+            let Some(item) = itemref.attr("idref").and_then(|id| manifest.get(id)) else {
+                continue;
+            };
             spine.push(SpineItem {
                 path: item.path.clone(),
                 media_type: item.media_type.clone(),
@@ -117,7 +140,12 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
             });
         }
     }
-    Ok(Package { metadata, spine, nav, ncx: ncx.or(ncx_by_type) })
+    Ok(Package {
+        metadata,
+        spine,
+        nav,
+        ncx: ncx.or(ncx_by_type),
+    })
 }
 
 fn collect<'a>(root: &'a Element, name: &str, out: &mut Vec<&'a Element>) {
@@ -139,7 +167,9 @@ fn is_protected(archive: &mut Archive, limits: &Limits) -> Result<bool, WireErro
     let mut entries = Vec::new();
     collect(&tree, "encrypteddata", &mut entries);
     Ok(entries.iter().any(|e| {
-        let algorithm = e.find("encryptionmethod").and_then(|m| m.attr_local("algorithm"));
+        let algorithm = e
+            .find("encryptionmethod")
+            .and_then(|m| m.attr_local("algorithm"));
         !algorithm.is_some_and(|a| FONT_OBFUSCATION.contains(&a.trim()))
     }))
 }
@@ -152,11 +182,16 @@ fn field(e: &Element) -> String {
 
 fn read_metadata(package: &Element) -> Metadata {
     let mut out = Metadata {
-        epub_version: package.attr("version").map(clean_inline).filter(|v| !v.is_empty()),
+        epub_version: package
+            .attr("version")
+            .map(clean_inline)
+            .filter(|v| !v.is_empty()),
         ..Metadata::default()
     };
     let unique_id = package.attr("unique-identifier").map(str::trim);
-    let Some(meta) = package.child("metadata") else { return out };
+    let Some(meta) = package.child("metadata") else {
+        return out;
+    };
 
     // OEB 1.x nests the Dublin Core elements one level down.
     let mut fields: Vec<&Element> = Vec::new();
@@ -173,16 +208,25 @@ fn read_metadata(package: &Element) -> Metadata {
     for e in fields.iter().filter(|e| e.name == "meta") {
         if let (Some(target), Some(property)) = (e.attr("refines"), e.attr("property")) {
             let target = target.trim().trim_start_matches('#');
-            refines.entry(target).or_default().push((property.trim(), field(e)));
+            refines
+                .entry(target)
+                .or_default()
+                .push((property.trim(), field(e)));
         }
     }
     let refined = |e: &Element, property: &str| -> Option<String> {
         let id = e.attr("id")?.trim();
-        refines.get(id)?.iter().find(|(p, _)| *p == property).map(|(_, v)| v.clone())
+        refines
+            .get(id)?
+            .iter()
+            .find(|(p, _)| *p == property)
+            .map(|(_, v)| v.clone())
     };
 
-    let titles: Vec<&&Element> =
-        fields.iter().filter(|e| e.name == "title" && !field(e).is_empty()).collect();
+    let titles: Vec<&&Element> = fields
+        .iter()
+        .filter(|e| e.name == "title" && !field(e).is_empty())
+        .collect();
     out.title = titles
         .iter()
         .find(|e| refined(e, "title-type").as_deref() == Some("main"))
@@ -196,7 +240,10 @@ fn read_metadata(package: &Element) -> Metadata {
         if name.is_empty() {
             continue;
         }
-        let role = e.attr_local("role").map(str::to_owned).or_else(|| refined(e, "role"));
+        let role = e
+            .attr_local("role")
+            .map(str::to_owned)
+            .or_else(|| refined(e, "role"));
         let sort_name = e
             .attr_local("file-as")
             .map(clean_inline)
@@ -207,7 +254,10 @@ fn read_metadata(package: &Element) -> Metadata {
                 s
             });
         let author = Author { name, sort_name };
-        if role.as_deref().is_none_or(|r| r.trim().eq_ignore_ascii_case("aut")) {
+        if role
+            .as_deref()
+            .is_none_or(|r| r.trim().eq_ignore_ascii_case("aut"))
+        {
             authors.push(author.clone());
         }
         all.push(author);
@@ -254,7 +304,10 @@ fn split_urn(raw: &str) -> (Option<String>, String) {
     let had_urn = rest.len() != lower.len();
     if let Some((scheme, _)) = rest.split_once(':') {
         let known = ["isbn", "uuid", "doi", "issn", "asin"].contains(&scheme);
-        let plain = !scheme.is_empty() && scheme.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        let plain = !scheme.is_empty()
+            && scheme
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-');
         if known || (had_urn && plain) {
             let offset = raw.len() - rest.len() + scheme.len() + 1;
             return (Some(scheme.to_owned()), raw[offset..].trim().to_owned());
@@ -269,10 +322,22 @@ mod tests {
 
     #[test]
     fn splits_identifier_schemes_out_of_urns() {
-        assert_eq!(split_urn("urn:isbn:9780000000001"), (Some("isbn".into()), "9780000000001".into()));
-        assert_eq!(split_urn("URN:UUID:ABC-1"), (Some("uuid".into()), "ABC-1".into()));
-        assert_eq!(split_urn("isbn:12345"), (Some("isbn".into()), "12345".into()));
-        assert_eq!(split_urn("http://example.com/b"), (None, "http://example.com/b".into()));
+        assert_eq!(
+            split_urn("urn:isbn:9780000000001"),
+            (Some("isbn".into()), "9780000000001".into())
+        );
+        assert_eq!(
+            split_urn("URN:UUID:ABC-1"),
+            (Some("uuid".into()), "ABC-1".into())
+        );
+        assert_eq!(
+            split_urn("isbn:12345"),
+            (Some("isbn".into()), "12345".into())
+        );
+        assert_eq!(
+            split_urn("http://example.com/b"),
+            (None, "http://example.com/b".into())
+        );
         assert_eq!(split_urn("plain-id"), (None, "plain-id".into()));
     }
 
@@ -300,8 +365,22 @@ mod tests {
         assert_eq!(m.authors[0].name, "Ann Author");
         assert_eq!(m.authors[0].sort_name.as_deref(), Some("Author, Ann"));
         assert_eq!(m.authors[1].name, "Bo Writer");
-        assert_eq!(m.identifiers[0], Identifier { scheme: Some("uuid".into()), value: "1234".into(), is_unique_id: true });
-        assert_eq!(m.identifiers[1], Identifier { scheme: Some("isbn".into()), value: "9780000000001".into(), is_unique_id: false });
+        assert_eq!(
+            m.identifiers[0],
+            Identifier {
+                scheme: Some("uuid".into()),
+                value: "1234".into(),
+                is_unique_id: true
+            }
+        );
+        assert_eq!(
+            m.identifiers[1],
+            Identifier {
+                scheme: Some("isbn".into()),
+                value: "9780000000001".into(),
+                is_unique_id: false
+            }
+        );
         assert_eq!(m.languages, vec!["en-GB"]);
         assert_eq!(m.epub_version.as_deref(), Some("3.0"));
     }

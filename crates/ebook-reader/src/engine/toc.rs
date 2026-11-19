@@ -23,18 +23,24 @@ impl Builder<'_> {
         }
         let mut title = title;
         truncate_chars(&mut title, 500);
-        let target = href.and_then(|h| paths::resolve(self.base, h)).and_then(|local| {
-            let chapter = *self.chapters.get(local.path.as_str())?;
-            let anchor = local.fragment.map(|mut f| {
-                truncate_chars(&mut f, 256);
-                f
+        let target = href
+            .and_then(|h| paths::resolve(self.base, h))
+            .and_then(|local| {
+                let chapter = *self.chapters.get(local.path.as_str())?;
+                let anchor = local.fragment.map(|mut f| {
+                    truncate_chars(&mut f, 256);
+                    f
+                });
+                Some(Target { chapter, anchor })
             });
-            Some(Target { chapter, anchor })
-        });
         if title.is_empty() && target.is_none() {
             return;
         }
-        self.out.push(TocEntry { title, depth, target });
+        self.out.push(TocEntry {
+            title,
+            depth,
+            target,
+        });
     }
 }
 
@@ -49,7 +55,12 @@ pub fn load(archive: &mut Archive, package: &Package, limits: &Limits) -> Vec<To
     };
     if let Some(path) = &package.nav {
         if let Some(tree) = read(path) {
-            let mut b = Builder { base: path, chapters: &chapters, max, out: Vec::new() };
+            let mut b = Builder {
+                base: path,
+                chapters: &chapters,
+                max,
+                out: Vec::new(),
+            };
             if let Some(list) = find_toc_nav(&tree).and_then(|nav| nav.find("ol")) {
                 nav_list(list, 0, &mut b);
             }
@@ -60,7 +71,12 @@ pub fn load(archive: &mut Archive, package: &Package, limits: &Limits) -> Vec<To
     }
     if let Some(path) = &package.ncx {
         if let Some(tree) = read(path) {
-            let mut b = Builder { base: path, chapters: &chapters, max, out: Vec::new() };
+            let mut b = Builder {
+                base: path,
+                chapters: &chapters,
+                max,
+                out: Vec::new(),
+            };
             if let Some(map) = tree.find("navmap") {
                 ncx_points(map, 0, &mut b);
             }
@@ -74,7 +90,10 @@ fn find_toc_nav(root: &Element) -> Option<&Element> {
     let mut navs = Vec::new();
     collect_navs(root, &mut navs);
     navs.iter()
-        .find(|n| n.attr_local("type").is_some_and(|t| t.split_whitespace().any(|w| w == "toc")))
+        .find(|n| {
+            n.attr_local("type")
+                .is_some_and(|t| t.split_whitespace().any(|w| w == "toc"))
+        })
         .or(navs.first())
         .copied()
 }

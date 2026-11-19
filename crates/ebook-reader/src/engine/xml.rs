@@ -6,14 +6,19 @@ use super::entities;
 use quick_xml::events::{BytesStart, Event};
 
 pub enum Tok {
-    Start { name: String, attrs: Vec<(String, String)> },
-    End { name: String },
+    Start {
+        name: String,
+        attrs: Vec<(String, String)>,
+    },
+    End {
+        name: String,
+    },
     Text(String),
 }
 
 const VOID: [&str; 14] = [
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
-    "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 /// Feed tokens to `f` until the document ends or `f` returns `false`.
@@ -36,7 +41,10 @@ pub fn tokenize(src: &str, html: bool, mut f: impl FnMut(Tok) -> bool) -> bool {
             Ok(Event::Start(e)) => {
                 let name = local_name(e.name().as_ref());
                 let void = html && VOID.contains(&name.as_str());
-                if !f(Tok::Start { name: name.clone(), attrs: attributes(&e) }) {
+                if !f(Tok::Start {
+                    name: name.clone(),
+                    attrs: attributes(&e),
+                }) {
                     break;
                 }
                 if void && !f(Tok::End { name }) {
@@ -45,7 +53,11 @@ pub fn tokenize(src: &str, html: bool, mut f: impl FnMut(Tok) -> bool) -> bool {
             }
             Ok(Event::Empty(e)) => {
                 let name = local_name(e.name().as_ref());
-                if !f(Tok::Start { name: name.clone(), attrs: attributes(&e) }) || !f(Tok::End { name }) {
+                if !f(Tok::Start {
+                    name: name.clone(),
+                    attrs: attributes(&e),
+                }) || !f(Tok::End { name })
+                {
                     break;
                 }
             }
@@ -112,7 +124,10 @@ pub fn attr_local<'a>(attrs: &'a [(String, String)], local: &str) -> Option<&'a 
 
 /// Find an attribute by its exact written name.
 pub fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    attrs
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
 }
 
 #[derive(Debug, Default)]
@@ -147,13 +162,21 @@ pub fn parse_tree(src: &str) -> Element {
                 if overflow > 0 || stack.len() >= MAX_DEPTH {
                     overflow += 1;
                 } else {
-                    stack.push(Element { name, attrs, children: Vec::new() });
+                    stack.push(Element {
+                        name,
+                        attrs,
+                        children: Vec::new(),
+                    });
                 }
             }
             Tok::End { name } => {
                 if overflow > 0 {
                     overflow -= 1;
-                } else if let Some(at) = stack.iter().rposition(|e| e.name == name).filter(|at| *at > 0) {
+                } else if let Some(at) = stack
+                    .iter()
+                    .rposition(|e| e.name == name)
+                    .filter(|at| *at > 0)
+                {
                     while stack.len() > at {
                         close_top(&mut stack);
                     }
