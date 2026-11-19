@@ -135,7 +135,9 @@ def keys(evidence):
     title = "The Lantern Atlas · Revised"
 
     def press(key):
-        xd("key", key)
+        # Some X keymaps make xdotool add Alt to reach the F11 symbol, and the
+        # reader ignores Alt+F11. Its keycode sends the bare key.
+        xd("key", {"F11": "95"}.get(key, key))
         time.sleep(0.4)
 
     def page(name, blank=False):
