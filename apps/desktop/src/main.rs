@@ -1,6 +1,7 @@
 mod imports;
 mod reader;
 mod store;
+mod thumbs;
 
 use anyhow::Result;
 use ebook_device::ExportOutcome;
@@ -21,6 +22,9 @@ struct Shelf {
     count: gtk::Label,
 }
 
+fn data_folder() -> PathBuf {
+    glib::user_data_dir().join("ebook-manager")
+}
 fn column(spacing: i32) -> gtk::Box {
     gtk::Box::new(gtk::Orientation::Vertical, spacing)
 }
@@ -343,7 +347,7 @@ fn activate(app: &gtk::Application) {
     main.append(&scroll);
     let shelf = Shelf {
         window: w.clone(),
-        store: store::Store::open(glib::user_data_dir().join(Path::new("ebook-manager"))),
+        store: store::Store::open(data_folder()),
         rows,
         search: search.clone(),
         count,

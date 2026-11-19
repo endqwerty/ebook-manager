@@ -16,7 +16,7 @@ struct Candidate {
     metadata: ParsedMetadata,
 }
 
-fn stage(source: PathBuf) -> Result<Candidate> {
+fn stage(source: PathBuf, thumbnails: &Path) -> Result<Candidate> {
     let mut staged = NamedTempFile::new()?;
     let file = fs::OpenOptions::new()
         .read(true)
@@ -32,6 +32,16 @@ fn stage(source: PathBuf) -> Result<Candidate> {
         !m.protected,
         "This EPUB is protected. Choose a DRM-free book."
     );
+    // A survey that fails leaves the book unsurveyed, to be asked again at
+    // the next start. A thumbnail that cannot be written is made again when
+    // the cover is first shown.
+    let survey = reader.survey(staged.path()).ok().map(|survey| {
+        let facts = thumbs::facts(&survey);
+        if let (Some(cover), Some(found)) = (&facts.cover, &survey.cover) {
+            let _ = thumbs::write(thumbnails, &cover.digest, &found.thumbnail);
+        }
+        facts
+    });
     let metadata = ParsedMetadata {
         title: m.title.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
             source
@@ -40,12 +50,21 @@ fn stage(source: PathBuf) -> Result<Candidate> {
                 .to_string_lossy()
                 .into_owned()
         }),
+        author_sorts: if m.authors.iter().any(|a| a.sort_name.is_some()) {
+            m.authors.iter().map(|a| a.sort_name.clone()).collect()
+        } else {
+            vec![]
+        },
         authors: m.authors.into_iter().map(|a| a.name).collect(),
+        series: m.series.into_iter().map(|s| (s.name, s.position)).collect(),
+        published: m.published,
+        language: m.languages.into_iter().next(),
+        right_to_left: m.right_to_left,
+        survey,
         identifier: m.identifiers.into_iter().find(|i| i.is_unique_id).map(|i| {
             let scheme = i.scheme.unwrap_or_default();
             format!("{}:{scheme}{}", scheme.len(), i.value)
         }),
-        ..Default::default()
     };
     Ok(Candidate {
         staged,
@@ -134,7 +153,8 @@ async fn review(parent: &gtk::Window, source: &Path, books: Vec<Book>) -> Option
 }
 
 async fn import(s: &Shelf, parent: &gtk::Window, path: PathBuf) -> Result<String> {
-    let candidate = gio::spawn_blocking(move || stage(path))
+    let thumbnails = thumbs::folder(&data_folder());
+    let candidate = gio::spawn_blocking(move || stage(path, &thumbnails))
         .await
         .map_err(|_| anyhow::anyhow!("Inspection interrupted"))??;
     let mut choice = ImportChoice::Review;
