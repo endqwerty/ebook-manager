@@ -1,6 +1,6 @@
 # Requirements
 
-What Ebook Manager has to do, collected before any code or storage design exists. The
+What Ebook Manager has to do, collected before the first storage design. The
 feature set decides how the data is structured, so the requirements come first.
 
 These pages describe planned behaviour. [`specs/`](../../specs/README.md) describes
@@ -53,8 +53,7 @@ and on other devices; edit metadata; fetch metadata from trusted sources; and ma
 the popular features of Apple Books, Google Play Books and Kindle.
 
 The intended shape is a native desktop app for macOS and Linux, probably Windows, and
-native apps for iOS and Android, fast and smooth with large libraries. Rust is under
-consideration for the shared core. No language or toolkit is chosen.
+native apps for iOS and Android, fast and smooth with large libraries. The [platform design](../design/platforms.md) selects a shared Rust core and a native toolkit for each shell.
 
 ## What people ask for most
 
@@ -102,15 +101,14 @@ between 2024 and 2026, and users name each of these as a reason to stay put.
 
 ## Decisions for the owner
 
-Each has a default the pages assume. Overturn any of them and the affected
-requirements change.
+The [implementation design](../../README.md#implementation-design) records decisions on storage, sync and platforms. The other rows give the working assumptions for their areas.
 
 | Question | Why it matters | Assumed |
 |---|---|---|
 | Which sync arrangement comes first: a hosted library, direct sync between devices, or sync through the user's own storage? | It sets the merge design and what the phone apps need | Design the model so all three work. Build direct sync on the home network first |
 | Is a household with several users in the first release? | Personal and shared data must be separate from the first schema either way | The model has users from the start. The first release has one |
 | Do comics and audiobooks belong in the first release? | They force the work, edition, file and parts model | The model holds them. Reading them is "expected", after text and PDF |
-| Database or files beside the books as the source of truth? | Portability and safety against speed | A local database for speed, with the user's data also written beside the books in an open format |
+| Database or files beside the books as the source of truth? | Portability and safety against speed | A local database for speed and pending edits. Recover published changes from the portable log |
 | Should Kobo wireless sync be built? | It means answering as Kobo's own service. It is among the most requested server features and has no public specification | Listed as "later". Needs black-box testing on a device |
 | Should the project seek Readium LCP certification? | It is the one protection scheme found with a published licensing route for independent readers, and some library loans use it. It needs a contract, a fee and a closed module | Not now. The app catalogues LCP files and says why it cannot open them |
 | Are features that send book text to a service ever acceptable? | Authors' groups object to them, and reading data is sensitive | Local or off by default, with consent per book and per service |

@@ -70,10 +70,10 @@ pull request so a reviewer can check the affected code.
 ## Project state
 
 A public open-source project under the Apache License 2.0 ([LICENSE](LICENSE)).
-There's no code yet, and the language and UI toolkit haven't been chosen. The aim is
-a native desktop app for macOS and Linux, probably Windows too, with native iOS and
-Android apps, fast and smooth with large libraries. Rust is under consideration for
-the shared core. Everything committed here is public: never commit secrets, tokens,
+Application development has not started. Build toward a shared Rust core with native
+desktop and mobile interfaces. The [design documents](README.md#implementation-design)
+record the selected stack, storage decisions and executable catalogue experiment.
+Everything committed here is public: never commit secrets, tokens,
 private addresses or personal data.
 
 ## Plans: requirements
@@ -85,6 +85,14 @@ page for an area before designing or building in it. An issue names the requirem
 identifiers it covers. When a requirement is built, describe the behaviour in a spec
 and mark the requirement done. If research or a decision changes a requirement, edit
 its page in the same pull request.
+
+## Design and review rounds
+
+Before starting round 4 on the same question, and after each further group of
+three rounds, ask what another round could change for a reader or implementer.
+Record the decision and the concrete check in the issue or PR. Continue when the
+answer affects the product, such as whether a reader's notes survive a file
+replacement. If only wording remains, finish the edit and move on.
 
 ## Backlog: GitHub issues
 

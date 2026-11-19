@@ -110,8 +110,9 @@ feature afterwards.
   with its sources and locks, collections, reading state, annotations and deletion
   markers can be written beside the books in a documented open format, and a library
   can be rebuilt from those files. A rebuilt library does not bring deleted records
-  back when it next syncs. Whether the database or the
-  sidecar wins a disagreement is an open decision in the [README](README.md).
+  back when it next syncs. The portable change log records published edits. The local database
+  also holds edits awaiting publication. A hand-edited sidecar is reconciled
+  against its base. [Storage design](../design/library-storage.md)
 - `LIB-43` (core) The app never edits a book file unless the user asks. Writing
   metadata into files is a separate action. Sync clients identify a book by its hash,
   so a silent edit breaks their match.
