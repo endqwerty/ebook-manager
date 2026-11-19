@@ -20,9 +20,7 @@ fn main() -> Result<(), String> {
             ..Default::default()
         },
     };
-    let result = start(request, config)
-        .wait()
-        .map_err(|e| format!("{e:?}"))?;
+    let result = start(request, config).wait().map_err(|e| e.to_string())?;
     println!(
         "{}",
         serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?

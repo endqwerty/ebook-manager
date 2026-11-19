@@ -8,4 +8,6 @@ The Linux [conversion crate](../crates/ebook-convert/README.md) creates a reflow
 - **E4** The job checks each staged chapter through the independent EPUB reader before publishing a new file. Errors and cancellation discard staged output. Publication never overwrites an existing file. Concurrent successes cannot claim the same destination. The source bytes remain unchanged.
 - **E5** Acceptance includes an EPUBCheck pass on converter output and checks of actual text and metadata against expectations. No physical device is required.
 
+- **E6** Before opening any input or setting resource limits, the single-threaded helper installs fatal signal handlers on an alternate stack. A fatal signal ends the helper with exit code 4. The host returns `Error::ConversionStopped` and discards staging. This implements SEC-10 for the converter process.
+
 The caller owns catalogue links and history. Source locations and annotation identifiers are not mapped across formats.

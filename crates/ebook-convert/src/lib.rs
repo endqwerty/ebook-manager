@@ -33,9 +33,33 @@ pub enum Error {
     Limit,
     Sandbox(String),
     Deadline,
+    ConversionStopped,
     Validation(String),
     Io(String),
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => out.write_str("Conversion cancelled."),
+            Self::Exists => out.write_str("A file already exists at the destination."),
+            Self::Protected => out.write_str("This book is protected."),
+            Self::Unsupported(reason) => write!(out, "Unsupported book: {reason}"),
+            Self::Invalid(reason) => write!(out, "Invalid book or conversion data: {reason}"),
+            Self::Limit => out.write_str("The book exceeds a conversion limit."),
+            Self::Sandbox(reason) => write!(out, "Conversion sandbox error: {reason}"),
+            Self::Deadline => out.write_str("The converter exceeded its time limit."),
+            Self::ConversionStopped => {
+                out.write_str("The converter stopped before it could finish the book.")
+            }
+            Self::Validation(reason) => {
+                write!(out, "The converted book could not be read: {reason}")
+            }
+            Self::Io(reason) => out.write_str(reason),
+        }
+    }
+}
+impl std::error::Error for Error {}
 
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {

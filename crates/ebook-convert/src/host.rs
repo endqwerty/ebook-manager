@@ -268,6 +268,9 @@ fn run_helper(dir: &Path, helper: &Path, state: &Shared) -> Result<Vec<u8>, Erro
     let reply = collecting.join().map_err(|_| bad_reply())?;
     let status = status?;
     let reply = reply?;
+    if status.code() == Some(4) {
+        return Err(Error::ConversionStopped);
+    }
     if !status.success() {
         return Err(Error::Sandbox(
             "conversion helper could not complete".into(),

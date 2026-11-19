@@ -2,6 +2,8 @@
 mod book;
 #[path = "../epub.rs"]
 mod epub;
+#[path = "../fatal.rs"]
+mod fatal;
 #[path = "../isolation.rs"]
 mod isolation;
 #[path = "../mobi.rs"]
@@ -58,6 +60,11 @@ fn convert() -> Result<(Vec<String>, Vec<u8>), Error> {
     epub::write(parsed, metadata, cover)
 }
 fn main() -> io::Result<()> {
+    fatal::exit_on_fatal_signals();
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("fatal-probe") {
+        std::process::exit(fatal::fatal_probe(args.next().as_deref()));
+    }
     let (result, bytes) = match convert() {
         Ok((losses, bytes)) => (Ok(losses), bytes),
         Err(e) => (Err(e), Vec::new()),
