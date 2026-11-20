@@ -33,6 +33,7 @@ struct State {
     rows: RefCell<Vec<layout::Row>>,
     visible: RefCell<BTreeMap<usize, Board>>,
     anchor: Cell<u32>,
+    placed_top: Cell<Option<u32>>,
     resized: Rc<dyn Fn(u32)>,
 }
 
@@ -175,6 +176,7 @@ impl Shelf {
             visible: Default::default(),
             strip: Default::default(),
             anchor: Default::default(),
+            placed_top: Default::default(),
             resized,
         });
         state.install_keys();
@@ -218,6 +220,7 @@ impl Shelf {
             // hands out new page objects, including for unloaded spines.
             if let Some(state) = model_state.upgrade() {
                 state.strip.take();
+                state.placed_top.set(None);
                 state.model.park_focus(None);
             }
             layout();
@@ -276,21 +279,82 @@ impl Shelf {
 
     pub fn range_ready(&self) -> bool {
         let s = &self.state;
-        s.width.get() == self.widget.width()
+        s.strip
+            .borrow()
+            .as_ref()
+            .zip(s.model.strip())
+            .is_some_and(|(a, b)| Arc::ptr_eq(a, &b))
+            && s.width.get() == self.widget.width()
             && s.width.get() > 0
             && (s.scroll.upper() - f64::from(s.canvas.height_request()).max(s.scroll.page_size()))
                 .abs()
                 < 1.
     }
 
-    pub fn align_row(&self, rank: u32) {
-        let rows = self.state.rows.borrow();
-        let index = layout::row_of(&rows, rank);
-        if let Some(row) = rows.get(index) {
-            self.state.scroll.set_value(row.top as f64);
-        }
+    pub fn top_book(&self) -> Option<(String, f32)> {
+        let s = &self.state;
+        let rows = s.rows.borrow();
+        let y = s.scroll.value();
+        let i =
+            rows.partition_point(|row| row.spine_top(24) as f64 + f64::from(s.height + 14) <= y);
+        let rank = s
+            .placed_top
+            .get()
+            .filter(|&r| layout::row_of(&rows, r) == i)
+            .unwrap_or(rows.get(i)?.first);
+        let visible = s.visible.borrow();
+        let cell = visible
+            .get(&i)?
+            .cells
+            .get((rank - rows[i].first) as usize)?;
+        Some((
+            cell.book()?.row()?.id.clone(),
+            (rows[i].spine_top(24) as f64 - y) as f32,
+        ))
     }
 
+    pub fn focus_books(&self) {
+        if self
+            .widget
+            .root()
+            .and_then(|r| r.focus())
+            .is_some_and(|w| w.is_ancestor(&self.widget))
+        {
+            return;
+        }
+        let rows = self.state.rows.borrow();
+        let rank =
+            layout::first_full_book(&rows, self.state.scroll.value() as u64, 24).unwrap_or(0);
+        drop(rows);
+        self.state.reveal(rank, true);
+    }
+
+    pub fn place_row(&self, rank: u32, offset: Option<f32>, focus: Option<u32>) {
+        let s = &self.state;
+        let rows = s.rows.borrow();
+        let Some(row) = rows.get(layout::row_of(&rows, rank)) else {
+            return;
+        };
+        let mut y = offset.map_or(row.top as f64, |dy| {
+            row.spine_top(24) as f64 - f64::from(dy)
+        });
+        if let Some(row) = focus.and_then(|r| rows.get(layout::row_of(&rows, r))) {
+            let start = row.spine_top(24) as f64;
+            let end = start + f64::from(s.height + 14);
+            y = y.clamp((end - s.scroll.page_size()).min(start), start);
+        }
+        drop(rows);
+        s.scroll.set_value(y);
+        s.placed_top.set(Some(rank));
+        s.fill(s.scroll.page_size() as i32, false);
+        if let Some(rank) = focus
+            && let Some(cell) = super::cells(s.canvas.upcast_ref())
+                .into_iter()
+                .find(|c| c.book().is_some_and(|b| b.rank() == rank))
+        {
+            cell.grab_focus();
+        }
+    }
     pub fn scroll_to(&self, rank: u32, flags: gtk::ListScrollFlags) {
         self.state.update(self.widget.width(), self.widget.height());
         if flags.contains(gtk::ListScrollFlags::SELECT) {

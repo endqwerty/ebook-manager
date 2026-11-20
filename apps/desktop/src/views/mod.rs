@@ -68,13 +68,8 @@ impl View {
         self.widget().clone()
     }
     pub fn focus_books(&self) {
-        if let View::Shelf(shelf) = self
-            && shelf
-                .widget
-                .root()
-                .and_then(|root| root.focus())
-                .is_some_and(|w| w.is_ancestor(&shelf.widget))
-        {
+        if let View::Shelf(shelf) = self {
+            shelf.focus_books();
             return;
         }
         self.body().grab_focus();

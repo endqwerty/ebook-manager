@@ -145,17 +145,23 @@ impl Library {
                 .flatten()
             });
         let top = self
-            .with_view(|view| views::top_cell(&view.body()))
+            .with_view(|view| match view {
+                View::Shelf(shelf) => shelf.top_book(),
+                _ => views::top_cell(&view.body())
+                    .and_then(|(cell, offset)| Some((cell.book()?.row()?.id.clone(), offset))),
+            })
             .flatten();
-        let id = |cell: &BookCell| Some(cell.book()?.row()?.id.clone());
         Anchors {
             current: focused
                 .as_ref()
                 .and_then(|b| Some(b.row()?.id.clone()))
                 .or_else(|| self.model.selected_one()),
-            top: top.as_ref().and_then(|(cell, _)| id(cell)),
+            top: top.as_ref().map(|(id, _)| id.clone()),
             top_offset: top.as_ref().map_or(0.0, |(_, offset)| *offset),
-            focused: focused.is_some(),
+            focused: focused.is_some()
+                || (self.shown() == ViewKind::Shelf
+                    && self.pages.visible_child_name().as_deref() == Some("none")
+                    && !self.search_bar.is_search_mode()),
         }
     }
 
@@ -175,7 +181,10 @@ impl Library {
     fn restore(self: &Rc<Self>, placed: Placed) {
         let serial = self.placed.get() + 1;
         self.placed.set(serial);
-        if placed.current.is_none() && placed.top.is_none() {
+        if placed.current.is_none()
+            && placed.top.is_none()
+            && !(placed.anchors.focused && self.model.n_items() > 0)
+        {
             return;
         }
         self.when_view_sized(serial, move |lib| lib.place_books(&placed, serial));
@@ -219,9 +228,23 @@ impl Library {
             }
         }
         if !keep_top {
+            // A search with no matches has no focused ID to locate on closing.
+            if was.focused && placed.current.is_none() {
+                self.with_view(|view| view.focus_books());
+            }
             return;
         }
         let Some(rank) = placed.top else { return };
+        if self.with_view(|view| match view {
+            View::Shelf(shelf) => {
+                shelf.place_row(rank, (!rebuilt).then_some(was.top_offset), focused);
+                true
+            }
+            _ => false,
+        }) == Some(true)
+        {
+            return;
+        }
         self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::NONE));
         // `scroll_to` only brings the book on screen. Once the view has laid
         // itself out, move it to where it was. An offset measured in one
@@ -349,12 +372,22 @@ impl Library {
                     let weak = Rc::downgrade(self);
                     Rc::new(move |rank| {
                         if let Some(lib) = weak.upgrade() {
+                            let focus = views::focused_cell(&lib.scrolled)
+                                .and_then(|c| c.book())
+                                .or_else(|| {
+                                    lib.with_view(|v| match v {
+                                        View::Shelf(s) => s.parked_book(),
+                                        _ => None,
+                                    })
+                                    .flatten()
+                                })
+                                .map(|b| b.rank());
                             let serial = lib.placed.get() + 1;
                             lib.placed.set(serial);
                             lib.when_view_sized(serial, move |lib| {
                                 lib.with_view(|view| {
                                     if let View::Shelf(shelf) = view {
-                                        shelf.align_row(rank);
+                                        shelf.place_row(rank, None, focus);
                                     }
                                 });
                             });
@@ -564,6 +597,10 @@ impl Library {
         let Some(id) = cell.book().and_then(|book| Some(book.row()?.id.clone())) else {
             return;
         };
+        self.context_menu_for(cell, &id);
+    }
+
+    fn context_menu_for(&self, cell: &BookCell, id: &str) {
         let item = |label: &str, action: &str| {
             let item = gio::MenuItem::new(Some(label), None);
             item.set_action_and_target_value(Some(action), Some(&id.to_variant()));
@@ -1129,6 +1166,41 @@ pub fn open(app: &adw::Application) {
             let Some(library) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            let parked = library
+                .with_view(|view| match view {
+                    View::Shelf(s) => s.parked_book().inspect(|book| {
+                        s.scroll_to(book.rank(), gtk::ListScrollFlags::FOCUS);
+                    }),
+                    _ => None,
+                })
+                .flatten();
+            if let Some(book) = parked {
+                let weak = Rc::downgrade(&library);
+                let moved = library.moved.get();
+                let placed = library.placed.get();
+                library.scrolled.add_tick_callback(move |_, _| {
+                    let Some(lib) = weak.upgrade() else {
+                        return glib::ControlFlow::Break;
+                    };
+                    if moved != lib.moved.get() || placed != lib.placed.get() {
+                        return glib::ControlFlow::Break;
+                    }
+                    if let Some(cell) = views::focused_cell(&lib.scrolled)
+                        && cell.book().is_some_and(|b| b.rank() == book.rank())
+                    {
+                        if cell.width() == 0 || !cell.is_mapped() {
+                            return glib::ControlFlow::Continue;
+                        }
+                        if let Some(row) = book.row() {
+                            lib.context_menu_for(&cell, &row.id);
+                        } else if !book.gone() {
+                            return glib::ControlFlow::Continue;
+                        }
+                    }
+                    glib::ControlFlow::Break
+                });
+                return glib::Propagation::Stop;
+            }
             match views::focused_cell(&library.scrolled) {
                 Some(cell) => {
                     library.context_menu(&cell);
@@ -1139,6 +1211,20 @@ pub fn open(app: &adw::Application) {
         })),
     ));
     window.add_controller(keys);
+    let weak = Rc::downgrade(&library);
+    library
+        .search_bar
+        .connect_search_mode_enabled_notify(move |bar| {
+            if !bar.is_search_mode()
+                && let Some(lib) = weak.upgrade()
+            {
+                lib.with_view(|view| {
+                    if let View::Shelf(s) = view {
+                        s.focus_books();
+                    }
+                });
+            }
+        });
     // Escape closes the search from anywhere in the window, as it does from
     // the search field.
     let keys = gtk::ShortcutController::new();

@@ -1550,6 +1550,10 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
         find("Title", "combo box")
         choose(1)
         key("Escape")
+        # Sorting preserves the reader's book. Show the first author groups for the capture.
+        find("", "label", contains=True, parent=find("Bookshelf"))
+        xd("mousemove", "--window", wid, left + pane.width // 2, top + pane.y + 80,
+           "click", "--repeat", 40, "--delay", 20, 4)
         find("C", "label", parent=find("Bookshelf"))
         grouped = find("Tide Tables", "table cell", contains=True, parent=find("Bookshelf"))
         box = grouped.get_extents(Atspi.CoordType.WINDOW)

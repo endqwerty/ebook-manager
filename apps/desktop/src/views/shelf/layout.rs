@@ -6,16 +6,19 @@ pub struct Row {
     pub caption: Option<usize>,
 }
 
-pub fn first_full_book(rows: &[Row], scroll: u64, caption_height: u64) -> Option<u32> {
-    let index = rows.partition_point(|row| {
-        row.top
-            + if row.caption.is_some() {
+impl Row {
+    pub fn spine_top(&self, caption_height: u64) -> u64 {
+        self.top
+            + if self.caption.is_some() {
                 caption_height
             } else {
                 0
             }
-            < scroll
-    });
+    }
+}
+
+pub fn first_full_book(rows: &[Row], scroll: u64, caption_height: u64) -> Option<u32> {
+    let index = rows.partition_point(|row| row.spine_top(caption_height) < scroll);
     rows.get(index).map(|row| row.first)
 }
 
