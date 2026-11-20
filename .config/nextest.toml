@@ -1,2 +1,10 @@
 [profile.ci.junit]
 path = "junit.xml"
+
+# A view test starts WebKit's processes, which inherit its output pipes and
+# keep them open a little after the test's own process has exited. Nextest
+# calls a test leaky when those pipes are still open after its default wait.
+# Give them longer to close before judging.
+[[profile.default.overrides]]
+filter = 'binary(view)'
+leak-timeout = "5s"

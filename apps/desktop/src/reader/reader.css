@@ -1,0 +1,77 @@
+/* The app's sheet for a chapter. It is a user style sheet, so its
+   !important rules win over anything a book's sheets say. */
+:root {
+	--page: #f4ecd8;
+	--ink: #3b2f21;
+	--secondary: #736858;
+	/* The shell names an installed face. A name the system lacks would be
+	   swapped for its default face, which is often not a serif. */
+	--font: serif;
+	--size: 1;
+	--line: 1.5;
+	--side: 48px;
+	--block: 72px;
+	color-scheme: only light;
+}
+html {
+	background: var(--page) !important;
+	color: var(--ink) !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	border: 0 !important;
+	position: static !important;
+	width: 100vw !important;
+	height: 100vh !important;
+	overflow: hidden !important;
+	font-family: var(--font);
+	font-size: calc(1.15rem * var(--size));
+	line-height: var(--line);
+	-webkit-text-size-adjust: none;
+	overflow-wrap: break-word;
+}
+body {
+	margin: 0 !important;
+	border: 0 !important;
+	position: static !important;
+	float: none !important;
+	box-sizing: border-box !important;
+	width: 100vw !important;
+	height: 100vh !important;
+	padding: var(--block) var(--side) !important;
+	columns: auto !important;
+	column-width: calc(100vw - 2 * var(--side)) !important;
+	column-gap: calc(2 * var(--side)) !important;
+	column-fill: auto !important;
+	column-rule: none !important;
+	overflow: visible !important;
+	background: none !important;
+	color: inherit;
+	text-align: start;
+	hyphens: manual;
+}
+p { margin: 0 0 0.8em; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.25; break-after: avoid; margin: 1.2em 0 0.6em; }
+/* The page's top margin is the space above a chapter's first line. The
+   space a heading keeps above itself would push a chapter that opens with
+   one further down. */
+body > :is(h1, h2, h3, h4, h5, h6):first-child,
+body > :first-child > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0 !important; }
+h1 { font-size: 1.6em; }
+h2 { font-size: 1.35em; }
+h3 { font-size: 1.15em; }
+img {
+	max-width: 100% !important;
+	max-height: calc(100vh - 2 * var(--block)) !important;
+	object-fit: contain;
+	break-inside: avoid;
+}
+figure, table, pre, blockquote { break-inside: avoid; }
+pre { white-space: pre-wrap; }
+table { border-collapse: collapse; max-width: 100%; }
+td, th { padding: 0.2em 0.6em; vertical-align: top; }
+/* Links are the text colour with an underline, never the accent colour. */
+a[href], a[data-external] { color: inherit !important; text-decoration: underline; cursor: pointer; }
+::highlight(found) { background: color-mix(in srgb, var(--secondary) 40%, transparent); }
+@media (prefers-reduced-motion: no-preference) {
+	html.slide { scroll-behavior: smooth; }
+}

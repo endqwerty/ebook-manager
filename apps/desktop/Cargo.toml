@@ -10,6 +10,7 @@ libc = "0.2"
 async-channel = "2"
 gtk4 = { version = "0.11", features = ["v4_22"] }
 libadwaita = { version = "0.9", features = ["v1_9"] }
+webkit6 = "0.6"
 tempfile = "3"
 sha2 = "0.10"
 png = "0.18"
@@ -20,5 +21,12 @@ ebook-library = { path = "../../crates/ebook-library" }
 ebook-reader = { path = "../../crates/ebook-reader" }
 
 [dev-dependencies]
+libtest-mimic = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # The generated catalogue, for driving the read thread over many pages.
 ebook-library = { path = "../../crates/ebook-library", features = ["fixture"] }
+
+# The web view tests keep GTK on one thread, so they bring their own runner.
+[[test]]
+name = "view"
+harness = false

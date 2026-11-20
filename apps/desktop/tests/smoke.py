@@ -1,6 +1,7 @@
 """Run under a private Xvfb + DBus session. See apps/desktop/README.md."""
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -215,6 +216,10 @@ def accessible_text(node):
     return Atspi.Text.get_text(node, 0, Atspi.Text.get_character_count(node))
 
 
+# What GDK prints when the destroyed-window step destroys the library window.
+DESTROYED_WINDOW_WARNING = r"Gdk-WARNING \*\*: .*GdkSurface 0x[0-9a-f]+ unexpectedly destroyed"
+
+
 def xd(*args):
     subprocess.run(["xdotool", *map(str, args)], check=True)
 
@@ -230,6 +235,56 @@ def send_key(name):
         assert match is not None, f"{name} is missing from the X server's keymap"
         name = match[1]
     xd("key", name)
+
+
+def ask_to_close(window):
+    """Ask a window to close, as a window manager's close button does.
+
+    This sends the window WM_DELETE_WINDOW. xdotool's own command for it,
+    windowquit, is missing from the version Ubuntu ships.
+    """
+    import ctypes
+
+    x = ctypes.CDLL("libX11.so.6")
+    x.XOpenDisplay.restype = ctypes.c_void_p
+    x.XInternAtom.restype = ctypes.c_ulong
+    x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+
+    class Message(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.c_int),
+            ("serial", ctypes.c_ulong),
+            ("send_event", ctypes.c_int),
+            ("display", ctypes.c_void_p),
+            ("window", ctypes.c_ulong),
+            ("message_type", ctypes.c_ulong),
+            ("format", ctypes.c_int),
+            ("data", ctypes.c_long * 5),
+        ]
+
+    class Event(ctypes.Union):
+        _fields_ = [("message", Message), ("pad", ctypes.c_long * 24)]
+
+    display = x.XOpenDisplay(None)
+    assert display, "no display"
+    event = Event()
+    event.message.type = 33  # ClientMessage
+    event.message.window = int(window)
+    event.message.message_type = x.XInternAtom(display, b"WM_PROTOCOLS", 0)
+    event.message.format = 32
+    event.message.data[0] = x.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
+    x.XSendEvent.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_int,
+        ctypes.c_long,
+        ctypes.POINTER(Event),
+    ]
+    assert x.XSendEvent(display, int(window), 0, 0, ctypes.byref(event))
+    x.XFlush.argtypes = [ctypes.c_void_p]
+    x.XFlush(display)
+    x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x.XCloseDisplay(display)
 
 
 def picker(path, title):
@@ -253,11 +308,16 @@ def capture(title, out):
     subprocess.run(["import", "-window", wid, str(out)], check=True)
 
 
-def markers(image):
-    text = subprocess.check_output(
+def words(image):
+    """The text on a screenshot. The page is drawn by a web view, so the
+    driver reads it the way a person does."""
+    return subprocess.check_output(
         ["tesseract", str(image), "stdout"], stderr=subprocess.DEVNULL, text=True
     )
-    return [int(n) for n in re.findall(r"Marker (\d+)", text)]
+
+
+def markers(image):
+    return [int(n) for n in re.findall(r"Marker (\d+)", words(image))]
 
 
 def size(title):
@@ -269,6 +329,28 @@ def size(title):
     )
     values = dict(line.split("=") for line in out.split())
     return int(values["WIDTH"]), int(values["HEIGHT"])
+
+
+def web_processes(app):
+    """WebKit web processes descended from the app."""
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if not (entry / "comm").read_text().startswith("WebKitWebProces"):
+                continue
+            pid = int(entry.name)
+            for _ in range(12):
+                pid = int((Path("/proc") / str(pid) / "stat").read_text().rsplit(") ", 1)[1].split()[1])
+                if pid == app:
+                    found.append(entry.name)
+                    break
+                if pid <= 1:
+                    break
+        except (OSError, ValueError, IndexError):
+            continue
+    return found
 
 
 def keys(evidence):
@@ -319,8 +401,14 @@ def keys(evidence):
     assert shown[-1] == 80, shown
     assert page("chapter-2.png")[0] == 0
     press("Left")
-    find("Chapter 1 of 2", contains=True)
-    assert page("chapter-1-end.png", blank=True)[-1:] == [80]
+    # The chapter's last page, by the line under the page. What is on that
+    # page depends on the fonts installed: with some, the closing paragraph
+    # fills it and no marker shows.
+    line = find("Chapter 1 of 2", contains=True).get_name()
+    at = re.search(r"Page (\d+) of (\d+)", line)
+    assert at and at.group(1) == at.group(2), line
+    last = page("chapter-1-end.png", blank=True)
+    assert not last or last[-1] == 80, last
     print(
         f"PASS arrow and page keys: {turns} turns through chapter one without a skipped paragraph, back from chapter two to its last page",
         flush=True,
@@ -481,6 +569,22 @@ def launch_app(binary, env):
         return subprocess.Popen([binary], env=env, stderr=log)
 
 
+# Parts of app-stderr.log in which one step expects one message, as
+# (first byte, end byte, pattern). Only `expected_output` adds to it.
+EXPECTED = []
+
+
+@contextlib.contextmanager
+def expected_output(env, pattern):
+    """Allows lines matching `pattern` in the app output written while the
+    `with` block runs, and nowhere else. The block must last until the
+    process that prints them has exited."""
+    log = Path(env["HOME"]) / "app-stderr.log"
+    start = log.stat().st_size
+    yield
+    EXPECTED.append((start, log.stat().st_size, re.compile(pattern)))
+
+
 def check_diagnostics(root):
     log = root / "app-stderr.log"
     if not log.exists():
@@ -494,10 +598,18 @@ def check_diagnostics(root):
         r"\bGdk-WARNING \*\*: \d{2}:\d{2}:\d{2}\.\d+: "
         r"gdk_frame_timings_submitted\(\) called on submitted frame\.$"
     )
-    unexpected = [
-        line for line in log.read_text(errors="replace").splitlines()
-        if diagnostic.search(line) and not allowed.search(line)
-    ]
+    unexpected = []
+    end = 0
+    for raw in log.read_bytes().splitlines(keepends=True):
+        start, end = end, end + len(raw)
+        unexpected += [
+            line for line in raw.decode(errors="replace").splitlines()
+            if diagnostic.search(line) and not allowed.search(line)
+            and not any(
+                first <= start and end <= last and pattern.search(line)
+                for first, last, pattern in EXPECTED
+            )
+        ]
     assert not unexpected, "\n".join(unexpected)
     print("PASS no unexpected GTK warnings or criticals from any app process", flush=True)
 
@@ -633,25 +745,17 @@ def run(binary, evidence, root):
         keys(evidence)
         click("Next")
         find("Chapter 2 of 2", contains=True)
-        view = find("", "text")
-        assert "Northern shore" in accessible_text(view)
         capture("The Lantern Atlas · Revised", evidence / "reader.png")
-        wid = subprocess.check_output(
-            [
-                "xdotool",
-                "search",
-                "--onlyvisible",
-                "--name",
-                "The Lantern Atlas · Revised",
-            ],
-            text=True,
-        ).splitlines()[-1]
-        xd("mousemove", "--window", wid, 300, 260, "click", "--repeat", 12, 5)
+        assert "Northern shore" in words(evidence / "reader.png")
+        for _ in range(3):
+            xd("key", "Right")
+            time.sleep(0.4)
+        find("Page 4 of", contains=True)
         time.sleep(0.6)
         capture("The Lantern Atlas · Revised", evidence / "scrolled.png")
         before = markers(evidence / "scrolled.png")
         assert before and before[0] > 0, before
-        # End the first process with the reader still open after scrolling settled.
+        # End the first process with the reader still open after turning settled.
         stop(proc)
         for attempt in range(3):
             if attempt:
@@ -663,16 +767,82 @@ def run(binary, evidence, root):
             select_book("lantern")
             key("Return")
             find("Chapter 2 of 2", contains=True)
-            assert "Northern shore" in accessible_text(find("", "text"))
+            find("Page 4 of", contains=True)
             capture("The Lantern Atlas · Revised", evidence / "resumed.png")
             after = markers(evidence / "resumed.png")
-            assert after and abs(after[0] - before[0]) <= 1, (before, after)
+            assert after == before, (before, after)
             print(
                 f"PASS first visible paragraph before close {before[0]}, after restart {after[0]}",
                 flush=True,
             )
             click("Back to library")
             time.sleep(0.3)
+        # A turn that has reached the reader is the place saved on leaving,
+        # with no wait for the save's own timer. The line under the page
+        # shows the turn once the reader has it.
+        select_book("lantern")
+        key("Return")
+        find("Page 4 of", contains=True)
+        xd("key", "Right")
+        find("Page 5 of", contains=True)
+        click("Back to library")
+        time.sleep(0.5)
+        select_book("lantern")
+        key("Return")
+        find("Page 5 of", contains=True)
+        click("Back to library")
+        time.sleep(0.3)
+        print("PASS a page turned just before leaving is where the book reopens", flush=True)
+        # The reader is modal, so asking the library window to close while it
+        # is open does nothing: both windows stay and the reader still turns.
+        select_book("lantern")
+        key("Return")
+        find("Page 5 of", contains=True)
+        library = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"], text=True
+        ).splitlines()[-1]
+        ask_to_close(library)
+        time.sleep(1.5)
+        assert proc.poll() is None, "asking the library to close ended the app under the reader"
+        assert web_processes(proc.pid), "the page was ended though nothing closed"
+        xd("key", "Right")
+        find("Page 6 of", contains=True)
+        # A window can also be destroyed without being asked, as when a
+        # window manager ends. Then the app ends, on every GTK: no process
+        # is left, and the turn that had reached the reader is where the
+        # book reopens.
+        pages = web_processes(proc.pid)
+        assert pages, "no web process to watch"
+        # GDK itself warns when another program destroys a window. From
+        # the window's destruction to the app's exit, DESTROYED_WINDOW_WARNING
+        # is expected in the app's output, and nowhere else in the run.
+        with expected_output(env, DESTROYED_WINDOW_WARNING):
+            xd("windowclose", library)
+            proc.wait(timeout=10)
+        assert proc.returncode == 0, proc.returncode
+        # The page's process is looked for by its own number: once the app
+        # has gone it is nobody's descendant.
+        deadline = time.monotonic() + 10
+        while any(Path(f"/proc/{pid}").exists() for pid in pages):
+            assert time.monotonic() < deadline, "a web process outlived the app"
+            time.sleep(0.2)
+        proc = launch_app(binary, env)
+        find("Mira Vale")
+        select_book("lantern")
+        key("Return")
+        find("Page 6 of", contains=True)
+        click("Back to library")
+        time.sleep(0.3)
+        print(
+            "PASS the library cannot be closed under the reader, and when its window is destroyed the app ends and the last turn is where the book reopens",
+            flush=True,
+        )
+        # Closing the reader lets its view go, and the view's web process
+        # with it.
+        deadline = time.monotonic() + 10
+        while web_processes(proc.pid):
+            assert time.monotonic() < deadline, "the reader's web process outlived its window"
+            time.sleep(0.2)
         print("PASS chapter navigation and resume after process restart", flush=True)
         for expected in ("Book exported", "Already exported"):
             select_book("lantern")
@@ -694,6 +864,16 @@ def run(binary, evidence, root):
             "PASS folder export, idempotent repeat and unchanged source bytes",
             flush=True,
         )
+        # The same request that did nothing under the reader closes the
+        # library when no reader is open, so that step did ask.
+        library = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"], text=True
+        ).splitlines()[-1]
+        ask_to_close(library)
+        assert proc.wait(timeout=10) == 0
+        print("PASS the library closes when asked with no reader open", flush=True)
+        proc = launch_app(binary, env)
+        find("Mira Vale")
         covers(binary, evidence, root, proc)
         proc = None
     finally:
@@ -1159,6 +1339,80 @@ def covers(binary, evidence, root, proc):
             stop(proc)
 
 
+def ending(binary, root, how):
+    """End the application one way with a reader open on a real chapter, an
+    instant after a page turn, and report what was left. Run by hand, once
+    per way, never in a loop: an ending that crashes something leaves a
+    record the desktop shows its user. See docs/design/epub-reading.md,
+    "The ways the application ends"."""
+    env = environment(root)
+    books = root / "Books"
+    books.mkdir()
+    epub(books / "01-Atlas.epub")
+    proc = launch_app(binary, env)
+    find("No books yet")
+    focus("Ebook Manager")
+    key("ctrl+o")
+    picker(books / "01-Atlas.epub", "Choose EPUB files")
+    find("Import complete")
+    click("Done")
+    select_book("lantern")
+    key("Return")
+    find("Page 1 of", contains=True)
+    for _ in range(2):
+        xd("key", "Right")
+        time.sleep(0.5)
+    find("Page 3 of", contains=True)
+    time.sleep(0.6)
+    web = web_processes(proc.pid)
+    assert web, "no web process to watch"
+    # The turn to page 4 is made an instant before the end.
+    xd("key", "Right")
+    if how in ("term", "int", "kill", "abrt"):
+        proc.send_signal(
+            {
+                "term": signal.SIGTERM,
+                "int": signal.SIGINT,
+                "kill": signal.SIGKILL,
+                "abrt": signal.SIGABRT,
+            }[how]
+        )
+    elif how == "display":
+        display = os.environ["DISPLAY"].lstrip(":").split(".")[0]
+        server = subprocess.check_output(
+            ["pgrep", "-f", f"Xvfb :{display} "], text=True
+        ).split()[0]
+        os.kill(int(server), signal.SIGKILL)
+    else:
+        raise SystemExit(f"unknown ending {how!r}")
+    try:
+        code = proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        code = "still running after 15 seconds"
+        proc.kill()
+    deadline = time.monotonic() + 10
+    left = web
+    while left and time.monotonic() < deadline:
+        left = [pid for pid in web if Path(f"/proc/{pid}").exists()]
+        time.sleep(0.2)
+    saved = "not checked"
+    if how != "display":
+        proc = launch_app(binary, env)
+        find("The Lantern Atlas")
+        select_book("lantern")
+        key("Return")
+        label = find("Page ", "label", contains=True)
+        saved = re.search(r"Page (\d+) of", label.get_name()).group(1)
+        click("Back to library")
+        time.sleep(0.5)
+        proc.terminate()
+        proc.wait(timeout=10)
+    print(
+        f"ENDING {how}: application exit {code}; web processes left after 10 seconds: {left or 'none'}; reopened on page {saved} (4 is the page turned to an instant before)",
+        flush=True,
+    )
+
+
 def desktop(body):
     """Inside the private session: starts the accessibility registry and a
     window manager, runs `body`, and stops both."""
@@ -1253,11 +1507,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--private-session", action="store_true", help=argparse.SUPPRESS
     )
+    parser.add_argument(
+        "--ending",
+        choices=["term", "int", "kill", "abrt", "display"],
+        help="instead of the walk-through, end the app this way with a reader open; run by hand, once",
+    )
     args = parser.parse_args()
     binary = args.binary.resolve()
     evidence = args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     if args.private_session:
-        desktop(lambda home: run(binary, evidence, home))
+        if args.ending:
+            desktop(lambda home: ending(binary, home, args.ending))
+        else:
+            desktop(lambda home: run(binary, evidence, home))
     else:
-        private_session(__file__, [binary, evidence])
+        private_session(
+            __file__,
+            [binary, evidence, *(["--ending", args.ending] if args.ending else [])],
+        )

@@ -1,23 +1,57 @@
+//! The reader's window: a web view on one chapter, the chapter controls, the
+//! keys, and saving the place. What keeps book content inside the view is in
+//! `reader/view.rs`. See docs/design/epub-reading.md.
+
+mod place;
+mod progress;
+mod view;
+
 use super::*;
 use ebook_library::ReadingPosition;
-use ebook_reader::{Position, Reader, ReaderConfig};
+use ebook_reader::{Reader, ReaderConfig, ResourceId};
+use progress::Weight;
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     sync::Arc,
 };
+use view::{Config, Document, Event, Landing, Picture, Source, Zone};
+
+/// A page colour from docs/design/interface-reader.md: page, text, secondary.
+const PAPER: [&str; 3] = ["#f4ecd8", "#3b2f21", "#736858"];
+const GREY: [&str; 3] = ["#2b2b2e", "#d6d6d8", "#929294"];
+
+/// The reader's faces in the order the design prefers them. Literata is the
+/// design's default; bundling it is a later task, so it is used when the
+/// system has it.
+const FACES: [&str; 4] = ["Literata", "Noto Serif", "Liberation Serif", "DejaVu Serif"];
+
+/// The first of `FACES` the system has, as a CSS font list. A name the
+/// system lacks is not sent to the page: fontconfig would answer it with
+/// its default face, which is often not a serif.
+fn reading_font(w: &gtk::Window) -> String {
+    let installed = w.pango_context().list_families();
+    FACES
+        .iter()
+        .find(|face| installed.iter().any(|f| f.name() == **face))
+        .map_or_else(|| "serif".to_owned(), |face| format!("'{face}', serif"))
+}
 
 pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
     let w = gtk::Window::builder()
         .title(&b.title)
         .transient_for(parent)
+        // Closing the library closes the reader, and so lets its view go.
+        .destroy_with_parent(true)
         .modal(true)
         .default_width(760)
         .default_height(640)
         .build();
-    let layout = column(12);
-    inset(&layout, 16);
+    w.add_css_class("reader-window");
+    let layout = column(0);
     w.set_child(Some(&layout));
     let status = label("Opening book…", "heading");
+    inset(&status, 16);
     layout.append(&status);
     w.present();
     let store = store.clone();
@@ -34,31 +68,198 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
             .await
             .map_err(|_| anyhow::anyhow!("Reader interrupted"))??;
             anyhow::ensure!(!book.chapters().is_empty(), "No readable chapters");
-            let pos = saved.filter(|p| p.version_id == b.version_id).map_or(
-                Position {
-                    chapter: 0,
-                    block: 0,
-                },
-                |p| Position {
-                    chapter: p.chapter,
-                    block: p.offset,
-                },
-            );
-            let pos = book.clamp(pos);
-            Ok::<_, anyhow::Error>((book, pos))
+            let last = book.chapters().len() as u32 - 1;
+            // A book with no saved place opens on its first page, whatever
+            // is on it. A saved place opens the page holding its offset.
+            let place =
+                saved
+                    .filter(|p| p.version_id == b.version_id)
+                    .map_or((0, Landing::Start), |p| {
+                        if p.chapter > last {
+                            (last, Landing::Start)
+                        } else {
+                            (p.chapter, Landing::Offset(p.offset))
+                        }
+                    });
+            Ok::<_, anyhow::Error>((Arc::new(book), place))
         }
         .await;
-        let (book, pos) = match result {
+        let (book, (chapter, landing)) = match result {
             Ok(x) => x,
             Err(e) => {
                 status.set_text(&format!("Couldn’t open book · {e:#}"));
                 return;
             }
         };
+        let facts = Rc::new(RefCell::new(HashMap::new()));
+        let source = Rc::new(BookSource {
+            book: book.clone(),
+            facts: facts.clone(),
+        });
+        let config = Config::new(
+            glib::user_cache_dir()
+                .join("ebook-manager")
+                .join("content-filters"),
+        );
+        let (ready, built) = async_channel::bounded(1);
+        // The view tells the reader what the page did in the same step the
+        // page's message is handled, so the place the reader holds is never
+        // behind a message that has arrived.
+        let hears: Rc<RefCell<std::rc::Weak<Reading>>> = Rc::default();
+        let tells = hears.clone();
+        view::View::open(
+            config,
+            source,
+            move |event| {
+                let reading = tells.borrow().upgrade();
+                if let Some(reading) = reading {
+                    reading.event(event);
+                }
+            },
+            move |view| {
+                let _ = ready.send_blocking(view);
+            },
+        );
+        let view = match built.recv().await {
+            Ok(Ok(view)) => view,
+            Ok(Err(e)) => {
+                status.set_text(&format!("Couldn’t open book · {e}"));
+                return;
+            }
+            Err(_) => return,
+        };
         if !w.is_visible() {
             return;
         }
         layout.remove(&status);
+        inset(&status, 0);
+        let reading = Reading::build(&w, &layout, status, view, book, facts, b, store);
+        hears.replace(Rc::downgrade(&reading));
+        reading.load(chapter, landing);
+    });
+}
+
+/// What the helper said about a chapter beyond its markup.
+#[derive(Clone, Copy, Default)]
+struct Facts {
+    /// The length of the chapter's text, as the helper counted it.
+    length: u32,
+    right_to_left: bool,
+    /// Something in the chapter could not be shown.
+    partial: bool,
+}
+
+/// Chapters and pictures from the sandboxed helper, read off the GTK thread.
+struct BookSource {
+    book: Arc<ebook_reader::Book>,
+    facts: Rc<RefCell<HashMap<u32, Facts>>>,
+}
+
+impl Source for BookSource {
+    fn chapter(&self, index: u32, done: Box<dyn FnOnce(Result<Document, String>)>) {
+        let book = self.book.clone();
+        let facts = self.facts.clone();
+        glib::spawn_future_local(async move {
+            let read = gio::spawn_blocking(move || book.read_content(index)).await;
+            done(match read {
+                Ok(Ok(content)) => {
+                    facts.borrow_mut().insert(
+                        index,
+                        Facts {
+                            length: content.length,
+                            right_to_left: content.right_to_left,
+                            partial: content.truncated || !content.warnings.is_empty(),
+                        },
+                    );
+                    Ok(Document {
+                        markup: content.markup,
+                        language: content.language,
+                        right_to_left: content.right_to_left,
+                    })
+                }
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err("Chapter loading interrupted".into()),
+            })
+        });
+    }
+
+    fn picture(&self, id: u32, done: Box<dyn FnOnce(Option<Picture>)>) {
+        let book = self.book.clone();
+        glib::spawn_future_local(async move {
+            let read = gio::spawn_blocking(move || book.read_resource(ResourceId(id))).await;
+            // A picture that cannot be read shows its text alternative.
+            done(read.ok().and_then(Result::ok).map(|resource| Picture {
+                media_type: resource.kind.media_type(),
+                bytes: resource.bytes,
+            }))
+        });
+    }
+}
+
+fn toggle_full_screen(w: &gtk::Window) {
+    if w.is_fullscreen() {
+        w.unfullscreen()
+    } else {
+        w.fullscreen()
+    }
+}
+
+fn position_error(w: &gtk::Window, e: &anyhow::Error) {
+    if let Some(detail) = publication_message(e) {
+        notice(w, "Position saved locally", &detail);
+    } else {
+        notice(w, "Couldn’t save reading position", &e.to_string());
+    }
+}
+
+/// The page colour for the window's appearance: Paper in light, Grey in dark.
+fn page_colour() -> [&'static str; 3] {
+    if libadwaita::StyleManager::default().is_dark() {
+        GREY
+    } else {
+        PAPER
+    }
+}
+
+use place::{Effect, Input, Keeper, Place};
+
+struct Reading {
+    book: Arc<ebook_reader::Book>,
+    window: glib::WeakRef<gtk::Window>,
+    model: Rc<Book>,
+    store: store::Store,
+    view: view::View,
+    facts: Rc<RefCell<HashMap<u32, Facts>>>,
+    picker: gtk::DropDown,
+    /// Where to land when the picker next changes chapter.
+    arrival: RefCell<Option<Landing>>,
+    previous: gtk::Button,
+    next: gtk::Button,
+    status: gtk::Label,
+    /// The place to save, the place showing and whether the reader has
+    /// left. Everything that happens goes through `step`, and this file
+    /// only does what the keeper answers. See `place.rs`.
+    keeper: RefCell<Keeper>,
+    /// The timer that saves the place once turning settles.
+    pending_save: Cell<Option<glib::SourceId>>,
+    /// The answer to the save a leave submitted, until the leave reads it.
+    submitted: RefCell<Option<Saving>>,
+    /// The window's own colours, replaced when the appearance changes.
+    colours: gtk::CssProvider,
+}
+
+impl Reading {
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        w: &gtk::Window,
+        layout: &gtk::Box,
+        status: gtk::Label,
+        view: view::View,
+        book: Arc<ebook_reader::Book>,
+        facts: Rc<RefCell<HashMap<u32, Facts>>>,
+        model: Rc<Book>,
+        store: store::Store,
+    ) -> Rc<Reading> {
         let names: Vec<_> = book
             .chapters()
             .iter()
@@ -72,36 +273,21 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
             .collect();
         let names: Vec<_> = names.iter().map(String::as_str).collect();
         let picker = gtk::DropDown::from_strings(&names);
-        picker.set_selected(pos.chapter);
         picker.set_hexpand(true);
         let bar = row(8);
+        inset(&bar, 12);
         layout.append(&bar);
         let previous = gtk::Button::with_label("Previous");
         let next = gtk::Button::with_label("Next");
         bar.append(&previous);
         bar.append(&picker);
         bar.append(&next);
-        let text = gtk::TextView::builder()
-            .editable(false)
-            .cursor_visible(false)
-            .wrap_mode(gtk::WrapMode::WordChar)
-            .left_margin(32)
-            .right_margin(32)
-            .top_margin(24)
-            .bottom_margin(28)
-            .pixels_below_lines(8)
-            .build();
-        text.add_css_class("reading-text");
-        let scroll = gtk::ScrolledWindow::builder().child(&text).build();
-        // Full screen would otherwise stretch each line across the monitor.
-        let measure = libadwaita::Clamp::builder()
-            .maximum_size(760)
-            .tightening_threshold(760)
-            .vexpand(true)
-            .child(&scroll)
-            .build();
-        layout.append(&measure);
+        let page = view.widget();
+        page.set_vexpand(true);
+        page.update_property(&[gtk::accessible::Property::Label("Book text")]);
+        layout.append(page);
         let footer = row(12);
+        inset(&footer, 12);
         layout.append(&footer);
         status.set_hexpand(true);
         footer.append(&status);
@@ -126,39 +312,49 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
                 w.close()
             }
         }));
-        let view = Rc::new(View {
-            book: Arc::new(book),
+        let colours = gtk::CssProvider::new();
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(w),
+            &colours,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+        let reading = Rc::new(Reading {
+            book,
             window: w.downgrade(),
-            model: b,
+            model,
             store,
-            text,
+            view,
+            facts,
             picker: picker.clone(),
-            arrival: Cell::default(),
+            arrival: RefCell::new(None),
             previous: previous.clone(),
             next: next.clone(),
             status,
-            offsets: RefCell::new(vec![]),
-            shown: Cell::new(None),
+            keeper: RefCell::default(),
             pending_save: Cell::new(None),
-            generation: Cell::new(0),
+            submitted: RefCell::new(None),
+            colours,
         });
-        let weak = Rc::downgrade(&view);
-        scroll.vadjustment().connect_value_changed(move |_| {
-            if let Some(v) = weak.upgrade() {
-                v.queue_scroll_save();
+        reading.colour();
+        reading.view.set_style(&[("--font", &reading_font(w))]);
+        let weak = Rc::downgrade(&reading);
+        libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+            if let Some(r) = weak.upgrade() {
+                r.colour();
             }
         });
-        let weak = Rc::downgrade(&view);
+        let weak = Rc::downgrade(&reading);
         picker.connect_selected_notify(move |p| {
-            if let Some(v) = weak.upgrade() {
-                v.load(p.selected(), v.arrival.take());
+            if let Some(r) = weak.upgrade() {
+                let landing = r.arrival.take().unwrap_or(Landing::Start);
+                r.show(p.selected(), landing);
             }
         });
-        let weak = Rc::downgrade(&view);
+        let weak = Rc::downgrade(&reading);
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         keys.connect_key_pressed(move |_, key, _, modifiers| match weak.upgrade() {
-            Some(v) if v.key(key, modifiers) => glib::Propagation::Stop,
+            Some(r) if r.key(key, modifiers) => glib::Propagation::Stop,
             _ => glib::Propagation::Proceed,
         });
         w.add_controller(keys);
@@ -169,142 +365,267 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
             }
         });
         next.connect_clicked(move |_| picker.set_selected(picker.selected() + 1));
-        let v = view.clone();
-        w.connect_close_request(move |w| {
-            let Some(pos) = v.position() else {
-                return glib::Propagation::Proceed;
-            };
-            let w = w.clone();
-            let store = v.store.clone();
-            let id = v.model.id.clone();
-            w.set_sensitive(false);
-            glib::spawn_future_local(async move {
-                let result = store.save_position(id, pos).await;
-                w.set_sensitive(true);
-                match result {
-                    Ok(()) => w.destroy(),
-                    Err(e) => {
-                        let parent = w.transient_for();
-                        w.destroy();
-                        if let Some(parent) = parent {
-                            position_error(&parent, &e);
-                        }
-                    }
+        // The window can also go without being asked, when the library
+        // closes under it. A place still waiting to be saved is sent then.
+        let weak = Rc::downgrade(&reading);
+        w.connect_unrealize(move |_| {
+            if let Some(r) = weak.upgrade() {
+                let _ = r.leave();
+            }
+        });
+        // The window the reader was opened from can close first, and can do
+        // so without this window ever being unrealized: what it holds can
+        // keep it from being disposed, which is what would close this one.
+        // So the reader also leaves when that window is asked to close or
+        // goes off screen.
+        if let Some(parent) = w.transient_for() {
+            let weak = Rc::downgrade(&reading);
+            parent.connect_close_request(move |_| {
+                if let Some(r) = weak.upgrade() {
+                    let _ = r.leave();
+                }
+                glib::Propagation::Proceed
+            });
+            let weak = Rc::downgrade(&reading);
+            parent.connect_unrealize(move |_| {
+                if let Some(r) = weak.upgrade() {
+                    let _ = r.leave();
                 }
             });
-            glib::Propagation::Stop
+        }
+        // That window can also be destroyed from outside, as when a window
+        // manager ends. GTK 4.24 then unrealizes it, which the hook above
+        // hears. Earlier GTK tells the window nothing while the reader is
+        // modal, and goes on drawing to a surface that is gone. Its surface
+        // does say it is no longer mapped, so the reader leaves then and
+        // the application quits, as it does on later GTK.
+        if let Some(parent) = w.transient_for()
+            && let Some(surface) = parent.surface()
+        {
+            let weak = Rc::downgrade(&reading);
+            let parent = parent.downgrade();
+            surface.connect_mapped_notify(move |surface| {
+                if !surface.is_destroyed() {
+                    return;
+                }
+                // Not from inside the surface's own destruction.
+                let (weak, parent) = (weak.clone(), parent.clone());
+                glib::idle_add_local_once(move || {
+                    let Some(parent) = parent.upgrade() else {
+                        return;
+                    };
+                    if let Some(r) = weak.upgrade() {
+                        let _ = r.leave();
+                    }
+                    orphaned(&parent);
+                });
+            });
+        }
+        // The application can also quit with no window being closed, as it
+        // does when the session ends.
+        if let Some(app) = gio::Application::default() {
+            let weak = Rc::downgrade(&reading);
+            app.connect_shutdown(move |_| {
+                if let Some(r) = weak.upgrade() {
+                    let _ = r.leave();
+                }
+            });
+        }
+        let r = reading.clone();
+        w.connect_close_request(move |w| {
+            // Leaving is the same whoever asks: save the place the reader
+            // holds, wait for the library to have it, end the page.
+            if let Err(e) = r.leave()
+                && let Some(parent) = w.transient_for()
+            {
+                position_error(&parent, &e);
+            }
+            // If the window the reader was opened from was destroyed from
+            // outside and nothing said so, the app would run on with no
+            // window. See `orphaned`.
+            if let Some(parent) = w.transient_for() {
+                glib::idle_add_local_once(move || orphaned(&parent));
+            }
+            glib::Propagation::Proceed
         });
-        view.load(pos.chapter, Landing::Block(pos.block));
-    });
-}
-
-fn toggle_full_screen(w: &gtk::Window) {
-    if w.is_fullscreen() {
-        w.unfullscreen()
-    } else {
-        w.fullscreen()
+        reading
     }
-}
 
-/// Where a chapter opens.
-#[derive(Clone, Copy)]
-enum Landing {
-    /// With this block at the top of the page.
-    Block(u32),
-    /// On its last page.
-    End,
-}
-impl Default for Landing {
-    fn default() -> Self {
-        Self::Block(0)
+    /// Give the page and the window the page colour for the appearance.
+    fn colour(&self) {
+        let [page, ink, secondary] = page_colour();
+        self.colours.load_from_string(&format!(
+            ".reader-window {{ background-color: {page}; color: {ink}; }}"
+        ));
+        self.view
+            .set_style(&[("--page", page), ("--ink", ink), ("--secondary", secondary)]);
     }
-}
 
-#[derive(Clone, Copy)]
-enum Turn {
-    Back,
-    Forward,
-}
-
-/// The top of the page after the one showing `top..top + height`: the first
-/// line that does not fit, so no line is skipped or cut. `None` when every
-/// line from `lines` (top and height of each, in order) already fits.
-fn next_page_top(
-    lines: impl IntoIterator<Item = (i32, i32)>,
-    top: i32,
-    height: i32,
-) -> Option<i32> {
-    let (y, _) = lines.into_iter().find(|(y, h)| y + h > top + height)?;
-    Some(if y > top { y } else { top + height })
-}
-
-/// The top of the page before the one showing from `top`. It ends with the
-/// last line above the first whole line now showing, so a line cut by `top`
-/// is whole on it. It starts on a whole line, or at `start`, the top of the
-/// chapter above its margin. `lines` must reach one line past `top`.
-fn previous_page_top(lines: &[(i32, i32)], start: i32, top: i32, height: i32) -> i32 {
-    let tops = || lines.iter().map(|(y, _)| *y);
-    let edge = tops().find(|y| *y >= top).unwrap_or(i32::MAX);
-    // The page must reach the bottom of the last line above that one. The
-    // space between paragraphs below it can fall off the page.
-    let reach = lines
-        .iter()
-        .take_while(|(y, _)| *y < edge)
-        .last()
-        .map_or(top, |(y, h)| y + h);
-    std::iter::once(start)
-        .chain(tops())
-        .find(|y| *y >= reach - height)
-        .filter(|y| *y < top)
-        .unwrap_or(top - height)
-}
-
-/// Linear chapters before `chapter` plus the part of it scrolled past, over
-/// the number of linear chapters. A chapter that is not linear counts as
-/// the start of the next linear one. Exactly 1 at the end of the last.
-fn interim_fraction(linear: &[bool], chapter: usize, scrolled: f64) -> f32 {
-    let total = linear.iter().filter(|l| **l).count();
-    let before = linear.iter().take(chapter).filter(|l| **l).count();
-    if total == 0 {
-        return 0.0;
+    /// Select a chapter in the picker and show it at `landing`.
+    fn load(self: &Rc<Self>, chapter: u32, landing: Landing) {
+        if self.picker.selected() == chapter {
+            self.show(chapter, landing);
+        } else {
+            self.arrival.replace(Some(landing));
+            self.picker.set_selected(chapter);
+        }
     }
-    let within = if linear.get(chapter) == Some(&true) {
-        scrolled.clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    if before + 1 == total && within >= 1.0 - 1e-6 {
-        return 1.0;
-    }
-    ((before as f64 + within) / total as f64).min(1.0) as f32
-}
 
-fn position_error(w: &gtk::Window, e: &anyhow::Error) {
-    if let Some(detail) = publication_message(e) {
-        notice(w, "Position saved locally", &detail);
-    } else {
-        notice(w, "Couldn’t save reading position", &e.to_string());
+    fn show(self: &Rc<Self>, chapter: u32, landing: Landing) {
+        if self.keeper.borrow().gone() {
+            return;
+        }
+        self.previous.set_sensitive(chapter > 0);
+        self.next
+            .set_sensitive((chapter as usize) + 1 < self.book.chapters().len());
+        let number = self.view.load(chapter, landing);
+        let _ = self.step(Input::Asked { number });
+        // A chapter opens in the page colour, with no flash of another.
+        let [page, ink, secondary] = page_colour();
+        self.view
+            .set_style(&[("--page", page), ("--ink", ink), ("--secondary", secondary)]);
     }
-}
 
-struct View {
-    book: Arc<ebook_reader::Book>,
-    window: glib::WeakRef<gtk::Window>,
-    model: Rc<Book>,
-    store: store::Store,
-    text: gtk::TextView,
-    picker: gtk::DropDown,
-    /// Where to land when the picker next changes chapter.
-    arrival: Cell<Landing>,
-    previous: gtk::Button,
-    next: gtk::Button,
-    status: gtk::Label,
-    offsets: RefCell<Vec<i32>>,
-    shown: Cell<Option<u32>>,
-    pending_save: Cell<Option<glib::SourceId>>,
-    generation: Cell<u64>,
-}
-impl View {
+    fn event(self: &Rc<Self>, event: Event) {
+        // A reader that has left has saved its place and ended its page.
+        // Nothing that arrives after that changes anything.
+        if self.keeper.borrow().gone() {
+            return;
+        }
+        match event {
+            Event::Ready { load } => {
+                self.view.widget().grab_focus();
+                // The page and the helper count the same text. If they ever
+                // differ, places still work, since the page makes and reads
+                // its own, but search results would land off. Say so.
+                let counted = self.facts.borrow().get(&load.chapter).map(|f| f.length);
+                if counted.is_some_and(|c| c != load.length) {
+                    glib::g_warning!(
+                        "ebook-manager",
+                        "chapter {}: the page counts {} units of text, the helper {}",
+                        load.chapter,
+                        load.length,
+                        counted.unwrap_or_default()
+                    );
+                }
+                let _ = self.step(Input::Ready { load: record(load) });
+            }
+            Event::Place {
+                load,
+                offset,
+                page,
+                pages,
+                count,
+                moved,
+            } => {
+                let _ = self.step(Input::Report(place::Report {
+                    load: record(load),
+                    offset,
+                    page,
+                    pages,
+                    count,
+                    moved,
+                }));
+            }
+            Event::Jump { chapter, anchor } => {
+                if (chapter as usize) < self.book.chapters().len() {
+                    self.load(chapter, anchor.map_or(Landing::Start, Landing::Anchor));
+                }
+            }
+            Event::External(address) => self.offer(address),
+            Event::Tap(Zone::Forward) => self.turn(1),
+            Event::Tap(Zone::Back) => self.turn(-1),
+            // The controls stay visible for now, so the middle does nothing.
+            Event::Tap(Zone::Middle) => {}
+            Event::Failed(why) => {
+                let _ = self.step(Input::Failed);
+                self.status.set_text(&why);
+            }
+        }
+    }
+
+    /// Tell the keeper what happened and do what it answers, in the order
+    /// it answers. The error, if any, is the library's for a save a leave
+    /// made.
+    fn step(self: &Rc<Self>, input: Input) -> Result<()> {
+        // The keeper is let go before anything is done, so an effect that
+        // leads back here finds it free.
+        let effects = self.keeper.borrow_mut().step(input);
+        let mut result = Ok(());
+        for effect in effects {
+            match effect {
+                Effect::Show(place) => self.describe(place),
+                Effect::Blank => self.status.set_text("Loading chapter…"),
+                Effect::StartTimer => self.start_timer(),
+                Effect::StopTimer => {
+                    if let Some(timer) = self.pending_save.take() {
+                        timer.remove();
+                    }
+                }
+                Effect::Submit(place) => {
+                    let saving = submit(&self.store, &self.model.id, self.position(place));
+                    if input == Input::Leave {
+                        self.submitted.replace(Some(saving));
+                    } else {
+                        self.report_later(saving);
+                    }
+                }
+                Effect::AwaitLibrary => {
+                    result = await_library(&self.store, self.submitted.take());
+                }
+                Effect::EndPage => self.view.shut(),
+            }
+        }
+        result
+    }
+
+    /// The line under the page: the chapter, the page, and a note when some
+    /// of the chapter could not be shown.
+    fn describe(&self, place: Place) {
+        let partial = self
+            .facts
+            .borrow()
+            .get(&place.chapter)
+            .is_some_and(|f| f.partial);
+        self.status.set_text(&format!(
+            "Chapter {} of {} · Page {} of {}{}",
+            place.chapter + 1,
+            self.book.chapters().len(),
+            place.page + 1,
+            place.pages,
+            if partial {
+                " · Some content could not be displayed"
+            } else {
+                ""
+            }
+        ));
+    }
+
+    /// Ask before an address outside the book goes to the system.
+    fn offer(&self, address: String) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let dialog = gtk::AlertDialog::builder()
+            .message("Open this link outside the book?")
+            .detail(&address)
+            .buttons(["Cancel", "Open"])
+            .cancel_button(0)
+            .default_button(0)
+            .modal(true)
+            .build();
+        let parent = w.clone();
+        dialog.choose(Some(&w), gio::Cancellable::NONE, move |choice| {
+            if choice == Ok(1) {
+                gtk::UriLauncher::new(&address).launch(
+                    Some(&parent),
+                    gio::Cancellable::NONE,
+                    |_| {},
+                );
+            }
+        });
+    }
+
     /// Handles a reader shortcut. The chapter list keeps its own keys, and
     /// Space still presses a focused button.
     fn key(self: &Rc<Self>, key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType) -> bool {
@@ -335,381 +656,262 @@ impl View {
         {
             return false;
         }
-        let reading = focus.is_none_or(|f| f == self.text);
+        let page = self.view.widget();
+        let reading = focus.is_none_or(|f| &f == page || f.is_ancestor(page));
         let back = modifiers.contains(ModifierType::SHIFT_MASK);
+        // The side that goes forward follows the book, not the interface.
+        let towards_end = if self.right_to_left() { -1 } else { 1 };
         match key {
-            Key::Right | Key::KP_Right | Key::Page_Down | Key::KP_Page_Down => {
-                self.turn(Turn::Forward)
-            }
-            Key::Left | Key::KP_Left | Key::Page_Up | Key::KP_Page_Up => self.turn(Turn::Back),
-            Key::space if reading && back => self.turn(Turn::Back),
-            Key::space if reading => self.turn(Turn::Forward),
-            Key::Down | Key::KP_Down if reading => self.nudge(1.0),
-            Key::Up | Key::KP_Up if reading => self.nudge(-1.0),
+            Key::Right | Key::KP_Right => self.turn(towards_end),
+            Key::Left | Key::KP_Left => self.turn(-towards_end),
+            Key::Page_Down | Key::KP_Page_Down => self.turn(1),
+            Key::Page_Up | Key::KP_Page_Up => self.turn(-1),
+            Key::space if reading && back => self.turn(-1),
+            Key::space if reading => self.turn(1),
             _ => return false,
         }
         true
     }
 
-    fn nudge(&self, direction: f64) {
-        let Some(a) = self.text.vadjustment() else {
-            return;
-        };
-        let max = (a.upper() - a.page_size()).max(a.lower());
-        a.set_value((a.value() + direction * a.step_increment().max(40.0)).clamp(a.lower(), max));
-    }
-
-    /// Tops and heights of the wrapped lines that touch `from..=to`, in
-    /// buffer coordinates.
-    fn lines(&self, from: i32, to: i32) -> Vec<(i32, i32)> {
-        let (mut iter, _) = self.text.line_at_y(from);
-        let mut lines = vec![];
-        loop {
-            let r = self.text.iter_location(&iter);
-            if r.y() > to {
-                break;
-            }
-            if r.y() + r.height() > from {
-                lines.push((r.y(), r.height()));
-            }
-            if !self.text.forward_display_line(&mut iter) {
-                break;
-            }
-        }
-        lines
+    fn right_to_left(&self) -> bool {
+        let chapter = self.keeper.borrow().displayed().map(|(p, _)| p.chapter);
+        chapter.is_some_and(|c| self.facts.borrow().get(&c).is_some_and(|f| f.right_to_left))
     }
 
     /// Turns one page, moving to the neighbouring chapter at either end of
-    /// this one: forward to its start, back to its end.
-    fn turn(&self, turn: Turn) {
-        if self.shown.get().is_none() {
-            return;
-        }
-        let Some(a) = self.text.vadjustment() else {
+    /// this one: forward to its start, back to its last page.
+    fn turn(self: &Rc<Self>, by: i32) {
+        // A turn is made from the place showing, in the load showing it.
+        let Some((place, load)) = self.keeper.borrow().displayed() else {
             return;
         };
-        let rect = self.text.visible_rect();
-        let (top, height) = (rect.y(), rect.height());
-        let max = (a.upper() - a.page_size()).max(a.lower());
-        let first = self
-            .text
-            .iter_location(&self.text.buffer().start_iter())
-            .y();
-        let chapter = self.picker.selected();
-        match turn {
-            Turn::Forward => {
-                let lines = self.lines(top + height - 1, top + 2 * height);
-                match next_page_top(lines, top, height) {
-                    Some(target) if a.value() < max - 0.5 => {
-                        a.set_value((a.value() + f64::from(target - top)).min(max))
-                    }
-                    _ if (chapter as usize) + 1 < self.book.chapters().len() => {
-                        self.picker.set_selected(chapter + 1)
-                    }
-                    _ => {}
-                }
+        // The answer must not keep the reader alive after its window closes.
+        let weak = Rc::downgrade(self);
+        self.view.turn(by, false, move |moved| {
+            let Some(reading) = weak.upgrade() else {
+                return;
+            };
+            // A turn that moved has already told its place. One that did
+            // not is the chapter's edge only if the same load is still
+            // showing: a page ended while a turn was unanswered also says
+            // it did not move, and so does one the reader has since left.
+            let keeper = reading.keeper.borrow();
+            let same = keeper.displayed().is_some_and(|(_, shown)| shown == load) && !keeper.gone();
+            drop(keeper);
+            if moved || !same {
+                return;
             }
-            Turn::Back if top <= first => {
-                if chapter > 0 {
-                    self.arrival.set(Landing::End);
-                    self.picker.set_selected(chapter - 1);
-                }
+            let chapters = reading.book.chapters().len() as u32;
+            if by > 0 && place.chapter + 1 < chapters {
+                reading.load(place.chapter + 1, Landing::Start);
+            } else if by < 0 && place.chapter > 0 {
+                reading.load(place.chapter - 1, Landing::End);
             }
-            Turn::Back => {
-                let start = top - (a.value() - a.lower()).round() as i32;
-                let lines = self.lines(top - height, top + height);
-                let target = previous_page_top(&lines, start, top, height);
-                a.set_value((a.value() + f64::from(target - top)).max(a.lower()));
-            }
+        });
+    }
+
+    /// How far through the book the place is, weighing chapters by size.
+    fn fraction(&self, place: Place) -> f32 {
+        let weights: Vec<Weight> = self
+            .book
+            .chapters()
+            .iter()
+            .map(|c| Weight {
+                size: c.size,
+                linear: c.linear,
+            })
+            .collect();
+        progress::fraction(&weights, place.chapter as usize, place.page, place.pages)
+    }
+
+    /// The place as the library stores it, with when it was read and how
+    /// far through the book it is. This is the one function that knows the
+    /// record's shape.
+    fn position(&self, place: Place) -> ReadingPosition {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_secs()).ok());
+        ReadingPosition {
+            version_id: self.model.version_id.clone(),
+            chapter: place.chapter,
+            offset: place.offset,
+            last_read: now,
+            fraction: Some(self.fraction(place)),
         }
     }
 
-    /// How far through the book the page on screen is. Interim: every
-    /// linear chapter counts the same, whatever its length.
-    fn fraction(&self, chapter: u32) -> f32 {
-        let linear: Vec<_> = self.book.chapters().iter().map(|c| c.linear).collect();
-        let scrolled = self.text.vadjustment().map_or(0.0, |a| {
-            let range = a.upper() - a.lower() - a.page_size();
-            if range < 0.5 {
-                1.0
-            } else {
-                (a.value() - a.lower()) / range
-            }
-        });
-        interim_fraction(&linear, chapter as usize, scrolled)
-    }
-    fn position(&self) -> Option<ReadingPosition> {
-        let chapter = self.shown.get()?;
-        let (iter, _) = self.text.line_at_y(self.text.visible_rect().y());
-        let block = self
-            .offsets
-            .borrow()
-            .partition_point(|p| *p <= iter.offset())
-            .saturating_sub(1) as u32;
-        Some(ReadingPosition {
-            last_read: Some(glib::DateTime::now_utc().ok()?.to_unix()),
-            fraction: Some(self.fraction(chapter)),
-            version_id: self.model.version_id.clone(),
-            chapter,
-            offset: block,
-        })
-    }
-    fn queue_scroll_save(self: &Rc<Self>) {
+    /// Start the timer that saves once turning settles, or start it again.
+    fn start_timer(self: &Rc<Self>) {
         if let Some(timer) = self.pending_save.take() {
             timer.remove();
-        }
-        if self.shown.get().is_none() {
-            return;
         }
         let weak = Rc::downgrade(self);
         let timer =
             glib::timeout_add_local_once(std::time::Duration::from_millis(350), move || {
-                if let Some(v) = weak.upgrade() {
-                    v.pending_save.take();
-                    if let Some(p) = v.position() {
-                        v.persist(p.chapter, p.offset);
-                    }
+                if let Some(r) = weak.upgrade() {
+                    // This timer has fired and is gone, so it is forgotten.
+                    r.pending_save.take();
+                    let _ = r.step(Input::Timer);
                 }
             });
         self.pending_save.set(Some(timer));
     }
 
-    fn persist(&self, chapter: u32, offset: u32) {
-        let id = self.model.id.clone();
-        let pos = ReadingPosition {
-            last_read: glib::DateTime::now_utc().ok().map(|t| t.to_unix()),
-            fraction: Some(self.fraction(chapter)),
-            version_id: self.model.version_id.clone(),
-            chapter,
-            offset,
-        };
-        let store = self.store.clone();
+    /// Tell the reader if a save made while reading failed. The save is
+    /// already with the library: this only waits for its answer.
+    fn report_later(&self, saving: Saving) {
         let window = self.window.clone();
         glib::spawn_future_local(async move {
-            if let Err(e) = store.save_position(id, pos).await
+            if let Err(e) = saving.await
                 && let Some(w) = window.upgrade()
             {
                 position_error(&w, &e);
             }
         });
     }
-    // A freshly filled TextView can still have the empty buffer's scroll range.
-    // Set the adjustment after layout, then verify the viewport on a later frame.
-    /// `target` is the block to put at the top and its buffer offset, or
-    /// `None` for the chapter's last page.
-    fn restore(self: &Rc<Self>, seq: u64, chapter: u32, target: Option<(u32, i32)>, partial: bool) {
-        let weak = Rc::downgrade(self);
-        self.text.add_tick_callback(move |text, _| {
-            let Some(v) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            if v.generation.get() != seq {
-                return glib::ControlFlow::Break;
-            }
-            let adjustment = text
-                .vadjustment()
-                .expect("scrolled text has a vertical adjustment");
-            let rect = text.visible_rect();
-            let buffer = text.buffer();
-            let anchor = target.map_or_else(|| buffer.end_iter(), |t| buffer.iter_at_offset(t.1));
-            let (y, height) = text.line_yrange(&anchor);
-            if rect.height() <= 0 || adjustment.page_size() <= 0.0 || height <= 0 {
-                return glib::ControlFlow::Continue;
-            }
-            let max = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
-            let Some((block, _)) = target else {
-                if adjustment.value() < max - 0.5 {
-                    adjustment.set_value(max);
-                    return glib::ControlFlow::Continue;
-                }
-                if text.iter_location(&anchor).y() > rect.y() + rect.height() {
-                    return glib::ControlFlow::Continue;
-                }
-                v.shown.set(Some(chapter));
-                if let Some(p) = v.position() {
-                    v.persist(chapter, p.offset);
-                }
-                v.show_chapter(chapter, partial);
-                return glib::ControlFlow::Break;
-            };
-            let delta = f64::from(y - rect.y());
-            let aligned = delta.abs() <= 1.0;
-            let last_page = adjustment.value() >= max - 0.5
-                && y >= rect.y()
-                && y < rect.y() + rect.height()
-                && text.line_yrange(&text.buffer().end_iter()).0 <= rect.y() + rect.height();
-            if block > 0 && !aligned && !last_page {
-                adjustment.set_value((adjustment.value() + delta).clamp(adjustment.lower(), max));
-                return glib::ControlFlow::Continue;
-            }
-            if block == 0 && adjustment.value() > adjustment.lower() + 0.5 {
-                adjustment.set_value(adjustment.lower());
-                return glib::ControlFlow::Continue;
-            }
-            v.shown.set(Some(chapter));
-            v.persist(chapter, block);
-            v.show_chapter(chapter, partial);
-            glib::ControlFlow::Break
-        });
-    }
 
-    fn show_chapter(&self, chapter: u32, partial: bool) {
-        self.status.set_text(&format!(
-            "Chapter {} of {}{}",
-            chapter + 1,
-            self.book.chapters().len(),
-            if partial {
-                " · Some content could not be displayed"
-            } else {
-                ""
-            }
-        ));
+    /// Leave the reader. Every way of leaving does this one thing, whether
+    /// it is the reader's own close, its window going off screen, the window
+    /// it was opened from closing, or the application quitting: save the
+    /// place the reader holds, wait for the library to have it, because the
+    /// process may end as soon as this returns, and end the page's process
+    /// before anything can leave it to shut itself down. Leaving twice does
+    /// nothing the second time.
+    fn leave(self: &Rc<Self>) -> Result<()> {
+        self.step(Input::Leave)
     }
+}
 
-    fn load(self: &Rc<Self>, index: u32, landing: Landing) {
-        self.shown.set(None);
-        let seq = self.generation.get() + 1;
-        self.generation.set(seq);
-        self.previous.set_sensitive(index > 0);
-        self.next
-            .set_sensitive((index as usize) + 1 < self.book.chapters().len());
-        self.status.set_text("Loading chapter…");
-        self.text.buffer().set_text("");
-        let book = self.book.clone();
-        let v = self.clone();
-        glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || -> Result<_> {
-                let chapter = book.read_chapter(index)?;
-                let partial = chapter.truncated || !chapter.warnings.is_empty();
-                let mut body = String::new();
-                let mut offsets = vec![];
-                let mut at = 0;
-                // A newline after the last block would add an empty line, and
-                // a short window's last page would show only that.
-                for block in chapter.blocks {
-                    if !offsets.is_empty() {
-                        body.push('\n');
-                        at += 1;
-                    }
-                    offsets.push(at);
-                    for span in block.spans {
-                        at += span.text.chars().count() as i32;
-                        body.push_str(&span.text);
-                    }
-                }
-                Ok((body, offsets, partial))
-            })
-            .await;
-            if v.generation.get() != seq || v.window.upgrade().is_none_or(|w| !w.is_visible()) {
-                return;
-            }
-            match result {
-                Ok(Ok((body, offsets, partial))) => {
-                    let target = match landing {
-                        Landing::Block(block) => {
-                            let block = (block as usize).min(offsets.len().saturating_sub(1));
-                            Some((block as u32, offsets.get(block).copied().unwrap_or(0)))
-                        }
-                        Landing::End => None,
-                    };
-                    v.text.buffer().set_text(&body);
-                    v.offsets.replace(offsets);
-                    v.text.grab_focus();
-                    v.restore(seq, index, target, partial);
-                }
-                Ok(Err(e)) => v.status.set_text(&format!("Couldn’t read chapter · {e:#}")),
-                Err(_) => v.status.set_text("Chapter loading interrupted"),
-            }
-        });
+/// End the application if `parent`, the window a reader was opened from,
+/// has lost its surface to something outside the app. Nothing may be asked
+/// of such a window: GTK complains when one is closed or destroyed. So it
+/// is only taken off the application's list, and the application quits. A
+/// window that is hidden or minimised still has its surface, and one being
+/// closed in the ordinary way has none, so neither is touched.
+fn orphaned(parent: &gtk::Window) {
+    if parent.surface().is_some_and(|s| s.is_destroyed())
+        && let Some(app) = parent.application()
+    {
+        app.remove_window(parent);
+        app.quit();
+    }
+}
+
+/// A save the library has been handed, and will answer.
+type Saving = std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>>>>;
+
+fn record(load: view::Load) -> place::Load {
+    place::Load {
+        number: load.number,
+        chapter: load.chapter,
+        length: load.length,
+    }
+}
+
+/// Ask a future once, with nothing to wake.
+fn poll_once<T>(
+    future: std::pin::Pin<&mut (impl std::future::Future<Output = T> + ?Sized)>,
+) -> std::task::Poll<T> {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    future.poll(&mut context)
+}
+
+/// Hand a place to the library. This is the one way a place is saved, for
+/// the timer and for leaving alike.
+fn submit(store: &store::Store, id: &str, position: ReadingPosition) -> Saving {
+    let store = store.clone();
+    let id = id.to_owned();
+    queue(async move { store.save_position(id, position).await })
+}
+
+/// Put a job in the library's queue now. The store queues a job when its
+/// future is first asked, not when it is made, so this asks once. The
+/// library's thread takes its queue in order, so jobs are done in the order
+/// this is called. What comes back only waits for the library's answer.
+fn queue(job: impl std::future::Future<Output = Result<()>> + 'static) -> Saving {
+    let mut saving: Saving = Box::pin(job);
+    if let std::task::Poll::Ready(answer) = poll_once(saving.as_mut()) {
+        return Box::pin(std::future::ready(answer));
+    }
+    saving
+}
+
+/// Wait until the library has written everything submitted so far, or two
+/// seconds have passed, and give the answer to `last` if there is one. The
+/// process may end as soon as a leave returns, so a leave waits here.
+///
+/// This can run inside a signal handler, where the main loop cannot be
+/// waited on. The library answers from its own thread, so asking again
+/// until it has answered is enough. With no save of its own to wait for, a
+/// leave queues a job that does nothing: when that is answered, every save
+/// queued before it has been written.
+fn await_library(store: &store::Store, last: Option<Saving>) -> Result<()> {
+    let mut last = last.unwrap_or_else(|| {
+        let store = store.clone();
+        Box::pin(async move { store.run(|_| Ok(())).await })
+    });
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if let std::task::Poll::Ready(result) = poll_once(last.as_mut()) {
+            return result;
+        }
+        if std::time::Instant::now() >= limit {
+            anyhow::bail!("The library did not answer in time");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{interim_fraction, next_page_top, previous_page_top};
+    use super::*;
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn the_fraction_read_counts_linear_chapters_and_ends_at_exactly_one() {
-        let linear = [true, false, true, true];
-        assert_eq!(interim_fraction(&linear, 0, 0.0), 0.0);
-        assert_eq!(interim_fraction(&linear, 0, 0.5), 0.5 / 3.0);
-        // A chapter outside the reading line is the start of the next.
-        assert_eq!(interim_fraction(&linear, 1, 0.7), 1.0 / 3.0);
-        assert_eq!(interim_fraction(&linear, 3, 0.5), 2.5 / 3.0);
-        assert_eq!(interim_fraction(&linear, 3, 1.0), 1.0);
-        assert_eq!(interim_fraction(&[false], 0, 1.0), 0.0);
+    fn job(store: &store::Store, log: &Arc<Mutex<Vec<u32>>>, n: u32) -> Saving {
+        let (store, log) = (store.clone(), log.clone());
+        Box::pin(async move {
+            store
+                .run(move |_| {
+                    log.lock().unwrap().push(n);
+                    Ok(())
+                })
+                .await
+        })
     }
 
-    /// Twenty-pixel lines from the top of the chapter.
-    fn lines(count: i32) -> Vec<(i32, i32)> {
-        (0..count).map(|n| (n * 20, 20)).collect()
+    /// A save made by the timer is in the library's queue before the timer
+    /// returns, so a leave that follows it at once is written after it,
+    /// though nothing ever waits for the timer's save.
+    #[test]
+    fn a_queued_save_is_written_before_a_later_one_without_being_waited_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(dir.path().to_owned(), || {});
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let timed = queue(job(&store, &log, 1));
+        let leaving = queue(job(&store, &log, 2));
+        await_library(&store, Some(leaving)).unwrap();
+        assert_eq!(*log.lock().unwrap(), [1, 2]);
+        drop(timed);
+        // With no save of its own, a leave still waits for what was queued.
+        let _unwaited = queue(job(&store, &log, 3));
+        await_library(&store, None).unwrap();
+        assert_eq!(*log.lock().unwrap(), [1, 2, 3]);
     }
 
+    /// The fault this replaced: a save that is made and only later asked
+    /// lands after one made later. The test above would see it.
     #[test]
-    fn the_next_page_starts_with_the_first_line_that_did_not_fit() {
-        // A 50-pixel page from 0 shows lines 0 and 1 whole and cuts line 2.
-        assert_eq!(next_page_top(lines(10), 0, 50), Some(40));
-        // A line that ends exactly at the bottom edge was read in full.
-        assert_eq!(next_page_top(lines(10), 0, 60), Some(60));
-    }
-
-    #[test]
-    fn the_last_page_has_no_next_page() {
-        assert_eq!(next_page_top(lines(3), 0, 60), None);
-    }
-
-    #[test]
-    fn a_line_taller_than_the_page_still_advances() {
-        assert_eq!(next_page_top([(0, 200)], 0, 50), Some(50));
-    }
-
-    #[test]
-    fn the_previous_page_starts_on_a_whole_line_and_reaches_the_old_top() {
-        // One 50-pixel page above 100 would start at 50, inside line 2.
-        let top = previous_page_top(&lines(10), -24, 100, 50);
-        assert_eq!(top, 60);
-        assert!(top + 50 >= 100);
-        assert_eq!(previous_page_top(&lines(10), -24, 100, 60), 40);
-    }
-
-    #[test]
-    fn a_line_cut_at_the_top_is_whole_on_the_previous_page() {
-        // The page starts at 65, inside the line from 60 to 80.
-        let top = previous_page_top(&lines(10), -24, 65, 50);
-        assert_eq!(top, 40);
-        assert!(top + 50 >= 80);
-    }
-
-    #[test]
-    fn paging_back_to_the_first_line_shows_the_margin_above_it() {
-        assert_eq!(previous_page_top(&lines(10), -24, 20, 50), -24);
-    }
-
-    #[test]
-    fn the_first_page_drops_its_margin_when_that_keeps_a_cut_line_whole() {
-        // The page starts at 45, inside the line from 40 to 60. From the
-        // margin at -24 a 50-pixel page would end at 26, short of that line.
-        let top = previous_page_top(&lines(10), -24, 45, 50);
-        assert_eq!(top, 20);
-        assert!(top + 50 >= 60);
-    }
-
-    #[test]
-    fn the_space_between_paragraphs_does_not_cost_the_first_page_its_margin() {
-        // Lines of 23 pixels, 31 apart. Sixteen fit from the margin in 516,
-        // and the next page starts with the seventeenth at 496.
-        let spaced: Vec<_> = (0..40).map(|n| (n * 31, 23)).collect();
-        assert_eq!(previous_page_top(&spaced, -24, 496, 516), -24);
-    }
-
-    #[test]
-    fn a_cut_last_line_is_whole_on_the_previous_page() {
-        let top = previous_page_top(&lines(3), -24, 45, 35);
-        assert!(top < 45 && top + 35 >= 60, "{top}");
-    }
-
-    #[test]
-    fn a_line_taller_than_the_page_still_goes_back() {
-        assert_eq!(previous_page_top(&[(0, 200)], -24, 100, 50), 50);
+    fn a_save_that_is_not_queued_at_once_can_land_late() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(dir.path().to_owned(), || {});
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut late = job(&store, &log, 1);
+        let leaving = queue(job(&store, &log, 2));
+        await_library(&store, Some(leaving)).unwrap();
+        assert_eq!(*log.lock().unwrap(), [2]);
+        let _ = poll_once(late.as_mut());
+        await_library(&store, None).unwrap();
+        assert_eq!(*log.lock().unwrap(), [2, 1]);
     }
 }
