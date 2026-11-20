@@ -32,6 +32,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 /// What the reader asked to see. An empty sort is the library's default.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Query {
+    pub shelf: bool,
     pub text: String,
     pub sort: Vec<SortTerm>,
 }
@@ -166,6 +167,7 @@ impl BookObject {
 /// handed out, and the selection.
 #[derive(Default)]
 struct State {
+    strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
     count: u32,
     pages: HashMap<u32, Vec<Rc<BrowseRow>>>,
     /// Loaded pages, oldest first.
@@ -246,6 +248,7 @@ impl State {
     }
     /// Empties the view, and returns how many items there were.
     fn clear(&mut self) -> u32 {
+        self.strip = None;
         self.live.clear();
         self.pages.clear();
         self.recent.clear();
@@ -538,7 +541,11 @@ impl BookListModel {
                         place.leave();
                     }
                 }
-                Effect::Swap { view, background } => self.swap(view, background),
+                Effect::Swap {
+                    view,
+                    strip,
+                    background,
+                } => self.swap(view, strip, background),
                 Effect::Fill { page, rows } => {
                     let (arrived, selected) = {
                         let mut state = self.imp().state.borrow_mut();
@@ -556,7 +563,8 @@ impl BookListModel {
                     // Books selected in an earlier view show as selected
                     // now that their rows say which they are.
                     if selected {
-                        self.selection_changed(page * PAGE, PAGE);
+                        let first = page * PAGE;
+                        self.selection_changed(first, PAGE.min(self.n_items() - first));
                     }
                 }
                 Effect::Place(placed) => {
@@ -597,7 +605,12 @@ impl BookListModel {
     /// Shows the books of a view in place of whatever is shown. The
     /// selection is by ID and needs nothing found: each row says whether
     /// its book is selected as it arrives.
-    fn swap(&self, view: OpenView, background: bool) {
+    fn swap(
+        &self,
+        view: OpenView,
+        strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
+        background: bool,
+    ) {
         self.before_replace();
         let before = {
             let mut state = self.imp().state.borrow_mut();
@@ -615,6 +628,7 @@ impl BookListModel {
         let selected: Vec<String> = {
             let mut state = self.imp().state.borrow_mut();
             state.count = view.count;
+            state.strip = strip;
             state.store_page(0, view.first);
             state.selected.iter().cloned().collect()
         };

@@ -48,6 +48,7 @@ pub enum Effect {
     /// Show these books in place of whatever is shown.
     Swap {
         view: OpenView,
+        strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
         background: bool,
     },
     /// A page of the view on screen arrived.
@@ -72,7 +73,11 @@ pub struct Opening {
     query: Query,
     reason: Placement,
     /// The view it made, waiting for the reader's place to be found in it.
-    arrived: Option<(OpenView, Anchors)>,
+    arrived: Option<(
+        OpenView,
+        Option<std::sync::Arc<ebook_library::ShelfStrip>>,
+        Anchors,
+    )>,
 }
 
 /// A view on screen.
@@ -335,7 +340,11 @@ impl Core {
 
     fn reply(&mut self, reply: Reply, anchors: &dyn Fn() -> Anchors, effects: &mut Vec<Effect>) {
         match reply {
-            Reply::Opened { serial, view } => {
+            Reply::Opened {
+                serial,
+                view,
+                strip,
+            } => {
                 if !self.is_opening(serial) {
                     return;
                 }
@@ -345,7 +354,7 @@ impl Core {
                 let token = view.token;
                 let ids = Self::place_ids(&now);
                 if let Some(opening) = self.opening() {
-                    opening.arrived = Some((view, now));
+                    opening.arrived = Some((view, strip, now));
                 }
                 self.locate(token, ids, Locating::Place { serial }, effects);
             }
@@ -487,7 +496,7 @@ impl Core {
                         return;
                     }
                 };
-                let Some((view, asked)) = opening.arrived else {
+                let Some((view, strip, asked)) = opening.arrived else {
                     self.fail("The view arrived without its books.".into(), effects);
                     return;
                 };
@@ -506,6 +515,7 @@ impl Core {
                 };
                 effects.push(Effect::Gone);
                 effects.push(Effect::Swap {
+                    strip,
                     view,
                     background: opening.reason == Placement::Refresh,
                 });
@@ -675,7 +685,15 @@ mod tests {
                     }
                     // Every waiting place is told.
                     Effect::Gone => self.waiting.clear(),
-                    Effect::Swap { .. } => {
+                    Effect::Swap {
+                        ref strip,
+                        ref view,
+                        ..
+                    } => {
+                        assert_eq!(
+                            strip.as_ref().map(|s| s.thickness.len()),
+                            self.core.query.shelf.then_some(view.count as usize)
+                        );
                         assert!(self.waiting.is_empty(), "a swap left places untold");
                         self.filled = vec![0];
                         self.event(Event::Swapped);
@@ -697,7 +715,14 @@ mod tests {
         /// and gives it to the core.
         fn deliver(&mut self, reply: Reply) {
             let answered = match &reply {
-                Reply::Opened { serial, view } => {
+                Reply::Opened {
+                    serial,
+                    view,
+                    strip,
+                } => {
+                    if let Some(strip) = strip {
+                        assert_eq!(strip.thickness.len(), view.count as usize);
+                    }
                     self.readers = Some(view.token);
                     open_key(*serial)
                 }
@@ -737,10 +762,12 @@ mod tests {
                     let query = match self.random(5) {
                         0 => Query::default(),
                         1 => Query {
+                            shelf: false,
                             text: "atlas".into(),
                             sort: vec![],
                         },
                         2 => Query {
+                            shelf: true,
                             text: "book 4".into(),
                             sort: vec![SortTerm {
                                 field: Field::Author,
@@ -748,6 +775,7 @@ mod tests {
                             }],
                         },
                         3 => Query {
+                            shelf: false,
                             text: "matches nothing".into(),
                             sort: vec![],
                         },
@@ -757,6 +785,7 @@ mod tests {
                                 descending: false,
                             };
                             Query {
+                                shelf: false,
                                 text: String::new(),
                                 sort: vec![term, term],
                             }
@@ -901,7 +930,14 @@ mod tests {
         let token = view.token;
         let (mut core, _) = Core::new(Query::default());
         let here = || Anchors::default();
-        core.step(Event::Reply(Reply::Opened { serial: 1, view }), &here);
+        core.step(
+            Event::Reply(Reply::Opened {
+                serial: 1,
+                view,
+                strip: None,
+            }),
+            &here,
+        );
         let placed = core.step(
             Event::Reply(Reply::Located {
                 tag: 1,
@@ -965,7 +1001,14 @@ mod tests {
             .unwrap();
         let (mut core, _) = Core::new(Query::default());
         let here = || Anchors::default();
-        core.step(Event::Reply(Reply::Opened { serial: 1, view }), &here);
+        core.step(
+            Event::Reply(Reply::Opened {
+                serial: 1,
+                view,
+                strip: None,
+            }),
+            &here,
+        );
         let effects = core.step(
             Event::Reply(Reply::NotLocated {
                 tag: 1,
@@ -1038,7 +1081,14 @@ mod tests {
                 .open(&Default::default(), &Cancel::default())
                 .unwrap();
             let serial = asked(&core.step(event, here)).unwrap().0;
-            let located = core.step(Event::Reply(Reply::Opened { serial, view }), here);
+            let located = core.step(
+                Event::Reply(Reply::Opened {
+                    serial,
+                    view,
+                    strip: None,
+                }),
+                here,
+            );
             match located[..] {
                 [Effect::Send(Request::Locate { tag, .. })] => tag,
                 _ => panic!("a view that opened asks where the reader is"),

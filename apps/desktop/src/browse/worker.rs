@@ -48,6 +48,7 @@ pub enum Reply {
     Opened {
         serial: u64,
         view: OpenView,
+        strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
     },
     /// The view the model named as the one it is showing is the reader's
     /// own, and the catalogue has not changed since it opened. Never said
@@ -150,6 +151,7 @@ pub fn serve(
         reader: None,
         held: None,
     };
+    let mut cached_strip = None;
     for request in requests {
         let reply = match request {
             Request::Open {
@@ -183,8 +185,38 @@ pub fn serve(
                 });
                 match opened {
                     Ok(Some(view)) => {
+                        let strip = if query.shelf {
+                            if reader.held.as_ref().map(|held| held.1) != Some(view.token)
+                                || cached_strip.is_none()
+                            {
+                                cached_strip = Some(
+                                    reader
+                                        .run(|r, _| r.shelf(view.token))
+                                        .map(std::sync::Arc::new),
+                                );
+                            }
+                            cached_strip
+                                .as_ref()
+                                .map(|result| result.as_ref().map(std::sync::Arc::clone))
+                        } else {
+                            cached_strip = None;
+                            None
+                        };
                         reader.held = Some((query, view.token, view.count));
-                        Reply::Opened { serial, view }
+                        match strip.transpose() {
+                            Ok(strip) => Reply::Opened {
+                                serial,
+                                view,
+                                strip,
+                            },
+                            Err(e) => {
+                                reader.held = None;
+                                Reply::Failed {
+                                    serial,
+                                    message: format!("{e:#}"),
+                                }
+                            }
+                        }
                     }
                     Ok(None) => Reply::Unchanged { serial },
                     Err(e) if e.is::<Cancelled>() => Reply::Cancelled { serial },
@@ -284,6 +316,7 @@ mod tests {
                 descending: false,
             };
             let query = Query {
+                shelf: false,
                 text: String::new(),
                 sort: vec![term, term],
             };
@@ -363,6 +396,7 @@ mod tests {
         let mut thread = Thread::start(&app);
         let a = opened(thread.open());
         let other = Query {
+            shelf: false,
             text: "first".into(),
             sort: vec![],
         };
@@ -415,6 +449,7 @@ mod tests {
         // the reader's view, which is the same one while nothing changed.
         assert_eq!(opened(refresh(&mut thread, None)).token, a.token);
         let other = Query {
+            shelf: false,
             text: "first".into(),
             sort: vec![],
         };

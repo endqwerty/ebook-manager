@@ -1193,6 +1193,7 @@ pub fn open(app: &adw::Application) {
         glib::Propagation::Stop
     });
     let query = Query {
+        shelf: false,
         text: String::new(),
         sort: library.sort().terms(),
     };
