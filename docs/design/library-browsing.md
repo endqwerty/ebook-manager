@@ -705,7 +705,8 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 17. When the reader switches between Grid, List, Table and Shelf, sorts, types
     a search, and opens, edits and exports a book using only the keyboard,
     then each works, and the view and sort are as left after a restart.
-    `apps/desktop/tests/smoke.py`.
+    CI runs `apps/desktop/tests/smoke.py` and its `--shelf` invocation.
+    The latter reads and exports by keyboard after restarting in Shelf.
 18. When the shelf is resized, then the first fully visible book stays at the
     top as far as the scroll range and keeping keyboard focus visible allow.
     Selecting a book changes only that spine.
@@ -807,7 +808,12 @@ same time.
    spine on screen. During import it resolves the top book by ID and
    restores its offset, including when added books sort above it. While
    the focused spine is recycled, the viewport shows focus and the model
-   keeps the book. Menu brings it back before opening the book menu.
+   keeps the book by ID, including when an import window has keyboard focus.
+   The read thread returns its new rank and the viewport pages with the
+   placement reply. The model publishes those pages with the new strip.
+   If the reader moves during the read, the model asks for the new place
+   before replacing the old books. Menu brings the focused book back before
+   opening its menu. Opening the reader dismisses the shelf preview.
 
    Earlier runs timed paint alone under Xvfb and Cairo, from the end of GDK
    layout through after-paint. The two original scale runs reached
@@ -831,10 +837,12 @@ same time.
 
    The driver now measures the whole GTK frame, from before update through
    after paint, for each frame in which the wheel moved the adjustment.
-   Under Xvfb with Cairo the host maximum was 19.55 ms, with 4 of 23 frames
-   over 16.7 ms. On Ubuntu 26.04 with two CPUs the maximum was 19.36 ms,
-   with 4 of 24 over budget. Compositor presentation time is unavailable in
-   this session.
+   Under Xvfb with Cairo, three host runs had maxima of 19.90–20.39 ms.
+   Ten of their 71 moving frames exceeded 16.7 ms. Four Ubuntu 26.04 runs
+   on two CPUs had maxima of 18.61–19.63 ms, with 20 of 95 frames over
+   budget. Including the independent verifier's 28.6 ms maximum, the
+   observed Ubuntu range is 18.6–28.6 ms. The software frame budget
+   remains unmet. Xvfb does not measure hardware presentation time.
 
    Over five release runs, packing one
    million 24-unit spines into a width of 999 took a median of 0.846 ms on
