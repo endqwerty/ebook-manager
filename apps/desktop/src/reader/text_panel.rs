@@ -158,6 +158,9 @@ pub fn build(
     faces: Vec<String>,
     changed: Rc<dyn Fn()>,
 ) -> gtk::Popover {
+    // A saved face the system no longer has is the default, here as on
+    // the page, so the next save writes no face.
+    settings.borrow_mut().keep_offered_face(&faces);
     let popover = gtk::Popover::new();
     let stack = gtk::Stack::new();
     stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);

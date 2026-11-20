@@ -211,6 +211,17 @@ impl Settings {
         }
     }
 
+    /// Forget a chosen face that is not among `offered`, the faces the
+    /// system has that the panel offers. A face removed from the system
+    /// since it was chosen is then the default everywhere: on the page, in
+    /// the panel, and in what is saved next. The file keeps its name until
+    /// then.
+    pub fn keep_offered_face(&mut self, offered: &[String]) {
+        if self.face.as_ref().is_some_and(|f| !offered.contains(f)) {
+            self.face = None;
+        }
+    }
+
     /// The custom properties for the page. `default_face` is the face used
     /// when the reader has chosen none, as a CSS font list.
     pub fn properties(
@@ -612,5 +623,31 @@ mod tests {
         at_limit.push_str(&"#".repeat(SETTINGS_LIMIT as usize - at_limit.len()));
         std::fs::write(&file, &at_limit).unwrap();
         assert_eq!(Settings::load(&file).size, 5);
+    }
+
+    #[test]
+    fn a_face_the_system_lacks_is_the_default() {
+        let offered = vec!["Noto Serif".to_owned()];
+        let mut s = Settings {
+            face: Some("Gone Serif".into()),
+            ..Settings::default()
+        };
+        s.keep_offered_face(&offered);
+        assert_eq!(s.face, None);
+        assert_eq!(
+            value(&s.properties(false, false, "serif"), "--font"),
+            "serif"
+        );
+        assert!(!s.to_text().contains("Gone Serif"));
+        let mut s = Settings {
+            face: Some("Noto Serif".into()),
+            ..Settings::default()
+        };
+        s.keep_offered_face(&offered);
+        assert_eq!(s.face.as_deref(), Some("Noto Serif"));
+        assert_eq!(
+            value(&s.properties(false, false, "serif"), "--font"),
+            "'Noto Serif', serif"
+        );
     }
 }

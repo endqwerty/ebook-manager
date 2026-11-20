@@ -299,7 +299,12 @@ impl Reading {
         bar.append(&previous);
         bar.append(&picker);
         bar.append(&next);
-        let settings = Rc::new(RefCell::new(settings::Settings::load(&settings_file())));
+        // The faces the panel offers. A saved face that is not among them,
+        // because it has left the system since, is the default everywhere.
+        let faces = text_panel::installed_faces(w);
+        let mut saved = settings::Settings::load(&settings_file());
+        saved.keep_offered_face(&faces);
+        let settings = Rc::new(RefCell::new(saved));
         let text = gtk::MenuButton::builder()
             .label("Aa")
             .tooltip_text("Text settings")
@@ -391,7 +396,7 @@ impl Reading {
         let weak = Rc::downgrade(&reading);
         text.set_popover(Some(&text_panel::build(
             settings,
-            text_panel::installed_faces(w),
+            faces,
             Rc::new(move || {
                 if let Some(r) = weak.upgrade() {
                     r.apply();

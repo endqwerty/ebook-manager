@@ -2349,6 +2349,32 @@ fn reset_from_every_change_restores_the_defaults() -> Outcome {
     Ok(())
 }
 
+/// A saved font the system no longer has is the default everywhere: the
+/// panel shows Default, and the next change saves no font.
+fn a_saved_font_the_system_lacks_is_the_default() -> Outcome {
+    let saved = settings::Settings {
+        face: Some("Gone Serif".into()),
+        ..settings::Settings::default()
+    };
+    // The panel is offered no faces, as on a system without that one.
+    let panel = Panel::new(saved);
+    check!(
+        panel.control::<gtk::DropDown>("Font").selected() == 0,
+        "the panel does not show Default"
+    );
+    panel.button("Larger text").emit_clicked();
+    pause(Duration::from_millis(50));
+    let written = panel.saved.borrow().clone();
+    check!(
+        written
+            .as_ref()
+            .is_some_and(|s| s.face.is_none() && s.size == 3),
+        "the next change saved {written:?}"
+    );
+    panel.consistent()?;
+    Ok(())
+}
+
 /// The panel is freed with the window that holds it: nothing in it holds
 /// itself. The popover, the stack of levels, a stepper's button and the
 /// switch whose handler shows the settings again are each watched.
@@ -2942,6 +2968,10 @@ const TESTS: &[Test] = &[
     (
         "reset_from_every_change_restores_the_defaults",
         reset_from_every_change_restores_the_defaults,
+    ),
+    (
+        "a_saved_font_the_system_lacks_is_the_default",
+        a_saved_font_the_system_lacks_is_the_default,
     ),
     ("less_motion_turns_at_once", less_motion_turns_at_once),
     (
