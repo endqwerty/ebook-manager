@@ -308,6 +308,32 @@ def capture(title, out):
     subprocess.run(["import", "-window", wid, str(out)], check=True)
 
 
+def steady(title, out):
+    """Captures a window once what it shows has stopped changing, as after a
+    page turn's slide or fade, however long that takes."""
+    spare = out.with_name(out.stem + "-check" + out.suffix)
+    capture(title, out)
+    deadline = time.monotonic() + 15
+    while True:
+        capture(title, spare)
+        # ImageMagick 7 names its command `magick compare`, and 6 `compare`.
+        command = ["magick", "compare"] if shutil.which("magick") else ["compare"]
+        differing = subprocess.run(
+            [*command, "-metric", "AE", str(out), str(spare), "null:"],
+            capture_output=True,
+            text=True,
+        ).stderr.split()
+        spare.replace(out)
+        if differing and differing[0] == "0":
+            return
+        assert time.monotonic() < deadline, f"{title} never stopped changing"
+
+
+def status():
+    """The line under the reader's page."""
+    return find("Chapter ", "label", contains=True).get_name()
+
+
 def words(image):
     """The text on a screenshot. The page is drawn by a web view, so the
     driver reads it the way a person does."""
@@ -353,16 +379,142 @@ def web_processes(app):
     return found
 
 
+def pixel(image, x, y):
+    """The colour of one point of a screenshot, as rrggbb."""
+    return subprocess.check_output(
+        [shutil.which("magick") or "convert", str(image), "-format", f"%[hex:p{{{x},{y}}}]", "info:"],
+        text=True,
+    ).strip()[:6].lower()
+
+
+def settings(evidence):
+    """Change the text size and the page colour, and find both kept after the reader closes."""
+    title = "The Lantern Atlas · Revised"
+
+    def pages():
+        label = find("Chapter ", "label", contains=True)
+        return int(re.search(r"Page \d+ of (\d+)", label.get_name()).group(1))
+
+    def read():
+        select_book("lantern")
+        key("Return")
+        find("Page ", contains=True)
+
+    def swatch(name):
+        find("Text settings", "toggle button").do_action(0)
+        find(name, "toggle button").do_action(0)
+        time.sleep(0.6)
+        key("Escape")
+        time.sleep(0.3)
+
+    read()
+    time.sleep(0.5)
+    before = pages()
+    capture(title, evidence / "settings-before.png")
+    assert pixel(evidence / "settings-before.png", 20, 300) == "f4ecd8", pixel(
+        evidence / "settings-before.png", 20, 300
+    )
+    find("Text settings", "toggle button").do_action(0)
+    find("Larger text", "button")
+    time.sleep(0.4)
+    subprocess.run(
+        ["import", "-window", "root", str(evidence / "text-settings.png")], check=True
+    )
+    click("More")
+    reset = find("Reset", "button")
+    time.sleep(0.5)
+    subprocess.run(
+        ["import", "-window", "root", str(evidence / "text-settings-more.png")], check=True
+    )
+    # The second level scrolls. Every control in it is reached from the
+    # keyboard, and the focused one is scrolled into view.
+    for _ in range(40):
+        if reset.get_state_set().contains(Atspi.StateType.FOCUSED):
+            break
+        key("Tab")
+    assert reset.get_state_set().contains(Atspi.StateType.FOCUSED), "Tab never reached Reset"
+    time.sleep(0.5)
+    subprocess.run(
+        ["import", "-window", "root", str(evidence / "text-settings-reset.png")], check=True
+    )
+    click("Back")
+    for _ in range(3):
+        click("Larger text")
+        time.sleep(0.3)
+    key("Escape")
+    time.sleep(0.6)
+    larger = pages()
+    assert larger > before, (before, larger)
+    swatch("Grey")
+    capture(title, evidence / "settings-grey.png")
+    assert pixel(evidence / "settings-grey.png", 20, 300) == "2b2b2e", pixel(
+        evidence / "settings-grey.png", 20, 300
+    )
+    click("Back to library")
+    time.sleep(0.5)
+    read()
+    time.sleep(0.8)
+    assert pages() == larger, (pages(), larger)
+    capture(title, evidence / "settings-kept.png")
+    assert pixel(evidence / "settings-kept.png", 20, 300) == "2b2b2e"
+    find("Text settings", "toggle button").do_action(0)
+    click("More")
+    click("Reset")
+    time.sleep(0.6)
+    key("Escape")
+    time.sleep(0.6)
+    assert pages() == before, (pages(), before)
+    capture(title, evidence / "settings-reset.png")
+    assert pixel(evidence / "settings-reset.png", 20, 300) == "f4ecd8"
+    # Grey again, for `settings_after_restart` to find once the app has
+    # ended and started again.
+    swatch("Grey")
+    click("Back to library")
+    time.sleep(0.3)
+    print(
+        f"PASS text settings: larger text makes {before} pages {larger}, Grey is kept after closing, Reset restores both",
+        flush=True,
+    )
+
+
+def settings_after_restart(evidence):
+    """The page colour chosen before the app ended is in force after it starts again."""
+    title = "The Lantern Atlas · Revised"
+    select_book("lantern")
+    key("Return")
+    find("Page ", contains=True)
+    time.sleep(0.8)
+    capture(title, evidence / "settings-restarted.png")
+    assert pixel(evidence / "settings-restarted.png", 20, 300) == "2b2b2e", pixel(
+        evidence / "settings-restarted.png", 20, 300
+    )
+    find("Text settings", "toggle button").do_action(0)
+    click("More")
+    click("Reset")
+    time.sleep(0.6)
+    key("Escape")
+    time.sleep(0.6)
+    click("Back to library")
+    time.sleep(0.3)
+    print("PASS a page colour chosen before the app ended is in force after it starts again", flush=True)
+
+
 def keys(evidence):
     """Turn pages and toggle full screen from the keyboard, starting and ending in chapter one."""
     title = "The Lantern Atlas · Revised"
 
     def press(key):
+        # A turn shows on the line under the page as soon as the reader has
+        # it. The page may still be sliding then; `page` waits for that.
+        before = status()
         send_key(key)
-        time.sleep(0.4)
+        deadline = time.monotonic() + 15
+        while status() == before:
+            assert time.monotonic() < deadline, f"{key} did not turn from {before!r}"
+            time.sleep(0.05)
 
     def page(name, blank=False):
-        capture(title, evidence / name)
+        steady(title, evidence / name)
         found = markers(evidence / name)
         assert found or blank, name
         return found
@@ -414,21 +566,33 @@ def keys(evidence):
         flush=True,
     )
     windowed = size(title)
-    press("F11")
+    send_key("F11")
     find("Leave full screen", "button")
     assert size(title) == SCREEN, size(title)
     capture(title, evidence / "full-screen.png")
-    press("Right")
-    find("Chapter 2 of 2", contains=True)
+
+    def chapter(number):
+        return any(
+            f"Chapter {number} of 2" in (n.get_name() or "")
+            for n in walk(Atspi.get_desktop(0))
+        )
+
+    # The line keeps its length on a wide screen, so the closing paragraph
+    # runs to more pages here than in the window.
+    for _ in range(8):
+        if chapter(2):
+            break
+        press("Right")
+    assert chapter(2), "Right never reached chapter two in full screen"
     press("Left")
     find("Chapter 1 of 2", contains=True)
-    press("Escape")
+    send_key("Escape")
     find("Full screen", "button")
     assert size(title) == windowed, (size(title), windowed)
     click("Full screen")
     find("Leave full screen", "button")
     assert size(title) == SCREEN, size(title)
-    press("F11")
+    send_key("F11")
     find("Full screen", "button")
     assert size(title) == windowed, (size(title), windowed)
     print("PASS full screen from F11 and its button, left with Escape and F11", flush=True)
@@ -751,8 +915,7 @@ def run(binary, evidence, root):
             xd("key", "Right")
             time.sleep(0.4)
         find("Page 4 of", contains=True)
-        time.sleep(0.6)
-        capture("The Lantern Atlas · Revised", evidence / "scrolled.png")
+        steady("The Lantern Atlas · Revised", evidence / "scrolled.png")
         before = markers(evidence / "scrolled.png")
         assert before and before[0] > 0, before
         # End the first process with the reader still open after turning settled.
@@ -864,6 +1027,7 @@ def run(binary, evidence, root):
             "PASS folder export, idempotent repeat and unchanged source bytes",
             flush=True,
         )
+        settings(evidence)
         # The same request that did nothing under the reader closes the
         # library when no reader is open, so that step did ask.
         library = subprocess.check_output(
@@ -874,6 +1038,7 @@ def run(binary, evidence, root):
         print("PASS the library closes when asked with no reader open", flush=True)
         proc = launch_app(binary, env)
         find("Mira Vale")
+        settings_after_restart(evidence)
         covers(binary, evidence, root, proc)
         proc = None
     finally:

@@ -4,6 +4,8 @@
 
 mod place;
 mod progress;
+mod settings;
+mod text_panel;
 mod view;
 
 use super::*;
@@ -16,10 +18,6 @@ use std::{
     sync::Arc,
 };
 use view::{Config, Document, Event, Landing, Picture, Source, Zone};
-
-/// A page colour from docs/design/interface-reader.md: page, text, secondary.
-const PAPER: [&str; 3] = ["#f4ecd8", "#3b2f21", "#736858"];
-const GREY: [&str; 3] = ["#2b2b2e", "#d6d6d8", "#929294"];
 
 /// The reader's faces in the order the design prefers them. Literata is the
 /// design's default; bundling it is a later task, so it is used when the
@@ -212,13 +210,29 @@ fn position_error(w: &gtk::Window, e: &anyhow::Error) {
     }
 }
 
-/// The page colour for the window's appearance: Paper in light, Grey in dark.
-fn page_colour() -> [&'static str; 3] {
-    if libadwaita::StyleManager::default().is_dark() {
-        GREY
-    } else {
-        PAPER
-    }
+/// GTK's setting for less motion, added in GTK 4.22, the app's minimum. It
+/// is looked up by name, as it was when the app also ran on older GTK; on
+/// 4.22 and later the lookup always finds it, and it costs nothing.
+const REDUCED_MOTION: &str = "gtk-interface-reduced-motion";
+
+/// Whether the system asks for less motion: animations are off, or the
+/// reduced motion setting says so.
+fn less_motion() -> bool {
+    gtk::Settings::default().is_some_and(|settings| {
+        !settings.is_gtk_enable_animations()
+            || settings.find_property(REDUCED_MOTION).is_some_and(|_| {
+                let value = settings.property_value(REDUCED_MOTION);
+                glib::EnumValue::from_value(&value).is_some_and(|(_, v)| v.nick() == "reduce")
+            })
+    })
+}
+
+/// Where the text settings are kept. They are the reader's own and never
+/// leave the machine.
+fn settings_file() -> std::path::PathBuf {
+    glib::user_config_dir()
+        .join("ebook-manager")
+        .join("reader.conf")
 }
 
 use place::{Effect, Input, Keeper, Place};
@@ -246,6 +260,9 @@ struct Reading {
     submitted: RefCell<Option<Saving>>,
     /// The window's own colours, replaced when the appearance changes.
     colours: gtk::CssProvider,
+    settings: Rc<RefCell<settings::Settings>>,
+    /// The face used until the reader chooses one, as a CSS font list.
+    default_face: String,
 }
 
 impl Reading {
@@ -282,6 +299,18 @@ impl Reading {
         bar.append(&previous);
         bar.append(&picker);
         bar.append(&next);
+        // The faces the panel offers. A saved face that is not among them,
+        // because it has left the system since, is the default everywhere.
+        let faces = text_panel::installed_faces(w);
+        let mut saved = settings::Settings::load(&settings_file());
+        saved.keep_offered_face(&faces);
+        let settings = Rc::new(RefCell::new(saved));
+        let text = gtk::MenuButton::builder()
+            .label("Aa")
+            .tooltip_text("Text settings")
+            .build();
+        text.update_property(&[gtk::accessible::Property::Label("Text settings")]);
+        bar.append(&text);
         let page = view.widget();
         page.set_vexpand(true);
         page.update_property(&[gtk::accessible::Property::Label("Book text")]);
@@ -334,15 +363,49 @@ impl Reading {
             pending_save: Cell::new(None),
             submitted: RefCell::new(None),
             colours,
+            settings: settings.clone(),
+            default_face: reading_font(w),
         });
-        reading.colour();
-        reading.view.set_style(&[("--font", &reading_font(w))]);
+        reading.apply();
+        let style = libadwaita::StyleManager::default();
         let weak = Rc::downgrade(&reading);
-        libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        style.connect_dark_notify(move |_| {
             if let Some(r) = weak.upgrade() {
-                r.colour();
+                r.apply();
             }
         });
+        let weak = Rc::downgrade(&reading);
+        style.connect_high_contrast_notify(move |_| {
+            if let Some(r) = weak.upgrade() {
+                r.apply();
+            }
+        });
+        if let Some(gtk_settings) = gtk::Settings::default() {
+            for name in ["gtk-enable-animations", REDUCED_MOTION] {
+                if gtk_settings.find_property(name).is_none() {
+                    continue;
+                }
+                let weak = Rc::downgrade(&reading);
+                gtk_settings.connect_notify_local(Some(name), move |_, _| {
+                    if let Some(r) = weak.upgrade() {
+                        r.apply();
+                    }
+                });
+            }
+        }
+        let weak = Rc::downgrade(&reading);
+        text.set_popover(Some(&text_panel::build(
+            settings,
+            faces,
+            Rc::new(move || {
+                if let Some(r) = weak.upgrade() {
+                    r.apply();
+                    // A setting that cannot be written is still in force
+                    // for this window.
+                    let _ = r.settings.borrow().save(&settings_file());
+                }
+            }),
+        )));
         let weak = Rc::downgrade(&reading);
         picker.connect_selected_notify(move |p| {
             if let Some(r) = weak.upgrade() {
@@ -451,14 +514,30 @@ impl Reading {
         reading
     }
 
-    /// Give the page and the window the page colour for the appearance.
-    fn colour(&self) {
-        let [page, ink, secondary] = page_colour();
+    /// Put the text settings in force: on the page, and on the window
+    /// around it, which takes the page's colour.
+    fn apply(&self) {
+        let style = libadwaita::StyleManager::default();
+        let (dark, stark) = (style.is_dark(), style.is_high_contrast());
+        let settings = self.settings.borrow();
+        let page = settings.page(dark, stark);
         self.colours.load_from_string(&format!(
-            ".reader-window {{ background-color: {page}; color: {ink}; }}"
+            ".reader-window {{ background-color: {}; color: {}; }}",
+            page.page.hex(),
+            page.ink.hex()
         ));
-        self.view
-            .set_style(&[("--page", page), ("--ink", ink), ("--secondary", secondary)]);
+        let mut properties = settings.properties(dark, stark, &self.default_face);
+        // WebKitGTK does not tell the page that the system asks for less
+        // motion, so the reader does.
+        properties.push((
+            "--motion",
+            if less_motion() { "none" } else { "full" }.to_owned(),
+        ));
+        let borrowed: Vec<(&str, &str)> = properties
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        self.view.set_style(&borrowed);
     }
 
     /// Select a chapter in the picker and show it at `landing`.
@@ -478,12 +557,10 @@ impl Reading {
         self.previous.set_sensitive(chapter > 0);
         self.next
             .set_sensitive((chapter as usize) + 1 < self.book.chapters().len());
+        // The view gives a chapter the text settings it holds, so it opens
+        // in the page colour with no flash of another.
         let number = self.view.load(chapter, landing);
         let _ = self.step(Input::Asked { number });
-        // A chapter opens in the page colour, with no flash of another.
-        let [page, ink, secondary] = page_colour();
-        self.view
-            .set_style(&[("--page", page), ("--ink", ink), ("--secondary", secondary)]);
     }
 
     fn event(self: &Rc<Self>, event: Event) {
@@ -687,7 +764,8 @@ impl Reading {
         };
         // The answer must not keep the reader alive after its window closes.
         let weak = Rc::downgrade(self);
-        self.view.turn(by, false, move |moved| {
+        // The page animates the turn as the text settings say.
+        self.view.turn(by, true, move |moved| {
             let Some(reading) = weak.upgrade() else {
                 return;
             };

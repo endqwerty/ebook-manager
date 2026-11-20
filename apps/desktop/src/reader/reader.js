@@ -58,14 +58,66 @@
 	};
 
 	const rtl = () => getComputedStyle(root).direction === "rtl";
+	const setting = (name) => getComputedStyle(root).getPropertyValue(name).trim();
 	const width = () => root.clientWidth || innerWidth;
 	const pages = () => Math.max(1, Math.round(root.scrollWidth / width()));
 	const page = () => Math.round(Math.abs(root.scrollLeft) / width());
-	const show = (n, smooth) => {
-		const target = Math.max(0, Math.min(n, pages() - 1)) * width() * (rtl() ? -1 : 1);
-		root.classList.toggle("slide", !!smooth);
-		root.scrollLeft = target;
-		if (!smooth) root.classList.remove("slide");
+	const at = () => root.scrollLeft;
+	// Where a slide or a fade that has not finished is going, or null. A
+	// slide keeps it until the text reaches it, and an instant move
+	// replaces it. No timer clears it, so a slow slide still counts as
+	// going where it is going.
+	let aim = null;
+	// The fade's second half, until it runs.
+	let fading = 0;
+	// End a fade that has not reached its second half where the text is,
+	// and bring the page back in.
+	const stopFade = () => {
+		clearTimeout(fading);
+		fading = 0;
+		root.classList.remove("fading");
+	};
+	// Scroll to `x` at once, or as a slide. Going anywhere at once ends a
+	// slide or a fade that has not finished.
+	const goTo = (x, smooth) => {
+		stopFade();
+		// A slide to where the text already is has nothing to wait for.
+		const slide = smooth && Math.abs(at() - x) >= 1;
+		root.classList.toggle("slide", slide);
+		root.scrollLeft = x;
+		if (!slide) root.classList.remove("slide");
+		aim = slide ? x : null;
+	};
+	// Fade the page out, go to `x`, and fade it back in.
+	const fadeTo = (x) => {
+		stopFade();
+		root.classList.add("fade", "fading");
+		aim = x;
+		fading = setTimeout(() => goTo(x, false), 120);
+	};
+	// The layout is changing: an unfinished slide or fade and where it was
+	// going belong to the old layout, so they end here. Only `restore`, and
+	// the two places that set `reflowing` and so have a `restore` coming,
+	// call this, and `restore` shows the held place, which is where the
+	// turn led, and tells it.
+	const forget = () => {
+		stopFade();
+		root.classList.remove("slide");
+		aim = null;
+	};
+	// Show page `n` at once.
+	const show = (n) => {
+		const to = Math.max(0, Math.min(n, pages() - 1));
+		goTo(to * width() * (rtl() ? -1 : 1), false);
+	};
+
+	// Apply the setting that changes the document's shape: two columns
+	// when asked for and the window fits two of 60 characters.
+	const layout = () => {
+		const em = parseFloat(getComputedStyle(root).fontSize) || 16;
+		const edge = 48 * (parseFloat(setting("--margin")) || 1);
+		const fits = (width() - 4 * edge) / 2 >= 30 * em;
+		root.classList.toggle("two", setting("--columns") === "2" && fits);
 	};
 
 	// The page a point of the document falls on, from its place on screen now.
@@ -168,6 +220,8 @@
 	// Show the held place again after the layout changed.
 	const restore = () => {
 		reflowing = false;
+		forget();
+		layout();
 		if (!landed) return;
 		if (held.edge === "start") show(0);
 		else if (held.edge === "end") show(pages() - 1);
@@ -208,19 +262,42 @@
 			report(to.end ? "end" : true);
 			return true;
 		},
-		// Turn by `by` pages. False at either edge of the chapter.
+		// Turn by `by` pages. `smooth` uses the reader's page turn: a slide,
+		// a fade or none, and none when the system asks for less motion.
+		//
+		// The answer is the new place, so the shell learns of the turn and
+		// where it led in one step. "" means the chapter's edge. The place is
+		// read at the destination before any animation starts: the text goes
+		// there, the place is read, and only then does it go back and slide
+		// or fade. All of that is one task, so nothing is drawn in between.
+		// A turn made while another is still animating starts from where
+		// that one is going.
 		turn(by, smooth) {
-			// The answer is the new place, so the shell learns of the turn
-			// and where it led in one step. "" means the chapter's edge.
-			const next = page() + by;
-			if (!ready || !landed || next < 0 || next >= pages()) return "";
-			show(next, smooth);
+			if (!ready || !landed) return "";
+			// The layout changed and the held place is not shown in it yet:
+			// show it first, so the turn counts from it.
+			if (reflowing) restore();
+			const before = at();
+			const next = (aim === null ? page() : Math.round(Math.abs(aim) / width())) + by;
+			if (next < 0 || next >= pages()) return "";
+			const target = next * width() * (rtl() ? -1 : 1);
+			goTo(target, false);
 			const now = settle_place(true);
+			// The shell says when the system asks for less motion. WebKitGTK
+			// does not tell the page itself.
+			const motion = smooth && setting("--motion") !== "none" && matchMedia("(prefers-reduced-motion: no-preference)").matches;
+			const kind = motion ? setting("--turn") : "none";
+			if (kind === "slide" || kind === "fade") {
+				goTo(before, false);
+				if (kind === "slide") goTo(target, true);
+				else fadeTo(target);
+			}
 			return [now.offset, now.page, now.pages, now.move].join(",");
 		},
 		// Set custom properties with no reflow handling, before a landing.
 		assign(properties) {
 			assign(properties);
+			layout();
 			return true;
 		},
 		// Set custom properties, keeping the place. A new face can change
@@ -228,6 +305,7 @@
 		style(properties) {
 			assign(properties);
 			reflowing = true;
+			forget();
 			const after = () => settle(restore);
 			document.fonts.ready.then(after, after);
 			return true;
@@ -265,10 +343,20 @@
 		if (link && event.key === "Enter") link.click();
 	});
 
+	// A slide has ended when the text reaches its end.
+	addEventListener(
+		"scroll",
+		() => {
+			if (aim !== null && !fading && Math.abs(at() - aim) < 1) aim = null;
+		},
+		true,
+	);
+
 	let resizing = 0;
 	addEventListener("resize", () => {
 		if (!ready) return;
 		reflowing = true;
+		forget();
 		cancelAnimationFrame(resizing);
 		resizing = requestAnimationFrame(restore);
 	});
@@ -294,6 +382,7 @@
 			),
 		);
 		index();
+		layout();
 		settle(() => {
 			ready = true;
 			post({ kind: "ready", load, length, pages: pages(), body: true });

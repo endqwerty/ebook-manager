@@ -5,7 +5,10 @@ content inside it. `reader.js` and `reader.css` are the app's own script and
 style sheet for the page. `progress.rs` works out how far through the book a
 place is. `place.rs` is the reader's place-keeping: one function over an
 explicit state that takes what happened and answers what to do, with no
-WebKit and no GTK in it. The window and the keys are in
+WebKit and no GTK in it. `settings.rs` holds the reader's text settings,
+reads and writes their file and turns them into the page's custom
+properties, and `text_panel.rs` is the popover that changes them. The
+window and the keys are in
 [`../reader.rs`](../reader.rs), which tells that function every event and
 does what it answers. The design is
 [Reading an EPUB in the app](../../../../docs/design/epub-reading.md), and what
@@ -21,7 +24,7 @@ view::View::open(
     |view: Result<View, String>| { /* put view.widget() in a window */ },
 );
 view.load(chapter, Landing::Start);       // or Landing::Offset(n), Landing::Anchor(..), Landing::End
-view.turn(1, false, |moved| { /* false at the chapter's edge */ });
+view.turn(1, true, |moved| { /* false at the chapter's edge; true animates as `--turn` says */ });
 view.set_style(&[("--page", "#2b2b2e")]);   // now, and for chapters opened later
 view.shut();                               // before the window that holds it goes
 ```
@@ -74,7 +77,13 @@ so [the view tests](../../tests/view.rs) include it directly.
 - **A move and its place arrive together.** A turn that moved has sent
   `Event::Place` before its `done` is called, because the page's answer to
   the turn is the place. A landing and a settled scroll send it as their own
-  message. Each has `moved: true`, the `Load` record of the load it was made
+  message. A turn's place is where it leads, also when the page animates
+  it: the page reads the place at the destination before the slide or fade
+  starts, and reports nothing more when it ends. The page script shows
+  pages only; continuous scrolling is
+  [#111](https://github.com/endqwerty/ebook-manager/issues/111). When the system
+  asks for less motion the reader sets `--motion: none` and turns move at
+  once. Each has `moved: true`, the `Load` record of the load it was made
   in (its number, its chapter and that chapter's length) and a `count`, the
   page's count of its moves in that load. `View::load` returns the number,
   which grows with every load, so the load's number and then the count put
@@ -146,6 +155,19 @@ replaced, and requires the random test to catch each. A failure prints its
 seed. Two view tests, `an_answer_two_chapters_late_is_held_and_not_shown`
 and `a_chapter_loaded_again_shows_only_its_new_load`, feed the same
 function from a real page.
+
+The same line runs `settings.rs`'s tests. Name the `--bin`: without it a
+filter can also match a view test and run it on your own desktop.
+
+The view tests also build the text settings panel alone, from
+`settings.rs` and `text_panel.rs`, and check that its controls show the
+settings, that showing them never changes the level, that Reset refreshes
+every control, that changing one control changes only its setting, and
+that the panel is freed with its window. Its controls' handlers hold the
+panel's widgets weakly for that reason. Every change goes through one
+function that then shows the settings in every control, and while it shows
+them a counter that only the outermost showing can bring back to zero
+keeps any control from writing a setting.
 
 The view tests serve hostile chapters to a real web view and count
 connections to a local listener. Each is named for the statement of the

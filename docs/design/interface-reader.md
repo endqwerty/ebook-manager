@@ -32,7 +32,7 @@ text and nothing else until the reader asks.
 | Part | Value |
 |---|---|
 | Line length | The text column aims for 60 to 70 characters at the reader's text size and is centred in the window. It never grows past 70 to fill a wide window. On a narrow screen or at a large text size it is as wide as the margins allow and the line is shorter. The text always reflows and is never clipped or scrolled sideways. |
-| Columns | One. Two when the window fits two columns of 60 characters with 48 between them and the reader has turned two columns on. Never three. |
+| Columns | One. Two when the reader has turned two columns on and the window fits two columns of at least 60 characters. That is when two show; each column is still at most the line length above. The space between them is twice the side margin, 96 at the medium setting, so each column is as far from the next as the page's edge is from its first. Each column keeps the line length above, so in a wider window the pair is centred and the margins, and the space between the columns with them, grow. Never three. |
 | Margins | At least 24 at each side on a phone and 48 elsewhere. The top and bottom margins are 1.5 times the side margin. The reader chooses narrow, medium or wide, which scale these by 0.75, 1 and 1.5. |
 | Text | The book's own styles by default, in the reader's chosen font and size. Body text starts at 1.15 times the platform's body size with a line height of 1.5. |
 | Alignment | Leading-aligned with a ragged trailing edge by default. Justified is a choice, and turns hyphenation on with it. |
@@ -158,6 +158,13 @@ makes a page colour of the reader's own.
 - At the top of both levels a line in the secondary colour says what the
   settings apply to, such as "For this book" or "For every book", with a menu to
   change it and Reset. This is the scope the requirements call for in READ-5.
+  Until READ-5 is built there is one scope, so the line says "For every book"
+  with no menu, and Reset is the last row of the second level.
+- For now the second level has no paged-or-scrolling switch, and the reader
+  shows pages only. Continuous scrolling was built and taken out again,
+  because each review found another way it lost the reader's place; [#111](https://github.com/endqwerty/ebook-manager/issues/111)
+  holds that work and its faults, and [#110](https://github.com/endqwerty/ebook-manager/issues/110) a page turn designed
+  for it.
 - Each setting is the platform's own control: a stepper, a segmented control or
   a switch. There are no sliders, because a slider's value cannot be said back
   or repeated.

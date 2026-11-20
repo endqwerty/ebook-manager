@@ -46,7 +46,7 @@ jobs:
         run: make install PREFIX="$RUNNER_TEMP/ebook-manager"
 
       - name: Run the workspace tests
-        run: dbus-run-session -- xvfb-run -a cargo nextest run --release --workspace --locked --profile ci --no-fail-fast
+        run: apps/desktop/tests/private-session.sh cargo nextest run --release --workspace --locked --profile ci --no-fail-fast
 
       - name: Import, read, restart and export from the desktop
         id: desktop

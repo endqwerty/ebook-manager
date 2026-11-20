@@ -94,7 +94,7 @@ only B can show them. A is the safest and the least capable. It would spend
 this work writing a layout engine and still not show a table. C is B with the
 publisher's CSS and most of its markup removed, so B built in the right order
 passes through C. Task 3 shows sanitised structure with the app's style sheet
-only. Publisher CSS arrives in task 4 behind its own review, and the reader can
+only. Publisher CSS arrives in task 4b behind its own review, and the reader can
 always turn it off.
 
 What B costs is the engine. WebKit parses and lays out bytes the book chose,
@@ -122,8 +122,11 @@ library to import, so the test file includes `src/reader/view.rs` with a
 the app. GTK must stay on one thread, so the test target sets
 `harness = false` and uses `libtest-mimic` with one thread, which gives each
 check below its own named test. It runs with the workspace tests, which CI
-already runs under `dbus-run-session` and `xvfb-run`. Its private bus has an
-empty service directory, so it starts none of the desktop's own services.
+runs under `apps/desktop/tests/private-session.sh`: a private Xvfb display
+and a private D-Bus session. That bus has an empty service directory, so it
+starts none of the desktop's own services. A bus that may start them lets
+WebKit's sandboxed web process start the desktop portal, which it asks for
+its threads' priority.
 A failure sends the design back to C, A or the reader host process under
 [Alternatives](#alternatives).
 
@@ -261,7 +264,7 @@ block model stay for import, tests and footnote text.
 impl Book {
     /// One chapter as sanitised markup.
     pub fn read_content(&self, index: u32) -> Result<ChapterContent, ReaderError>;
-    /// One picture from the book's manifest. Task 4 adds style sheets.
+    /// One picture from the book's manifest. Task 4b adds style sheets.
     pub fn read_resource(&self, id: ResourceId) -> Result<Resource, ReaderError>;
     /// Matches for `query` in one chapter, in reading order. Task 6.
     pub fn search(&self, chapter: u32, query: &str) -> Result<Vec<SearchHit>, ReaderError>;
@@ -278,7 +281,7 @@ pub struct ChapterContent {
     pub markup: String,
     /// Length of the text in `markup` in UTF-16 code units.
     pub length: u32,
-    /// The book's style sheets for this chapter, in cascade order. Empty until task 4.
+    /// The book's style sheets for this chapter, in cascade order. Empty until task 4b.
     pub styles: Vec<ResourceId>,
     /// The first of: `xml:lang` on `html`, `lang` on `html`, the same two on
     /// `body`, the package's first language.
@@ -355,7 +358,7 @@ itself. It never copies source bytes.
   in the markup only open and close tags, which lets the host count the text
   without parsing.
   `style`, `srcset`, every `on…` name and everything else is left out. Inline
-  `style` returns in task 4 through the CSS sanitiser.
+  `style` returns in task 4b through the CSS sanitiser.
 - **Links.** `a href` that resolves to a reading-order item, by the resolver
   `engine/run.rs` already uses for `Link::Internal`, becomes
   `href="/c/<chapter>#<anchor>"`, or `/c/<chapter>` with no anchor or one longer
@@ -422,7 +425,7 @@ signatures. A mismatch, an SVG picture or any other type is an error. Bytes
 cross the helper's reply as base64. When a picture fails, the scheme handler
 answers 404 and the page shows the picture's text alternative.
 
-**The CSS sanitiser** (`engine/css.rs`, task 4) reads a style sheet with a
+**The CSS sanitiser** (`engine/css.rs`, task 4b) reads a style sheet with a
 tokenizer written to the [CSS Syntax](https://www.w3.org/TR/css-syntax-3/)
 rules and writes back only what it understood. It drops `@import` and
 `@font-face`, drops any declaration whose value has a `url()` that does not
@@ -557,19 +560,41 @@ over anything the book's sheets say for the same property.
 
 - **Pages** are CSS columns. The root element is one page high and scrolls
   sideways a page at a time. One column per page, or two when the reader asks
-  and the window fits them. A turn sets the scroll offset. The slide and the
-  cross-fade are CSS transitions inside `@media (prefers-reduced-motion: no-preference)`,
-  which WebKitGTK answers from GTK's animation setting, so they work on GTK
-  4.22.
+  and the window fits them. A turn sets the scroll offset. The slide is
+  `scroll-behavior: smooth` and the cross-fade takes the page out and back
+  in over 120 ms each way. When the system asks for less motion, by GTK's
+  animation setting or its reduced motion setting (GTK 4.22, the app's
+  minimum), a turn moves at once. WebKitGTK 2.54 does not answer `prefers-reduced-motion`
+  from either, so the shell passes it as `--motion: none` and the script
+  checks that. `less_motion_turns_at_once` checks the script's side; the
+  shell's reading of the two GTK settings has no test.
 - **Scrolling** is the same document in normal flow.
-- **Settings** reach the page as CSS custom properties and a few classes on the
-  root: font family, size step, weight, line height, letter and word spacing,
-  margin scale, justification with hyphenation, columns, page colours. Changing
-  one updates the properties, the page reflows, and the script goes back to
-  the place it held before the change.
+- **Settings** reach the page as CSS custom properties: face, size, weight,
+  line height, letter and word spacing, margin scale, justification,
+  hyphenation, columns, the page turn, and the page colours. `reader/settings.rs` holds them, checks every value it reads from
+  its file, and turns them into properties. Changing one updates the
+  properties, the page reflows, and the script goes back to the place it
+  held before the change.
+- **Two columns** show when the reader asked for them and the window fits two
+  of at least 30 em, about 60 characters, each. That is when two show, not
+  how wide they are: each is at most the 34 em measure below. CSS columns
+  have one gap, so the space between the two is the space between one
+  page's last column and the next page's first, which has to be both side
+  margins. The reader design's 48 became twice the side margin for that
+  reason, and its page says so. In a wider window the pair is centred: the side margins
+  grow, and the space between the columns, which is both of them, grows
+  with them. `two_columns_when_they_fit` checks both widths.
+- **Continuous scrolling** is not built yet. It was built on the text
+  settings' branch and taken out before it merged, because each review
+  found another place-keeping fault in it; [#111](https://github.com/endqwerty/ebook-manager/issues/111) holds that work and
+  the faults it has left. The reader shows pages only, and the scrolling
+  design in this document is the plan for it.
+- **The text column** is centred and never wider than 34 em, about 68
+  characters, whatever the window's width.
 - **Page colours** are the four in [the reader design](interface-reader.md#page-colours),
-  with their secondary colours. Until task 4 the page is Paper when the window
-  is light and Grey when it is dark. The window's background takes the page
+  with their secondary colours, and the reader can choose a page and text
+  colour of its own. Until the reader chooses, the page is Paper when the
+  window is light and Grey when it is dark. The window's background takes the page
   colour, so the view and the window are one surface. The handler writes the
   colours and the face into the `style` attribute of the wrapper's `html`
   element, from values the shell checked, so a chapter opens in them with no
@@ -580,7 +605,7 @@ over anything the book's sheets say for the same property.
   name with its default face, which is often not a serif. Bundling Literata,
   as [the reader design](interface-reader.md#fonts) asks, is a later task.
 - **What the app's sheet owns.** Layout of `html` and `body`: their size,
-  columns, overflow, margins, padding and position, all `!important`. Task 4
+  columns, overflow, margins, padding and position, all `!important`. Task 4b
   adds a fixture style sheet that sets each of these and hides and moves text,
   and checks that pages still turn and the app's controls still work. The
   controls are GTK widgets outside the view, so no book style can cover them.
@@ -642,6 +667,28 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   is the new place; a chapter landing where it was asked to, at its start,
   an offset, an anchor or its end, which is how a jump from a link or the
   chapter list arrives; and, in scrolling, a scroll that has settled.
+- **A turn's answer is where it leads,** also when it animates. A slide or a
+  fade has not moved the text when the answer is made, so the script first
+  puts the text at the destination, reads the place there, puts it back and
+  only then starts the animation, all in one task, so nothing is drawn in
+  between. A turn made while another is still animating starts from where
+  that one is going. A slide counts as going there until the text reaches
+  it or an instant move replaces it, so no timer decides it and a slow slide changes nothing. When the animation
+  ends nothing more is reported. `two_quick_turns_land_two_pages_on` checks
+  two turns made before the first slide or fade ends. A change of layout
+  ends an unfinished animation, and a turn made after the change and
+  before the held place is shown in the new layout first shows it there
+  and counts from it (`a_turn_after_a_reflow_counts_from_the_held_place`).
+  The reader cannot move the page by hand, so an animation ends early in
+  two ways only: the layout changes, or another turn is made. Either way
+  the page goes on to a place already told. The reflow's restore shows the
+  held place, which is where the turn led, and reports it
+  (`an_animation_ended_by_a_reflow_leaves_the_page_at_its_place`); a
+  second turn counts from where the first was going and has answered with
+  its own destination (`two_quick_turns_land_two_pages_on`, for a slide
+  and for a fade). The
+  view test `an_animated_turn_answers_with_the_place_it_leads_to` checks
+  each animation.
 - **A move's place is taken for the chapter it was made in**, whatever is
   showing or loading when it arrives. A turn answered after the next chapter
   was asked for is still that chapter's place, and is what is saved until
@@ -758,7 +805,9 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   entry at or before the place.
 
 The pace and the text settings live in
-`$XDG_CONFIG_HOME/ebook-manager/reader.json`, written by the shell. They never
+`$XDG_CONFIG_HOME/ebook-manager/reader.conf`, written by the shell as
+`name=value` lines. A line that is missing, unknown or out of range leaves
+that setting at its default, so a damaged file never stops a book opening. They never
 leave the machine (READ-76).
 
 ### Contents, search, footnotes and going back
@@ -847,8 +896,8 @@ view are in `apps/desktop/tests/view.rs`.
    `the_bridge_accepts_only_its_own_world_and_valid_messages`.
 9. A place saved in the middle of a long paragraph, after a character outside
    the basic plane, opens on the page holding the same character at another
-   font size and window width. Until task 4 the test sets the size through the
-   same custom property the settings will use. `a_place_survives_reflow`. A
+   font size and window width. The test sets the size through the same
+   custom property the settings use. `a_place_survives_reflow`. A
    chapter opens on its first page and ends on its last when those pages hold
    no text. `pages_without_text_keep_their_place`.
 10. A turn stops at a chapter's first and last page, a chapter opens on its
@@ -858,8 +907,9 @@ view are in `apps/desktop/tests/view.rs`.
     that the reader's window then opens the next chapter's first page and the
     previous chapter's last.
 11. Each page colour the reader can show draws its page, text and secondary
-    colour from the reader design's table: Paper and Grey in task 3, all four
-    from task 4. `page_colours_match_the_design`.
+    colour from the reader design's table. `page_colours_match_the_design`
+    checks Paper and Grey on the page, and `the_built_in_colours_are_the_designs`
+    in `reader/settings.rs` checks all four.
 12. A search for a word split across an `em` boundary finds it, and choosing
     the result shows the page holding it. `search_crosses_inline_elements`.
 13. The fraction read weighs chapters by size, handles a chapter that is not
@@ -947,12 +997,18 @@ Each is one pull request that ends in a check.
    request that adds `fraction` and `last_read`. Check: behaviours 7 to 11, 13
    and 14, the smoke run, and screenshots in light and dark. Covers READ-1's resume, READ-2's pages
    and full screen, READ-4's following the system, and READ-18's default.
-4. **Text settings and the book's own styles.** The settings popover, the CSS
-   sanitiser, columns, scrolling, the page turn, all four colours, More
-   contrast and colours of the reader's own. Check: a test per setting that
-   the page's computed style follows it, the fixture style sheet under
-   [Pages and layout](#pages-and-layout), and behaviour 7 again with book
-   styles on. Covers READ-2, READ-3 and READ-4 apart from time of day.
+4. **Text settings.** The settings popover, columns, the page turn, all
+   four colours, More contrast and colours of the reader's own. Check:
+   `text_settings_reach_the_page`, `two_columns_when_they_fit`, the turn and
+   panel view tests, the tests in `reader/settings.rs`, and smoke steps that
+   change the size and colour and find both kept after the reader closes
+   and after the app restarts. Covers READ-2 apart from continuous
+   scrolling ([#111](https://github.com/endqwerty/ebook-manager/issues/111)), and READ-3 and READ-4 apart from the book's own
+   styles and time of day.
+4b. **The book's own styles.** The CSS sanitiser in the helper, the sheets
+   linked in the page, and the switch between them and the reader's. Check:
+   the fixture style sheet under [Pages and layout](#pages-and-layout), and
+   behaviour 7 again with book styles on. Covers the rest of READ-3.
 5. **Contents, progress and going back.** The panel, landmarks, the page list,
    the progress control and popover, the pace, the back button, footnotes, and
    the controls' hiding. Check: a test per control,
