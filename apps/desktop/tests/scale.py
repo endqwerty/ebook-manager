@@ -552,9 +552,24 @@ def shelf_import_focus(binary, fixture, root):
         assert not any(n.get_name().startswith("Imported 1001") for n in walk(body))
         add(root / "Incoming", range(2000, 2060))
         find("4,060 books")
+        # The report and library are separate native windows. Send the key
+        # once the window manager has actually returned input to the library.
+        deadline = time.monotonic() + 8
+        while subprocess.run(["xdotool", "getactivewindow"], capture_output=True, text=True).stdout.strip() != wid:
+            assert time.monotonic() < deadline, "library did not regain keyboard input"
+            time.sleep(POLL)
         key("Right")
-        neighbour = find("Imported 1000", "table cell", contains=True, parent=body)
-        assert neighbour.get_state_set().contains(Atspi.StateType.FOCUSED)
+        deadline = time.monotonic() + 8
+        while True:
+            neighbour = find("Imported 1000", "table cell", contains=True, parent=body)
+            neighbour.clear_cache()
+            if neighbour.get_state_set().contains(Atspi.StateType.FOCUSED):
+                break
+            assert time.monotonic() < deadline, [
+                (n.get_role_name(), n.get_name()) for n in walk(Atspi.get_desktop(0))
+                if n.get_state_set().contains(Atspi.StateType.FOCUSED)
+            ]
+            time.sleep(POLL)
         key("Menu")
         find("", "menu item")
         key("Escape", "Return")
