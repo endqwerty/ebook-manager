@@ -568,8 +568,7 @@ over anything the book's sheets say for the same property.
 - **Scrolling** is the same document in normal flow.
 - **Settings** reach the page as CSS custom properties: face, size, weight,
   line height, letter and word spacing, margin scale, justification,
-  hyphenation, columns, pages or scrolling, the page turn, and the page
-  colours. `reader/settings.rs` holds them, checks every value it reads from
+  hyphenation, columns, the page turn, and the page colours. `reader/settings.rs` holds them, checks every value it reads from
   its file, and turns them into properties. Changing one updates the
   properties, the page reflows, and the script goes back to the place it
   held before the change.
@@ -582,30 +581,11 @@ over anything the book's sheets say for the same property.
   reason, and its page says so. In a wider window the pair is centred: the side margins
   grow, and the space between the columns, which is both of them, grows
   with them. `two_columns_when_they_fit` checks both widths.
-- **Scrolling** counts screens as pages, so the fraction read and the line
-  under the page work the same. The bottom of the scroll is the last
-  screen however little of it is left, so the fraction read counts the
-  whole chapter there, and a chapter with no text at its end is held as
-  its end through a reflow (`the_bottom_of_a_scroll_is_the_last_screen`).
-  Only the very top and bottom of the scroll are ends. A place with no
-  text of its own anywhere else is held by how far down the scroll it is,
-  as a share, so a reflow keeps that share and neither moves the reader to
-  an end nor back to the top. What is saved for it is still the offset of
-  the first text after it (`scrolling_holds_a_place_without_text_where_it_is`).
-  Pages keep their own rule for a text-less page in the middle. A place
-  with text is held by its first character, offset 0 included: a chapter
-  that opens with pictures keeps its first character at the top through a
-  reflow (`scrolling_holds_the_first_character_after_pictures`). A
-  character in the page's top margin is shown from the very top.
-  A turn moves a screenful less a line, at once, whatever the page-turn
-  setting. In scrolling the reader moves the text themselves all the time,
-  and three reviews each found another way an animated turn and that
-  scrolling interfered, so the page turn applies to pages only; an
-  animation designed for scrolling is [#110](https://github.com/endqwerty/ebook-manager/issues/110). The text then moves
-  only two ways: at once by the script, for a landing, a turn or a
-  reflow, which is told when it is made; or by the reader, by wheel, key
-  or scroll bar, which is a move told 150 ms after its last step
-  (`in_scrolling_a_turn_moves_at_once`).
+- **Continuous scrolling** is not built yet. It was built on the text
+  settings' branch and taken out before it merged, because each review
+  found another place-keeping fault in it; [#111](https://github.com/endqwerty/ebook-manager/issues/111) holds that work and
+  the faults it has left. The reader shows pages only, and the scrolling
+  design in this document is the plan for it.
 - **The text column** is centred and never wider than 34 em, about 68
   characters, whatever the window's width.
 - **Page colours** are the four in [the reader design](interface-reader.md#page-colours),
@@ -696,12 +676,12 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   ends an unfinished animation, and a turn made after the change and
   before the held place is shown in the new layout first shows it there
   and counts from it (`a_turn_after_a_reflow_counts_from_the_held_place`).
-  That is the only way an animation ends early in pages, where the reader
-  cannot scroll the text by hand, and the reflow then shows and tells the
-  place the turn led to
+  That is the only way an animation ends early, since the reader cannot
+  move the page by hand, and the reflow then shows and tells the place the
+  turn led to
   (`an_animation_ended_by_a_reflow_leaves_the_page_at_its_place`). The
   view test `an_animated_turn_answers_with_the_place_it_leads_to` checks
-  each animation. Turns animate in pages only.
+  each animation.
 - **A move's place is taken for the chapter it was made in**, whatever is
   showing or loading when it arrives. A turn answered after the next chapter
   was asked for is still that chapter's place, and is what is saved until
@@ -755,7 +735,7 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   late and in any order, and a second test requires it to catch four known
   faults put back one at a time.
 - **A reflow is not a move.** A new window size or a setting changes the
-  page numbers shown under the page, in scrolling too. Its report says it is not a move and
+  page numbers shown under the page. Its report says it is not a move and
   repeats the last move's offset and order, and the shell changes only what
   it shows: not the place held, not the fraction read, not the save's timer.
   So a resize writes nothing to the library.
@@ -1010,12 +990,13 @@ Each is one pull request that ends in a check.
    request that adds `fraction` and `last_read`. Check: behaviours 7 to 11, 13
    and 14, the smoke run, and screenshots in light and dark. Covers READ-1's resume, READ-2's pages
    and full screen, READ-4's following the system, and READ-18's default.
-4. **Text settings.** The settings popover, columns, scrolling, the page
-   turn, all four colours, More contrast and colours of the reader's own.
-   Check: `text_settings_reach_the_page`, `two_columns_when_they_fit`,
-   `scrolling_keeps_the_place`, the tests in `reader/settings.rs`, and a smoke
-   step that changes the size and colour, closes the reader and finds both
-   kept. Covers READ-2, and READ-3 and READ-4 apart from the book's own
+4. **Text settings.** The settings popover, columns, the page turn, all
+   four colours, More contrast and colours of the reader's own. Check:
+   `text_settings_reach_the_page`, `two_columns_when_they_fit`, the turn and
+   panel view tests, the tests in `reader/settings.rs`, and smoke steps that
+   change the size and colour and find both kept after the reader closes
+   and after the app restarts. Covers READ-2 apart from continuous
+   scrolling ([#111](https://github.com/endqwerty/ebook-manager/issues/111)), and READ-3 and READ-4 apart from the book's own
    styles and time of day.
 4b. **The book's own styles.** The CSS sanitiser in the helper, the sheets
    linked in the page, and the switch between them and the reader's. Check:

@@ -448,7 +448,6 @@ pub fn build(
     });
     let hyphenate = switch("Hyphenation", |s, on| s.hyphenate = on);
     let columns = switch("Two columns", |s, on| s.two_columns = on);
-    let scrolling = switch("Continuous scrolling", |s, on| s.scrolling = on);
     // Justifying turns hyphenation on with it, and `change` shows it.
 
     let turn = gtk::DropDown::from_strings(&["Slide", "Cross-fade", "None"]);
@@ -459,11 +458,6 @@ pub fn build(
             change(&|s| s.turn = chosen);
         });
     }
-    // The turn animates in pages only: in continuous scrolling a turn
-    // moves at once. The row stays, and says so.
-    let in_pages = "In pages. In continuous scrolling a turn moves at once.";
-    turn.set_tooltip_text(Some(in_pages));
-    turn.update_property(&[gtk::accessible::Property::Description(in_pages)]);
     second.append(&row("Page turn", &turn));
 
     let follow = gtk::Switch::new();
@@ -523,12 +517,7 @@ pub fn build(
             turn.clone(),
             follow.clone(),
         );
-        let (justify, hyphenate, columns, scrolling) = (
-            justify.clone(),
-            hyphenate.clone(),
-            columns.clone(),
-            scrolling.clone(),
-        );
+        let (justify, hyphenate, columns) = (justify.clone(), hyphenate.clone(), columns.clone());
         let (page_colour, text_colour) = (page_colour.clone(), text_colour.clone());
         Rc::new(move || {
             let _showing = Showing::new(&syncing);
@@ -562,7 +551,6 @@ pub fn build(
             justify.set_active(s.justify);
             hyphenate.set_active(s.hyphenate);
             columns.set_active(s.two_columns);
-            scrolling.set_active(s.scrolling);
             follow.set_active(s.colour == Colour::System);
             page_colour.set_rgba(&rgba(s.custom.0));
             text_colour.set_rgba(&rgba(s.custom.1));

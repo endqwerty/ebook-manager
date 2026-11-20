@@ -79,9 +79,9 @@ so [the view tests](../../tests/view.rs) include it directly.
   the turn is the place. A landing and a settled scroll send it as their own
   message. A turn's place is where it leads, also when the page animates
   it: the page reads the place at the destination before the slide or fade
-  starts, and reports nothing more when it ends. Turns animate in pages
-  only: in continuous scrolling a turn moves at once, and a scroll the page
-  made itself is not reported again when it settles. When the system
+  starts, and reports nothing more when it ends. The page script shows
+  pages only; continuous scrolling is
+  [#111](https://github.com/endqwerty/ebook-manager/issues/111). When the system
   asks for less motion the reader sets `--motion: none` and turns move at
   once. Each has `moved: true`, the `Load` record of the load it was made
   in (its number, its chapter and that chapter's length) and a `count`, the

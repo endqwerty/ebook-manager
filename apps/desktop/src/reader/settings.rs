@@ -159,7 +159,6 @@ pub struct Settings {
     pub justify: bool,
     pub hyphenate: bool,
     pub two_columns: bool,
-    pub scrolling: bool,
     pub turn: Turn,
 }
 
@@ -178,7 +177,6 @@ impl Default for Settings {
             justify: false,
             hyphenate: false,
             two_columns: false,
-            scrolling: false,
             turn: Turn::Slide,
         }
     }
@@ -272,10 +270,6 @@ impl Settings {
                 if self.two_columns { "2" } else { "1" }.to_owned(),
             ),
             (
-                "--flow",
-                if self.scrolling { "scroll" } else { "paged" }.to_owned(),
-            ),
-            (
                 "--turn",
                 match self.turn {
                     Turn::Slide => "slide",
@@ -308,7 +302,7 @@ impl Settings {
             Turn::None => "none",
         };
         format!(
-            "colour={colour}\ncustom-page={}\ncustom-text={}\nface={}\nsize={}\nweight={}\nline={}\nletter={}\nword={}\nmargin={margin}\njustify={}\nhyphenate={}\ntwo-columns={}\nscrolling={}\nturn={turn}\n",
+            "colour={colour}\ncustom-page={}\ncustom-text={}\nface={}\nsize={}\nweight={}\nline={}\nletter={}\nword={}\nmargin={margin}\njustify={}\nhyphenate={}\ntwo-columns={}\nturn={turn}\n",
             self.custom.0.hex(),
             self.custom.1.hex(),
             self.face.as_deref().unwrap_or(""),
@@ -320,7 +314,6 @@ impl Settings {
             self.justify,
             self.hyphenate,
             self.two_columns,
-            self.scrolling,
         )
     }
 
@@ -368,7 +361,6 @@ impl Settings {
                 "justify" => s.justify = flag(value).unwrap_or(s.justify),
                 "hyphenate" => s.hyphenate = flag(value).unwrap_or(s.hyphenate),
                 "two-columns" => s.two_columns = flag(value).unwrap_or(s.two_columns),
-                "scrolling" => s.scrolling = flag(value).unwrap_or(s.scrolling),
                 "turn" => {
                     s.turn = match value {
                         "fade" => Turn::Fade,
@@ -525,7 +517,6 @@ mod tests {
             ("--align", "start"),
             ("--hyphens", "manual"),
             ("--columns", "1"),
-            ("--flow", "paged"),
             ("--turn", "slide"),
         ] {
             assert_eq!(value(&p, name), expected, "{name}");
@@ -540,7 +531,6 @@ mod tests {
         s.justify = true;
         s.hyphenate = true;
         s.two_columns = true;
-        s.scrolling = true;
         s.turn = Turn::None;
         let p = s.properties(true, false, "serif");
         for (name, expected) in [
@@ -555,7 +545,6 @@ mod tests {
             ("--align", "justify"),
             ("--hyphens", "auto"),
             ("--columns", "2"),
-            ("--flow", "scroll"),
             ("--turn", "none"),
         ] {
             assert_eq!(value(&p, name), expected, "{name}");
@@ -578,7 +567,6 @@ mod tests {
         s.justify = true;
         s.hyphenate = true;
         s.two_columns = true;
-        s.scrolling = true;
         s.turn = Turn::Fade;
         assert_eq!(Settings::from_text(&s.to_text()), s);
         let folder = std::env::temp_dir().join(format!("ebook-settings-{}", std::process::id()));
@@ -649,5 +637,22 @@ mod tests {
             value(&s.properties(false, false, "serif"), "--font"),
             "'Noto Serif', serif"
         );
+    }
+
+    #[test]
+    fn a_file_from_a_build_with_scrolling_reads_without_it() {
+        // Builds before continuous scrolling was taken out (#111) wrote a
+        // `scrolling` line. It is ignored like any unknown line.
+        let mut written = Settings::default().to_text();
+        written.push_str("scrolling=true\nsize=4\n");
+        let s = Settings::from_text(&written);
+        assert_eq!(
+            s,
+            Settings {
+                size: 4,
+                ..Settings::default()
+            }
+        );
+        assert!(!s.to_text().contains("scrolling"));
     }
 }

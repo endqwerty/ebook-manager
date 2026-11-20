@@ -131,12 +131,6 @@ Four are built in. The reader can add their own.
   not the interface language.
 - The turn is a slide of the whole page over the platform's standard duration.
   The reader can choose a cross-fade or none. There is no curl.
-- In continuous scrolling a turn moves the text at once, whatever the reader
-  chose for the page turn, and the setting's row says it applies in pages. In
-  scrolling the reader moves the text themselves all the time, and three
-  reviews each found another way an animated turn and that scrolling
-  interfered. An animation designed against the reader's own scrolling is
-  [#110](https://github.com/endqwerty/ebook-manager/issues/110).
 - When the system asks for less motion the turn is none, whatever the reader
   chose.
 
@@ -166,6 +160,11 @@ makes a page colour of the reader's own.
   change it and Reset. This is the scope the requirements call for in READ-5.
   Until READ-5 is built there is one scope, so the line says "For every book"
   with no menu, and Reset is the last row of the second level.
+- For now the second level has no paged-or-scrolling switch, and the reader
+  shows pages only. Continuous scrolling was built and taken out again,
+  because each review found another way it lost the reader's place; [#111](https://github.com/endqwerty/ebook-manager/issues/111)
+  holds that work and its faults, and [#110](https://github.com/endqwerty/ebook-manager/issues/110) a page turn designed
+  for it.
 - Each setting is the platform's own control: a stepper, a segmented control or
   a switch. There are no sliders, because a slider's value cannot be said back
   or repeated.
