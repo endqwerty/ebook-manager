@@ -1478,12 +1478,7 @@ fn scrolling_keeps_the_place() -> Outcome {
 /// the answer is made. Where the animation ends is not reported again.
 fn an_animated_turn_answers_with_the_place_it_leads_to() -> Outcome {
     let stage = Stage::new(one(long_chapter()), |_| {})?;
-    for (flow, turn) in [
-        ("paged", "slide"),
-        ("paged", "fade"),
-        ("scroll", "slide"),
-        ("scroll", "fade"),
-    ] {
+    for (flow, turn) in [("paged", "slide"), ("paged", "fade")] {
         stage.view.set_style(&[("--flow", flow), ("--turn", turn)]);
         // The turn animates: right after it the text is still where it was.
         stage.open(0, Landing::Start)?;
@@ -1535,12 +1530,7 @@ fn an_animated_turn_answers_with_the_place_it_leads_to() -> Outcome {
 /// and in scrolling.
 fn two_quick_turns_land_two_pages_on() -> Outcome {
     let stage = Stage::new(one(long_chapter()), |_| {})?;
-    for (flow, turn) in [
-        ("paged", "slide"),
-        ("scroll", "slide"),
-        ("paged", "fade"),
-        ("scroll", "fade"),
-    ] {
+    for (flow, turn) in [("paged", "slide"), ("paged", "fade")] {
         let flow = &format!("{flow} {turn}");
         let (flow_name, _) = flow.split_once(' ').unwrap();
         stage
@@ -1679,53 +1669,6 @@ fn the_bottom_of_a_scroll_is_the_last_screen() -> Outcome {
     Ok(())
 }
 
-/// In scrolling, the reader scrolling by hand while a turn animates ends
-/// the animation where the reader left the text, and that is the move. A
-/// fade that has not reached its second half does not jump back to the
-/// turn's place.
-fn a_hand_scroll_during_an_animation_is_the_move() -> Outcome {
-    let stage = Stage::new(one(long_chapter()), |_| {})?;
-    for turn in ["fade", "slide"] {
-        stage
-            .view
-            .set_style(&[("--flow", "scroll"), ("--turn", turn)]);
-        stage.open(0, Landing::Start)?;
-        stage.events.borrow_mut().clear();
-        // The turn and the hand scroll in one task, so the hand comes
-        // before the fade's second half and before the slide has moved.
-        let answer = stage.app("const r = document.documentElement; const a = __reader.turn(1, true); window.dispatchEvent(new WheelEvent('wheel')); r.classList.remove('slide'); r.scrollTop = 300; return a")?;
-        let turned: u32 = answer.split(',').next().unwrap_or("").parse().unwrap_or(0);
-        let Event::Place { offset, .. } = stage.wait("a move after a hand scroll", |e| {
-            matches!(e, Event::Place { moved: true, .. })
-        })?
-        else {
-            unreachable!()
-        };
-        pause(Duration::from_millis(600));
-        let top = stage.scrolled()?;
-        check!(
-            top == "300",
-            "{turn}: the text went on to {top} after the reader scrolled to 300"
-        );
-        check!(
-            offset != turned && offset > 0,
-            "{turn}: the hand scroll was told as {offset}, the turn was {turned}"
-        );
-        let places = stage
-            .events
-            .borrow()
-            .iter()
-            .filter(|e| matches!(e, Event::Place { .. }))
-            .count();
-        check!(
-            places == 1,
-            "{turn}: {places} places told: {:?}",
-            stage.events.borrow()
-        );
-    }
-    Ok(())
-}
-
 /// A turn made after the layout changed and before the place is shown in
 /// it counts from the held place's page in the new layout, not from where
 /// an unfinished slide or fade was going in the old one.
@@ -1811,24 +1754,134 @@ fn scrolling_holds_a_place_without_text_where_it_is() -> Outcome {
     Ok(())
 }
 
-/// The reader's own scroll ends an unfinished slide at once, so a turn
-/// made straight after counts from where the text is, not from where the
-/// slide was going. In pages the root does not scroll by hand, so only
-/// scrolling is checked.
-fn a_hand_scroll_ends_a_slide_at_once() -> Outcome {
+/// In continuous scrolling a turn moves at once whatever the page-turn
+/// setting, so the reader's own scrolling never meets an animation: a turn
+/// answers with where the text now is, a turn made straight after a hand
+/// scroll counts from where the reader left the text, and the hand scroll
+/// is told as one move once it settles.
+fn in_scrolling_a_turn_moves_at_once() -> Outcome {
     let stage = Stage::new(one(long_chapter()), |_| {})?;
-    stage
-        .view
-        .set_style(&[("--flow", "scroll"), ("--turn", "slide")]);
+    for turn in ["slide", "fade", "none"] {
+        stage
+            .view
+            .set_style(&[("--flow", "scroll"), ("--turn", turn)]);
+        stage.open(0, Landing::Start)?;
+        let probe = stage.app("const r = document.documentElement; const step = Math.max(40, r.clientHeight - parseFloat(getComputedStyle(r).lineHeight)); const before = Math.round(r.scrollTop); __reader.turn(1, true); const moved = Math.round(r.scrollTop); r.scrollTop = 300; __reader.turn(1, true); return [before, moved, Math.round(step), Math.round(r.scrollTop), Math.round(300 + step)].join(' ')")?;
+        let p: Vec<&str> = probe.split(' ').collect();
+        check!(
+            p[0] == "0" && p[1] == p[2],
+            "{turn}: a turn went from {} to {}, not at once to {}",
+            p[0],
+            p[1],
+            p[2]
+        );
+        check!(
+            p[3] == p[4],
+            "{turn}: a turn after a hand scroll to 300 went to {}, not {}",
+            p[3],
+            p[4]
+        );
+        // Through the view: the turn's answer is the place, and a hand
+        // scroll after it is one more move, where the reader left the text.
+        stage.open(0, Landing::Start)?;
+        let Some((turned, _)) = stage.turned(1, true)? else {
+            return Err(format!("{turn}: no turn").into());
+        };
+        stage.events.borrow_mut().clear();
+        stage.app("document.documentElement.scrollTop = 300; return 1")?;
+        let Event::Place { offset, .. } = stage.wait("a move after a hand scroll", |e| {
+            matches!(e, Event::Place { moved: true, .. })
+        })?
+        else {
+            unreachable!()
+        };
+        pause(Duration::from_millis(400));
+        let top = stage.scrolled()?;
+        let places = stage
+            .events
+            .borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Place { .. }))
+            .count();
+        check!(
+            top == "300" && places == 1 && offset != turned,
+            "{turn}: after a hand scroll to 300 the text is at {top}, told {places} times, at {offset} (the turn was {turned})"
+        );
+    }
+    Ok(())
+}
+
+/// In continuous scrolling, a chapter that opens with pictures: with its
+/// first character brought to the top by hand, a change of setting keeps
+/// that character at the top. Offset 0 is a character like any other.
+fn scrolling_holds_the_first_character_after_pictures() -> Outcome {
+    let markup = format!("<div style=\"height: 1100px\"></div>{}", long_chapter());
+    let stage = Stage::new(one(markup), |_| {})?;
+    stage.view.set_style(&[("--flow", "scroll")]);
     stage.open(0, Landing::Start)?;
-    let probe = stage.app("const r = document.documentElement; __reader.turn(1, true); window.dispatchEvent(new WheelEvent('wheel')); r.classList.remove('slide'); r.scrollTop = 300; const step = Math.max(40, r.clientHeight - parseFloat(getComputedStyle(r).lineHeight)); __reader.turn(1, false); return Math.round(r.scrollTop) + ' ' + Math.round(300 + step)")?;
-    let probe: Vec<&str> = probe.split(' ').collect();
+    stage.events.borrow_mut().clear();
+    let top = stage.app("const r = document.documentElement; const g = document.createRange(); g.setStart(document.querySelector('h1').firstChild, 0); g.collapse(true); r.scrollTop = Math.round(r.scrollTop + g.getBoundingClientRect().top); return Math.round(r.scrollTop)")?;
+    let Event::Place { offset, page, .. } = stage.wait("a move after a hand scroll", |e| {
+        matches!(e, Event::Place { moved: true, .. })
+    })?
+    else {
+        unreachable!()
+    };
     check!(
-        probe[0] == probe[1],
-        "a turn after a hand scroll to 300 went to {}, not {}",
-        probe[0],
-        probe[1]
+        offset == 0,
+        "the first character at the top was told as {offset}"
     );
+    let (held, now_page, _) = restyle(&stage, &[("--turn", "none")])?;
+    let after = stage.scrolled()?;
+    check!(
+        // A pixel either way is rounding: the character is still the one
+        // at the top.
+        after
+            .parse::<i64>()
+            .unwrap_or(-9)
+            .abs_diff(top.parse::<i64>().unwrap_or(9))
+            <= 1
+            && held == 0
+            && now_page == page,
+        "a change of setting moved the text from {top} to {after} (screen {page} to {now_page})"
+    );
+    Ok(())
+}
+
+/// In pages, an animation that something ends early, here a change of
+/// layout, leaves the page at the place the turn told, so what is shown
+/// and what was told never part.
+fn an_animation_ended_by_a_reflow_leaves_the_page_at_its_place() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    let visible = "const t = __OFFSET__; const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let o = 0; while (w.nextNode()) { const l = w.currentNode.data.length; if (o + l > t) { const r = document.createRange(); r.setStart(w.currentNode, t - o); r.setEnd(w.currentNode, t - o + 1); const b = r.getBoundingClientRect(); return b.left >= 0 && b.right <= innerWidth; } o += l; } return false";
+    for turn in ["slide", "fade"] {
+        stage
+            .view
+            .set_style(&[("--flow", "paged"), ("--turn", turn), ("--size", "1")]);
+        stage.open(0, Landing::Start)?;
+        stage.events.borrow_mut().clear();
+        let answer = stage
+            .app("const a = __reader.turn(1, true); __reader.style({'--size': '0.8'}); return a")?;
+        let turned: u32 = answer
+            .split(',')
+            .next()
+            .unwrap_or("")
+            .parse()
+            .unwrap_or(u32::MAX);
+        stage.wait("place after the reflow", |e| {
+            matches!(e, Event::Place { .. })
+        })?;
+        pause(Duration::from_millis(600));
+        let (told, _, _) = stage.last_place().unwrap();
+        check!(
+            told == turned,
+            "{turn}: the reflow told {told}, the turn {turned}"
+        );
+        check!(
+            stage.app(&visible.replace("__OFFSET__", &told.to_string()))? == "true",
+            "{turn}: the place told, {told}, is not on the page showing"
+        );
+    }
     Ok(())
 }
 
@@ -1839,12 +1892,7 @@ fn a_hand_scroll_ends_a_slide_at_once() -> Outcome {
 /// was written, so the reader passes it on itself.
 fn less_motion_turns_at_once() -> Outcome {
     let stage = Stage::new(one(long_chapter()), |_| {})?;
-    for (flow, turn) in [
-        ("paged", "slide"),
-        ("paged", "fade"),
-        ("scroll", "slide"),
-        ("scroll", "fade"),
-    ] {
+    for (flow, turn) in [("paged", "slide"), ("paged", "fade")] {
         stage
             .view
             .set_style(&[("--flow", flow), ("--turn", turn), ("--motion", "none")]);
@@ -2942,10 +2990,6 @@ const TESTS: &[Test] = &[
         the_bottom_of_a_scroll_is_the_last_screen,
     ),
     (
-        "a_hand_scroll_during_an_animation_is_the_move",
-        a_hand_scroll_during_an_animation_is_the_move,
-    ),
-    (
         "a_turn_after_a_reflow_counts_from_the_held_place",
         a_turn_after_a_reflow_counts_from_the_held_place,
     ),
@@ -2975,12 +3019,20 @@ const TESTS: &[Test] = &[
     ),
     ("less_motion_turns_at_once", less_motion_turns_at_once),
     (
-        "scrolling_holds_a_place_without_text_where_it_is",
-        scrolling_holds_a_place_without_text_where_it_is,
+        "in_scrolling_a_turn_moves_at_once",
+        in_scrolling_a_turn_moves_at_once,
     ),
     (
-        "a_hand_scroll_ends_a_slide_at_once",
-        a_hand_scroll_ends_a_slide_at_once,
+        "scrolling_holds_the_first_character_after_pictures",
+        scrolling_holds_the_first_character_after_pictures,
+    ),
+    (
+        "an_animation_ended_by_a_reflow_leaves_the_page_at_its_place",
+        an_animation_ended_by_a_reflow_leaves_the_page_at_its_place,
+    ),
+    (
+        "scrolling_holds_a_place_without_text_where_it_is",
+        scrolling_holds_a_place_without_text_where_it_is,
     ),
     (
         "a_move_carries_its_place_and_a_reflow_does_not_move_it",

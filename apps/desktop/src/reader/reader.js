@@ -79,20 +79,21 @@
 			: Math.round(Math.abs(root.scrollLeft) / width());
 	// The scroll position along the way the text moves.
 	const at = () => (scrolling ? root.scrollTop : root.scrollLeft);
-	// Where a slide or a fade that has not finished is going, or null. A
-	// slide keeps it until the text reaches it, an instant move replaces
-	// it, or the reader scrolls by hand. No timer clears it, so a slow
-	// slide still counts as going where it is going.
+	// Turns animate in pages only. In continuous scrolling the reader moves
+	// the text themselves all the time, so a turn there moves at once, and
+	// the text moves only two ways: at once by this script, or by the
+	// reader, which is told once it settles.
+	//
+	// In pages: where a slide or a fade that has not finished is going, or
+	// null. A slide keeps it until the text reaches it, and an instant
+	// move replaces it. No timer clears it, so a slow slide still counts as
+	// going where it is going.
 	let aim = null;
-	// The reader has scrolled by hand since the app last moved the text.
-	let touched = false;
-	// Where the app last put the text. A scroll that settles anywhere else
-	// was the reader's own.
+	// In scrolling: where the script last put the text. A scroll that
+	// settles anywhere else was the reader's own.
 	let expect = 0;
-	// The fade's second half, until it runs, and where the text was when
-	// the fade began.
+	// The fade's second half, until it runs.
 	let fading = 0;
-	let fadeFrom = 0;
 	// End a fade that has not reached its second half where the text is,
 	// and bring the page back in.
 	const stopFade = () => {
@@ -111,22 +112,20 @@
 		else root.scrollLeft = x;
 		if (!slide) root.classList.remove("slide");
 		aim = slide ? x : null;
-		expect = slide ? x : at();
-		touched = false;
+		expect = at();
 	};
 	// Fade the page out, go to `x`, and fade it back in.
 	const fadeTo = (x) => {
 		stopFade();
 		root.classList.add("fade", "fading");
 		aim = x;
-		expect = x;
-		touched = false;
-		fadeFrom = at();
 		fading = setTimeout(() => goTo(x, false), 120);
 	};
 	// The layout is changing: an unfinished slide or fade and where it was
-	// going belong to the old layout, so they end here. The held place is
-	// shown in the new one.
+	// going belong to the old layout, so they end here. Only `restore`, and
+	// the two places that set `reflowing` and so have a `restore` coming,
+	// call this, and `restore` shows the held place, which is where the
+	// turn led, and tells it.
 	const forget = () => {
 		stopFade();
 		root.classList.remove("slide");
@@ -258,16 +257,23 @@
 		post({ kind: "place", load, ...settle_place(chosen) });
 	};
 
-	// Show the page holding an offset. In scrolling the offset is brought to
-	// the top of the screen, where a place is read from.
+	// Show the page holding an offset. In scrolling the character at the
+	// offset is brought to the top of the screen, where a place is read
+	// from: offset 0 is a character like any other. The top of the chapter
+	// is a matter of position, not of offset: a character that lies in the
+	// page's top margin is shown with the margin, from the very top. An
+	// offset at the end of the text has no character, and stands for the
+	// end, as in pages.
 	const showOffset = (offset) => {
 		show(pageOfOffset(offset));
-		const at = scrolling && offset > 0 && offset < length ? locate(offset) : null;
+		const at = scrolling && offset < length ? locate(offset) : null;
 		if (at) {
 			const range = document.createRange();
 			range.setStart(at[0], at[1]);
 			range.collapse(true);
-			goTo(root.scrollTop + range.getBoundingClientRect().top, false);
+			const target = root.scrollTop + range.getBoundingClientRect().top;
+			const margin = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+			goTo(target <= margin ? 0 : target, false);
 		}
 	};
 
@@ -320,9 +326,9 @@
 			return true;
 		},
 		// Turn by `by` pages, or in scrolling by a screenful less a line, so
-		// the eye keeps its place. `smooth` uses the reader's page turn: a
-		// slide, a fade or none, and none when the system asks for less
-		// motion.
+		// the eye keeps its place. `smooth` uses the reader's page turn in
+		// pages: a slide, a fade or none, and none when the system asks for
+		// less motion. In scrolling a turn always moves at once.
 		//
 		// The answer is the new place, so the shell learns of the turn and
 		// where it led in one step. "" means the chapter's edge. The place is
@@ -339,7 +345,7 @@
 			const before = at();
 			let target;
 			if (scrolling) {
-				const from = aim === null ? before : aim;
+				const from = before;
 				const line = parseFloat(getComputedStyle(root).lineHeight) || 24;
 				const most = Math.max(0, root.scrollHeight - height());
 				target = Math.max(0, Math.min(most, from + by * Math.max(40, height() - line)));
@@ -354,7 +360,7 @@
 			// The shell says when the system asks for less motion. WebKitGTK
 			// does not tell the page itself.
 			const motion = smooth && setting("--motion") !== "none" && matchMedia("(prefers-reduced-motion: no-preference)").matches;
-			const kind = motion ? setting("--turn") : "none";
+			const kind = motion && !scrolling ? setting("--turn") : "none";
 			if (kind === "slide" || kind === "fade") {
 				goTo(before, false);
 				if (kind === "slide") goTo(target, true);
@@ -413,13 +419,11 @@
 
 	// Scrolling settles 150 ms after its last step. In scrolling, a scroll
 	// by wheel, keys or scroll bar is a move, reported where it settles.
-	// Where the app put the text was reported when it was put there, and a
-	// reflow keeps the held place. While a slide is under way its end is
-	// the place, however long it takes, unless the reader scrolls by hand.
+	// Where the script put the text was reported when it was put there, and
+	// a reflow keeps the held place. In pages, a slide has ended when the
+	// text reaches its end.
 	let scrolled = 0;
 	const settled = () => {
-		if (aim !== null && !touched) return;
-		aim = null;
 		if (!scrolling || !ready || !landed || reflowing) return;
 		if (Math.abs(at() - expect) < 1) return;
 		expect = at();
@@ -428,41 +432,10 @@
 	addEventListener(
 		"scroll",
 		() => {
-			// A slide has ended when the text reaches its end.
 			if (aim !== null && !fading && Math.abs(at() - aim) < 1) aim = null;
-			// Nothing of the app's moves the text while a fade waits for its
-			// second half, so a move then is the reader's own: the fade ends
-			// where the reader has put the text.
-			if (fading && Math.abs(at() - fadeFrom) >= 1) {
-				stopFade();
-				aim = null;
-				touched = true;
-			}
+			if (!scrolling) return;
 			clearTimeout(scrolled);
 			scrolled = setTimeout(settled, 150);
-		},
-		true,
-	);
-	// Input that scrolls the page by hand.
-	// Input that scrolls the text itself ends an unfinished slide or fade
-	// where the text is, at once, so whatever comes next counts from there.
-	// A press that may be a tap only marks the input, since a tap turns the
-	// page and the turn counts from where the slide is going. In pages the
-	// root cannot be scrolled by hand, so nothing is ended there.
-	const byHand = (scrolls) => {
-		if (scrolls && scrolling && (aim !== null || fading)) goTo(at(), false);
-		touched = true;
-	};
-	const options = { capture: true, passive: true };
-	addEventListener("wheel", () => byHand(true), options);
-	addEventListener("touchmove", () => byHand(true), options);
-	addEventListener("touchstart", () => byHand(false), options);
-	// A press on the scroll bar, which lies outside the client area.
-	addEventListener("pointerdown", (event) => byHand(event.clientX >= root.clientWidth || event.clientY >= root.clientHeight), options);
-	addEventListener(
-		"keydown",
-		(event) => {
-			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) byHand(true);
 		},
 		true,
 	);

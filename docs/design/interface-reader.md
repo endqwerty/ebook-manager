@@ -131,6 +131,12 @@ Four are built in. The reader can add their own.
   not the interface language.
 - The turn is a slide of the whole page over the platform's standard duration.
   The reader can choose a cross-fade or none. There is no curl.
+- In continuous scrolling a turn moves the text at once, whatever the reader
+  chose for the page turn, and the setting's row says it applies in pages. In
+  scrolling the reader moves the text themselves all the time, and three
+  reviews each found another way an animated turn and that scrolling
+  interfered. An animation designed against the reader's own scrolling is
+  [#110](https://github.com/endqwerty/ebook-manager/issues/110).
 - When the system asks for less motion the turn is none, whatever the reader
   chose.
 

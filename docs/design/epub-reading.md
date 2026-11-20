@@ -592,18 +592,20 @@ over anything the book's sheets say for the same property.
   as a share, so a reflow keeps that share and neither moves the reader to
   an end nor back to the top. What is saved for it is still the offset of
   the first text after it (`scrolling_holds_a_place_without_text_where_it_is`).
-  Pages keep their own rule for a text-less page in the middle.
-  A turn moves a screenful less a line. A scroll by wheel, key or scroll
-  bar is a move, reported 150 ms after its last step. A scroll the script
-  made itself, for a turn, a landing or a reflow, is not reported again
-  when it settles. Input that scrolls by hand (a wheel, a touch drag, a
-  press on the scroll bar, a scrolling key) ends an unfinished slide or
-  fade at once where the text is, so a turn made straight after counts
-  from there (`a_hand_scroll_ends_a_slide_at_once`). A press that may be a
-  tap does not, since a tap turns the page. A move of the text while a
-  fade waits for its second half also ends it, and the scroll is the move
-  (`a_hand_scroll_during_an_animation_is_the_move`). In pages the root
-  cannot be scrolled by hand.
+  Pages keep their own rule for a text-less page in the middle. A place
+  with text is held by its first character, offset 0 included: a chapter
+  that opens with pictures keeps its first character at the top through a
+  reflow (`scrolling_holds_the_first_character_after_pictures`). A
+  character in the page's top margin is shown from the very top.
+  A turn moves a screenful less a line, at once, whatever the page-turn
+  setting. In scrolling the reader moves the text themselves all the time,
+  and three reviews each found another way an animated turn and that
+  scrolling interfered, so the page turn applies to pages only; an
+  animation designed for scrolling is [#110](https://github.com/endqwerty/ebook-manager/issues/110). The text then moves
+  only two ways: at once by the script, for a landing, a turn or a
+  reflow, which is told when it is made; or by the reader, by wheel, key
+  or scroll bar, which is a move told 150 ms after its last step
+  (`in_scrolling_a_turn_moves_at_once`).
 - **The text column** is centred and never wider than 34 em, about 68
   characters, whatever the window's width.
 - **Page colours** are the four in [the reader design](interface-reader.md#page-colours),
@@ -688,15 +690,18 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   only then starts the animation, all in one task, so nothing is drawn in
   between. A turn made while another is still animating starts from where
   that one is going. A slide counts as going there until the text reaches
-  it, an instant move replaces it, or the reader scrolls by hand, so no
-  timer decides it and a slow slide changes nothing. When the animation
+  it or an instant move replaces it, so no timer decides it and a slow slide changes nothing. When the animation
   ends nothing more is reported. `two_quick_turns_land_two_pages_on` checks
   two turns made before the first slide or fade ends. A change of layout
   ends an unfinished animation, and a turn made after the change and
   before the held place is shown in the new layout first shows it there
-  and counts from it (`a_turn_after_a_reflow_counts_from_the_held_place`). The
+  and counts from it (`a_turn_after_a_reflow_counts_from_the_held_place`).
+  That is the only way an animation ends early in pages, where the reader
+  cannot scroll the text by hand, and the reflow then shows and tells the
+  place the turn led to
+  (`an_animation_ended_by_a_reflow_leaves_the_page_at_its_place`). The
   view test `an_animated_turn_answers_with_the_place_it_leads_to` checks
-  each animation in pages and in scrolling.
+  each animation. Turns animate in pages only.
 - **A move's place is taken for the chapter it was made in**, whatever is
   showing or loading when it arrives. A turn answered after the next chapter
   was asked for is still that chapter's place, and is what is saved until

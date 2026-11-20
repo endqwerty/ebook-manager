@@ -459,6 +459,11 @@ pub fn build(
             change(&|s| s.turn = chosen);
         });
     }
+    // The turn animates in pages only: in continuous scrolling a turn
+    // moves at once. The row stays, and says so.
+    let in_pages = "In pages. In continuous scrolling a turn moves at once.";
+    turn.set_tooltip_text(Some(in_pages));
+    turn.update_property(&[gtk::accessible::Property::Description(in_pages)]);
     second.append(&row("Page turn", &turn));
 
     let follow = gtk::Switch::new();
