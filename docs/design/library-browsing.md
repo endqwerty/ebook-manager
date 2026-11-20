@@ -475,6 +475,8 @@ flowchart LR
   once, and if they have moved again by then the view stays where they
   put it. The scroll correction that follows a placement a frame or two
   later gives way the same way, to any wheel, pointer or key in the books.
+  A new GTK view can be mapped before it has an allocated viewport. The
+  window waits for that allocation before asking it to scroll.
 - **A command acts on the books selected when it is given.** It takes
   their IDs then, and the places whose rows have not arrived, and acts on
   those whatever is selected by the time the rows come.
@@ -524,7 +526,9 @@ flowchart LR
   Return and Control+Return sort, and the Menu key opens the header's menu.
   Show, hide, move and width commands update the live columns. Book and
   column context menus are owned by an overlay around the window content.
-  A cell or header supplies the pointing rectangle. The window dismisses
+  A cell or header supplies the pointing rectangle. The overlay reuses the
+  popover so its native surface stays available to pending tooltip queries.
+  The window dismisses
   menus before a model swap or layout replacement and when the width changes. Width commands step by 24 within
   the same saved-width limits as a drag.
   A list row's separator is the app's own line in the platform's border

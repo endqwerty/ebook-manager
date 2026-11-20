@@ -16,11 +16,6 @@ use std::cell::{Cell, RefCell};
 
 type Command = Box<dyn Fn(&Rc<Library>)>;
 
-struct ContextPopover {
-    menu: gtk::PopoverMenu,
-    previous_focus: Option<glib::WeakRef<gtk::Widget>>,
-}
-
 struct Library {
     window: adw::ApplicationWindow,
     store: store::Store,
@@ -28,7 +23,8 @@ struct Library {
     thumbs: Thumbs,
     scrolled: gtk::ScrolledWindow,
     overlay: gtk::Overlay,
-    context_popover: RefCell<Option<ContextPopover>>,
+    context_popover: gtk::PopoverMenu,
+    context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     menu_buttons: [gtk::MenuButton; 3],
     /// As wide as the books' area and no taller than nothing: it reports
     /// each change of width, which a scrolled window does not.
@@ -536,17 +532,19 @@ impl Library {
         self.show_context_menu(cell, &menu);
     }
 
-    fn close_context_menu(&self) {
-        let context = self.context_popover.take();
-        if let Some(context) = context {
-            context.menu.popdown();
-            self.overlay.remove_overlay(&context.menu);
-            if let Some(focus) = context.previous_focus.and_then(|focus| focus.upgrade())
-                && focus.is_mapped()
-            {
-                focus.grab_focus();
-            }
+    fn restore_context_focus(&self) {
+        if let Some(focus) = self.context_focus.take().and_then(|focus| focus.upgrade())
+            && focus.is_mapped()
+        {
+            focus.grab_focus();
         }
+    }
+
+    fn close_context_menu(&self) {
+        if self.context_popover.is_visible() {
+            self.context_popover.popdown();
+        }
+        self.restore_context_focus();
     }
 
     fn close_menus(&self) {
@@ -559,43 +557,22 @@ impl Library {
 
     /// The anchor supplies geometry only. The overlay owns transient menus
     /// because GTK can recycle a book cell or replace its entire view.
-    fn show_context_menu(self: &Rc<Self>, anchor: &impl IsA<gtk::Widget>, menu: &gio::Menu) {
+    fn show_context_menu(&self, anchor: &impl IsA<gtk::Widget>, menu: &gio::Menu) {
         let Some(bounds) = anchor.compute_bounds(&self.overlay) else {
             return;
         };
         self.close_menus();
-        let popover = gtk::PopoverMenu::from_model(Some(menu));
-        self.overlay.add_overlay(&popover);
-        popover.set_has_arrow(false);
-        popover.set_halign(gtk::Align::Start);
+        let popover = &self.context_popover;
+        popover.set_menu_model(Some(menu));
         popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
             bounds.x() as i32,
             bounds.y() as i32,
             bounds.width() as i32,
             bounds.height() as i32,
         )));
-        let weak = Rc::downgrade(self);
-        popover.connect_closed(move |popover| {
-            let (popover, weak) = (popover.clone(), weak.clone());
-            glib::idle_add_local_once(move || {
-                if let Some(library) = weak.upgrade() {
-                    let current = library
-                        .context_popover
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|context| context.menu == popover);
-                    if current {
-                        library.close_context_menu();
-                    }
-                }
-            });
-        });
         let previous_focus =
             gtk::prelude::RootExt::focus(&self.window).map(|focus| focus.downgrade());
-        self.context_popover.replace(Some(ContextPopover {
-            menu: popover.clone(),
-            previous_focus,
-        }));
+        self.context_focus.replace(previous_focus);
         popover.popup();
     }
 
@@ -831,6 +808,10 @@ pub fn open(app: &adw::Application) {
         let scrolled = gtk::ScrolledWindow::builder().vexpand(true).build();
         let pages = gtk::Stack::new();
         pages.set_vexpand(true);
+        let context_popover = gtk::PopoverMenu::from_model(gio::MenuModel::NONE);
+        context_popover.set_visible(false);
+        context_popover.set_has_arrow(false);
+        context_popover.set_halign(gtk::Align::Start);
         Library {
             window: window.clone(),
             store: store.clone(),
@@ -838,7 +819,8 @@ pub fn open(app: &adw::Application) {
             thumbs,
             scrolled,
             overlay: gtk::Overlay::new(),
-            context_popover: RefCell::new(None),
+            context_popover,
+            context_focus: RefCell::new(None),
             menu_buttons: [add, main_menu, add_first.clone()],
             width: gtk::DrawingArea::builder().hexpand(true).build(),
             view: RefCell::new(None),
@@ -915,6 +897,20 @@ pub fn open(app: &adw::Application) {
     frame.add_top_bar(&search_bar);
     frame.set_content(Some(&content));
     library.overlay.set_child(Some(&frame));
+    // Reuse the native popup surface. Older GTK can still have a tooltip
+    // query pending when the menu closes.
+    library.overlay.add_overlay(&library.context_popover);
+    let weak = Rc::downgrade(&library);
+    library.context_popover.connect_closed(move |_| {
+        let weak = weak.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(library) = weak.upgrade()
+                && !library.context_popover.is_visible()
+            {
+                library.restore_context_focus();
+            }
+        });
+    });
     window.set_content(Some(&library.overlay));
 
     library.install_actions();
