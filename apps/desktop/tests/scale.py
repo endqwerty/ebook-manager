@@ -14,7 +14,9 @@ import smoke
 from smoke import Atspi, GLib, environment, find, focus, key, stop, walk
 
 BOOKS = 100_000
-IMPORTS = 400
+# Enough books that the import outlasts the driver's own looks on a fast
+# machine: the check needs four gaps between refreshes it saw.
+IMPORTS = 800
 STARTS = 5
 # LIB-70: the library is shown within this long of starting the process.
 LAUNCH_LIMIT = 2.0
