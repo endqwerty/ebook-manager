@@ -707,7 +707,8 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
     then each works, and the view and sort are as left after a restart.
     `apps/desktop/tests/smoke.py`.
 18. When the shelf is resized, then the first fully visible book stays at the
-    top, and when a book is selected then only that spine changes.
+    top as far as the scroll range and keeping keyboard focus visible allow.
+    Selecting a book changes only that spine.
     `apps/desktop/tests/scale.py` narrows and widens deep in the shelf.
     `apps/desktop/tests/smoke.py` checks selection leaves neighbouring spines in place.
 
@@ -802,11 +803,14 @@ same time.
    0.516 s on Ubuntu 26.04. Both runs counted 186 spine widgets against a
    bound of 336. On a width change the window waits for the new scroll range
    before placing the first full book. A later move by the reader cancels
-   that placement. While the focused spine is recycled, the viewport shows
-   focus and the model keeps the book.
+   that placement. The window clamps the new position to keep the focused
+   spine on screen. During import it resolves the top book by ID and
+   restores its offset, including when added books sort above it. While
+   the focused spine is recycled, the viewport shows focus and the model
+   keeps the book. Menu brings it back before opening the book menu.
 
-   The scale driver times each moving frame from the end of GDK layout to
-   after-paint under Xvfb and Cairo. The two original scale runs reached
+   Earlier runs timed paint alone under Xvfb and Cairo, from the end of GDK
+   layout through after-paint. The two original scale runs reached
    25.72 and 25.21 ms on the host and Ubuntu. Both had six frames over
    16.7 ms. Removing each spine's offscreen texture made shadows and grain
    paint again while scrolling. The maximum rose to 51.72 and 38.13 ms.
@@ -814,7 +818,9 @@ same time.
    and flattens the finished spine once per snapshot. The final scale runs
    reached 20.72 ms on the host (4 of 24 frames over 16.7 ms) and 17.14 ms
    on Ubuntu (1 of 24). The no-dropped-frame target remains open. These
-   samples exclude layout and compositor presentation.
+   samples exclude update, layout and compositor presentation. The cache
+   renders cloth at the display scale and lifted height so its grain
+   keeps its size during selection.
 
    Five alternating runs per build used the same 100,000-book fixture and
    wheel gesture. On the host the median of the run maxima fell from 25.90
@@ -822,6 +828,13 @@ same time.
    worst host maximum rose from 26.65 to 29.59 ms. On Ubuntu the median
    maximum fell from 34.75 to 21.51 ms, the worst from 62.16 to 29.73 ms,
    and frames over budget from 29/98 to 21/111.
+
+   The driver now measures the whole GTK frame, from before update through
+   after paint, for each frame in which the wheel moved the adjustment.
+   Under Xvfb with Cairo the host maximum was 19.55 ms, with 4 of 23 frames
+   over 16.7 ms. On Ubuntu 26.04 with two CPUs the maximum was 19.36 ms,
+   with 4 of 24 over budget. Compositor presentation time is unavailable in
+   this session.
 
    Over five release runs, packing one
    million 24-unit spines into a width of 999 took a median of 0.846 ms on

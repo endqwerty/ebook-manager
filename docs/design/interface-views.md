@@ -284,7 +284,8 @@ it. So the shared core supplies, for the current sort, the thickness of every
 book in order as one compact list and the positions where groups begin. A shell
 computes row breaks for its width from that list without loading the books. On
 a resize it recomputes the breaks and keeps the first fully visible book at the
-top. Each shell must show a grouped shelf of 100,000 books scrolling, resizing
+top, moving it just far enough to keep the focused spine visible. Each shell
+must show a grouped shelf of 100,000 books scrolling, resizing
 and extending a selection without a dropped frame before the shelf ships there.
 
 ## Decisions made without asking
