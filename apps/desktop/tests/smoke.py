@@ -23,6 +23,7 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi, GLib
 
 SCREEN = (1100, 800)
+REGISTRY = "org.a11y.atspi.Registry"
 
 BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -460,6 +461,22 @@ def environment(root, **extra):
 
 
 def launch_app(binary, env):
+    subprocess.run(
+        ["gdbus", "wait", "--session", "--timeout=10", REGISTRY],
+        env=env,
+        check=True,
+    )
+    # The registry claims its name before setting up X11 and exporting its root.
+    subprocess.run(
+        [
+            "gdbus", "call", "--session", "--timeout=10", "--dest", REGISTRY,
+            "--object-path", "/org/a11y/atspi/accessible/root",
+            "--method", "org.a11y.atspi.Accessible.GetChildren",
+        ],
+        env=env,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
     with (Path(env["HOME"]) / "app-stderr.log").open("a") as log:
         return subprocess.Popen([binary], env=env, stderr=log)
 
@@ -1151,7 +1168,6 @@ def desktop(body):
         Path("/usr/libexec/at-spi2-registryd"),
     ]
     registry = next(p for p in registries if p.exists())
-    proc = subprocess.Popen([registry])
     # Full screen is a request to the window manager, so the session needs one.
     manager = subprocess.Popen(["openbox"])
     try:
@@ -1163,12 +1179,16 @@ def desktop(body):
         ).stdout.strip() in ("", "0"):
             assert time.monotonic() < deadline, "openbox did not start"
             time.sleep(0.1)
-        body(Path(os.environ["HOME"]))
+        proc = subprocess.Popen([registry])
+        try:
+            body(Path(os.environ["HOME"]))
+            assert proc.poll() is None, f"AT-SPI registry exited with {proc.returncode}"
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
     finally:
         manager.terminate()
         manager.wait(timeout=10)
-        proc.terminate()
-        proc.wait(timeout=10)
         check_diagnostics(Path(os.environ["HOME"]))
 
 
@@ -1206,12 +1226,13 @@ def private_session(script, arguments):
         services.mkdir()
         config = Path(temp) / "bus.conf"
         config.write_text(BUS_CONFIG.format(services=escape(str(services))))
+        # Keep Xvfb from resetting the display when the last X client exits.
         subprocess.run(
             [
                 "xvfb-run",
                 "-a",
                 "-s",
-                f"-screen 0 {SCREEN[0]}x{SCREEN[1]}x24 -nolisten tcp",
+                f"-screen 0 {SCREEN[0]}x{SCREEN[1]}x24 -nolisten tcp -noreset",
                 "dbus-run-session",
                 f"--config-file={config}",
                 "--",
