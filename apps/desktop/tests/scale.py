@@ -566,8 +566,7 @@ def run(binary, fixture, root):
                 smoke.xd("mousemove", "--window", wid, 60, 400, "click", "--repeat", 24, "--delay", 12, 5)
                 wait_for_scroll(body, 1, before, first_only=True)
                 wait_for_wheel_stop(body)
-                after = first_row_titles(body, 1)
-                assert after and after[0] != before[0], (before, after)
+                after = wait_for_scroll(body, 1, before, first_only=True)
                 scrolled = settled()
                 # Still moved once the view is still: a view put back after
                 # the wheel would match what was there before it.
