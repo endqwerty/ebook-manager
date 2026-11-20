@@ -74,8 +74,13 @@
 			: Math.round(Math.abs(root.scrollLeft) / width());
 	// The scroll position along the way the text moves.
 	const at = () => (scrolling ? root.scrollTop : root.scrollLeft);
-	// Where a slide or a fade that has not finished is going, or null.
+	// Where a slide or a fade that has not finished is going, or null. A
+	// slide keeps it until the text reaches it, an instant move replaces
+	// it, or the reader scrolls by hand. No timer clears it, so a slow
+	// slide still counts as going where it is going.
 	let aim = null;
+	// The reader has scrolled by hand since the app last moved the text.
+	let touched = false;
 	// Where the app last put the text. A scroll that settles anywhere else
 	// was the reader's own.
 	let expect = 0;
@@ -86,12 +91,15 @@
 	const goTo = (x, smooth) => {
 		clearTimeout(fading);
 		root.classList.remove("fading");
-		root.classList.toggle("slide", !!smooth);
+		// A slide to where the text already is has nothing to wait for.
+		const slide = smooth && Math.abs(at() - x) >= 1;
+		root.classList.toggle("slide", slide);
 		if (scrolling) root.scrollTop = x;
 		else root.scrollLeft = x;
-		if (!smooth) root.classList.remove("slide");
-		aim = smooth ? x : null;
-		expect = smooth ? x : at();
+		if (!slide) root.classList.remove("slide");
+		aim = slide ? x : null;
+		expect = slide ? x : at();
+		touched = false;
 	};
 	// Fade the page out, go to `x`, and fade it back in.
 	const fadeTo = (x) => {
@@ -99,6 +107,7 @@
 		root.classList.add("fade", "fading");
 		aim = x;
 		expect = x;
+		touched = false;
 		fading = setTimeout(() => goTo(x, false), 120);
 	};
 	// Show page `n` at once.
@@ -363,12 +372,14 @@
 		if (link && event.key === "Enter") link.click();
 	});
 
-	// Scrolling settles 150 ms after its last step. A slide has finished by
-	// then. In scrolling, a scroll by wheel, keys or scroll bar is a move,
-	// reported where it settles. Where the app put the text was reported
-	// when it was put there, and a reflow keeps the held place.
+	// Scrolling settles 150 ms after its last step. In scrolling, a scroll
+	// by wheel, keys or scroll bar is a move, reported where it settles.
+	// Where the app put the text was reported when it was put there, and a
+	// reflow keeps the held place. While a slide is under way its end is
+	// the place, however long it takes, unless the reader scrolls by hand.
 	let scrolled = 0;
 	const settled = () => {
+		if (aim !== null && !touched) return;
 		aim = null;
 		if (!scrolling || !ready || !landed || reflowing) return;
 		if (Math.abs(at() - expect) < 1) return;
@@ -378,8 +389,22 @@
 	addEventListener(
 		"scroll",
 		() => {
+			// A slide has ended when the text reaches its end.
+			if (aim !== null && Math.abs(at() - aim) < 1) aim = null;
 			clearTimeout(scrolled);
 			scrolled = setTimeout(settled, 150);
+		},
+		true,
+	);
+	// Input that scrolls the page by hand.
+	const byHand = () => {
+		touched = true;
+	};
+	for (const kind of ["wheel", "pointerdown", "touchstart"]) addEventListener(kind, byHand, { capture: true, passive: true });
+	addEventListener(
+		"keydown",
+		(event) => {
+			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) byHand();
 		},
 		true,
 	);

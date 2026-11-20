@@ -308,6 +308,32 @@ def capture(title, out):
     subprocess.run(["import", "-window", wid, str(out)], check=True)
 
 
+def steady(title, out):
+    """Captures a window once what it shows has stopped changing, as after a
+    page turn's slide or fade, however long that takes."""
+    spare = out.with_name(out.stem + "-check" + out.suffix)
+    capture(title, out)
+    deadline = time.monotonic() + 15
+    while True:
+        capture(title, spare)
+        # ImageMagick 7 names its command `magick compare`, and 6 `compare`.
+        command = ["magick", "compare"] if shutil.which("magick") else ["compare"]
+        differing = subprocess.run(
+            [*command, "-metric", "AE", str(out), str(spare), "null:"],
+            capture_output=True,
+            text=True,
+        ).stderr.split()
+        spare.replace(out)
+        if differing and differing[0] == "0":
+            return
+        assert time.monotonic() < deadline, f"{title} never stopped changing"
+
+
+def status():
+    """The line under the reader's page."""
+    return find("Chapter ", "label", contains=True).get_name()
+
+
 def words(image):
     """The text on a screenshot. The page is drawn by a web view, so the
     driver reads it the way a person does."""
@@ -395,10 +421,21 @@ def settings(evidence):
         ["import", "-window", "root", str(evidence / "text-settings.png")], check=True
     )
     click("More")
-    find("Reset", "button")
+    reset = find("Reset", "button")
     time.sleep(0.5)
     subprocess.run(
         ["import", "-window", "root", str(evidence / "text-settings-more.png")], check=True
+    )
+    # The second level scrolls. Every control in it is reached from the
+    # keyboard, and the focused one is scrolled into view.
+    for _ in range(40):
+        if reset.get_state_set().contains(Atspi.StateType.FOCUSED):
+            break
+        key("Tab")
+    assert reset.get_state_set().contains(Atspi.StateType.FOCUSED), "Tab never reached Reset"
+    time.sleep(0.5)
+    subprocess.run(
+        ["import", "-window", "root", str(evidence / "text-settings-reset.png")], check=True
     )
     click("Back")
     for _ in range(3):
@@ -442,11 +479,17 @@ def keys(evidence):
     title = "The Lantern Atlas · Revised"
 
     def press(key):
+        # A turn shows on the line under the page as soon as the reader has
+        # it. The page may still be sliding then; `page` waits for that.
+        before = status()
         send_key(key)
-        time.sleep(0.4)
+        deadline = time.monotonic() + 15
+        while status() == before:
+            assert time.monotonic() < deadline, f"{key} did not turn from {before!r}"
+            time.sleep(0.05)
 
     def page(name, blank=False):
-        capture(title, evidence / name)
+        steady(title, evidence / name)
         found = markers(evidence / name)
         assert found or blank, name
         return found
@@ -498,7 +541,7 @@ def keys(evidence):
         flush=True,
     )
     windowed = size(title)
-    press("F11")
+    send_key("F11")
     find("Leave full screen", "button")
     assert size(title) == SCREEN, size(title)
     capture(title, evidence / "full-screen.png")
@@ -518,13 +561,13 @@ def keys(evidence):
     assert chapter(2), "Right never reached chapter two in full screen"
     press("Left")
     find("Chapter 1 of 2", contains=True)
-    press("Escape")
+    send_key("Escape")
     find("Full screen", "button")
     assert size(title) == windowed, (size(title), windowed)
     click("Full screen")
     find("Leave full screen", "button")
     assert size(title) == SCREEN, size(title)
-    press("F11")
+    send_key("F11")
     find("Full screen", "button")
     assert size(title) == windowed, (size(title), windowed)
     print("PASS full screen from F11 and its button, left with Escape and F11", flush=True)
@@ -847,8 +890,7 @@ def run(binary, evidence, root):
             xd("key", "Right")
             time.sleep(0.4)
         find("Page 4 of", contains=True)
-        time.sleep(0.6)
-        capture("The Lantern Atlas · Revised", evidence / "scrolled.png")
+        steady("The Lantern Atlas · Revised", evidence / "scrolled.png")
         before = markers(evidence / "scrolled.png")
         assert before and before[0] > 0, before
         # End the first process with the reader still open after turning settled.

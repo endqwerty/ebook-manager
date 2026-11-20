@@ -1491,6 +1491,91 @@ fn an_animated_turn_answers_with_the_place_it_leads_to() -> Outcome {
     Ok(())
 }
 
+/// Two turns made in quick succession, the second before the first slide
+/// ends, land two pages on and report two places in order, in pages and in
+/// scrolling.
+fn two_quick_turns_land_two_pages_on() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    for flow in ["paged", "scroll"] {
+        stage
+            .view
+            .set_style(&[("--flow", flow), ("--turn", "slide")]);
+        // Where two plain turns lead.
+        stage.open(0, Landing::Start)?;
+        let (Some(first), Some(second)) = (stage.turned(1, false)?, stage.turned(1, false)?) else {
+            return Err(format!("{flow}: no plain turns").into());
+        };
+        let landed = stage.scrolled()?;
+        // In one task, so the second turn is surely made before the first
+        // slide has moved the text at all.
+        stage.open(0, Landing::Start)?;
+        let probe = stage.app("const r = document.documentElement; const at = () => Math.round(r.classList.contains('scroll') ? r.scrollTop : r.scrollLeft); const before = at(); const a = __reader.turn(1, true); const mid = at(); const b = __reader.turn(1, true); return [before, mid, a.split(',')[0], b.split(',')[0]].join(' ')")?;
+        let probe: Vec<&str> = probe.split(' ').collect();
+        check!(
+            probe[0] == probe[1]
+                && probe[2] == first.0.to_string()
+                && probe[3] == second.0.to_string(),
+            "{flow}: two turns in one task answered {probe:?}, plain turns {first:?} {second:?}"
+        );
+        pause(Duration::from_millis(1200));
+        check!(
+            stage.scrolled()? == landed,
+            "{flow}: two turns in one task ended at {}, not {landed}",
+            stage.scrolled()?
+        );
+        // Through the view, as the reader's keys turn: two calls with no
+        // wait between them.
+        stage.open(0, Landing::Start)?;
+        stage.events.borrow_mut().clear();
+        let answers = Rc::new(RefCell::new(Vec::new()));
+        for _ in 0..2 {
+            let answers = answers.clone();
+            stage
+                .view
+                .turn(1, true, move |moved| answers.borrow_mut().push(moved));
+        }
+        check!(
+            spin(|| answers.borrow().len() == 2, Duration::from_secs(20)),
+            "{flow}: no answer to two turns"
+        );
+        check!(
+            *answers.borrow() == [true, true],
+            "{flow}: two turns answered {:?}",
+            answers.borrow()
+        );
+        pause(Duration::from_millis(1200));
+        let places: Vec<(u32, u32, u32, bool)> = stage
+            .events
+            .borrow()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Place {
+                    offset,
+                    page,
+                    count,
+                    moved,
+                    ..
+                } => Some((*offset, *page, *count, *moved)),
+                _ => None,
+            })
+            .collect();
+        check!(
+            places.len() == 2
+                && (places[0].0, places[0].1) == first
+                && (places[1].0, places[1].1) == second
+                && places[0].2 < places[1].2
+                && places.iter().all(|p| p.3),
+            "{flow}: two turns told {places:?}, plain turns {first:?} {second:?}"
+        );
+        check!(
+            stage.scrolled()? == landed,
+            "{flow}: two turns ended at {}, not {landed}",
+            stage.scrolled()?
+        );
+    }
+    Ok(())
+}
+
 /// A book through the real sandboxed helper, as the reader serves it.
 struct Helper(ebook_reader::Book);
 
@@ -1994,6 +2079,10 @@ const TESTS: &[Test] = &[
     (
         "an_animated_turn_answers_with_the_place_it_leads_to",
         an_animated_turn_answers_with_the_place_it_leads_to,
+    ),
+    (
+        "two_quick_turns_land_two_pages_on",
+        two_quick_turns_land_two_pages_on,
     ),
     (
         "a_move_carries_its_place_and_a_reflow_does_not_move_it",

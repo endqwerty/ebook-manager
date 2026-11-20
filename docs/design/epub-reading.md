@@ -663,7 +663,11 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   puts the text at the destination, reads the place there, puts it back and
   only then starts the animation, all in one task, so nothing is drawn in
   between. A turn made while another is still animating starts from where
-  that one is going. When the animation ends nothing more is reported. The
+  that one is going. A slide counts as going there until the text reaches
+  it, an instant move replaces it, or the reader scrolls by hand, so no
+  timer decides it and a slow slide changes nothing. When the animation
+  ends nothing more is reported. `two_quick_turns_land_two_pages_on` checks
+  two turns made before the first slide ends. The
   view test `an_animated_turn_answers_with_the_place_it_leads_to` checks
   each animation in pages and in scrolling.
 - **A move's place is taken for the chapter it was made in**, whatever is

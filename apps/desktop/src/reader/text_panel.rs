@@ -121,6 +121,11 @@ fn rgb(colour: &gdk::RGBA) -> Rgb {
     )
 }
 
+/// The tallest the second level grows before it scrolls, in pixels. A
+/// reader window at its default height of 640 has about 540 under its
+/// controls, less the popover's arrow and padding.
+const MORE_HEIGHT: i32 = 460;
+
 /// Build the popover. `changed` is called after every change, with the
 /// settings already updated.
 pub fn build(
@@ -156,7 +161,23 @@ pub fn build(
         page.set_width_request(300);
     }
     stack.add_named(&first, Some("first"));
-    stack.add_named(&second, Some("more"));
+    // The second level is taller than a small screen, so it scrolls. Its
+    // most is what fits under the controls of a reader window at its
+    // default height of 640. Focus moving through it scrolls the focused
+    // control into view.
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(MORE_HEIGHT)
+        .child(
+            &gtk::Viewport::builder()
+                .scroll_to_focus(true)
+                .child(&second)
+                .build(),
+        )
+        .build();
+    stack.add_named(&scroller, Some("more"));
 
     let scope = gtk::Label::new(Some("For every book"));
     scope.set_xalign(0.0);
