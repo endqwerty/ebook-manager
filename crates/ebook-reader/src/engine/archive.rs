@@ -89,6 +89,13 @@ impl Archive {
         self.index_of(name).is_some()
     }
 
+    /// The unpacked size the archive's directory states for an entry. The
+    /// book wrote that number, so it is a claim and not a measurement.
+    pub fn stated_size(&mut self, name: &str) -> Option<u64> {
+        let index = self.index_of(name)?;
+        self.zip.by_index_raw(index).ok().map(|raw| raw.size())
+    }
+
     /// Unpack one entry, refusing more than `cap` bytes of output.
     pub fn read(&mut self, name: &str, cap: u64) -> Result<Vec<u8>, WireError> {
         let index = self

@@ -1,6 +1,6 @@
 //! The helper's reply format. Private to this crate's two halves.
 
-use crate::model::{Chapter, ChapterInfo, Metadata, Rgb, TocEntry};
+use crate::model::{Chapter, ChapterContent, ChapterInfo, Metadata, ResourceKind, Rgb, TocEntry};
 use serde::{Deserialize, Serialize};
 
 /// Where the sandbox places the helper and the book.
@@ -20,6 +20,280 @@ pub enum Payload {
     Book(BookOutline),
     Chapter(Chapter),
     Survey(WireSurvey),
+    Content(ChapterContent),
+    Resource(WireResource),
+}
+
+/// A resource as the helper sends it. The host checks the bytes against the
+/// kind before it becomes a [`crate::Resource`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WireResource {
+    pub kind: ResourceKind,
+    /// The bytes in base64, which costs a third more than the bytes where a
+    /// JSON array of numbers would cost three times more.
+    pub base64: String,
+}
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Every element the markup writer writes. The host accepts no other.
+pub const MARKUP_ELEMENTS: [&str; 71] = [
+    "a",
+    "abbr",
+    "address",
+    "article",
+    "aside",
+    "b",
+    "bdi",
+    "bdo",
+    "blockquote",
+    "br",
+    "caption",
+    "cite",
+    "code",
+    "col",
+    "colgroup",
+    "dd",
+    "del",
+    "details",
+    "dfn",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "i",
+    "img",
+    "ins",
+    "kbd",
+    "li",
+    "main",
+    "mark",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "q",
+    "rp",
+    "rt",
+    "ruby",
+    "s",
+    "samp",
+    "section",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "summary",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "time",
+    "tr",
+    "u",
+    "ul",
+    "var",
+    "wbr",
+];
+/// Attributes the writer copies from the book, by the name it writes.
+pub const MARKUP_ATTRIBUTES: [&str; 11] = [
+    "id",
+    "class",
+    "lang",
+    "dir",
+    "title",
+    "alt",
+    "colspan",
+    "rowspan",
+    "start",
+    "value",
+    "data-epub-type",
+];
+
+/// `/c/<n>` with an optional `#<anchor>`, or `/r/<n>`: the only addresses
+/// the writer writes.
+fn book_address(value: &str, prefix: &str, fragment: bool) -> bool {
+    let Some(rest) = value.strip_prefix(prefix) else {
+        return false;
+    };
+    let (digits, anchor) = match rest.split_once('#') {
+        Some((d, a)) if fragment => (d, a),
+        Some(_) => return false,
+        None => (rest, ""),
+    };
+    !digits.is_empty()
+        && digits.len() <= 10
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && anchor
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'%'))
+}
+
+/// The UTF-16 length of the text in markup the helper wrote, or `None` when
+/// the markup is not in the writer's form. The form is small enough to
+/// check without an XML parser:
+///
+/// - text, with `&amp;`, `&lt;` and `&gt;` as its only entities, no `>`, and
+///   no control character but tab and line feed;
+/// - `<name attr="value" ...>`, the same ending in `/>`, and `</name>`, with
+///   one space before each attribute and values in double quotes;
+/// - `name` from [`MARKUP_ELEMENTS`]; `attr` from [`MARKUP_ATTRIBUTES`], or
+///   `href` or `data-external` on `a`, or `src` on `img`, none twice;
+/// - `href` only as `/c/<n>` or `/c/<n>#<anchor>`, and `src` only as `/r/<n>`;
+/// - in a value, no `<`, `>`, `"` or control character, and the entities
+///   above plus `&quot;`.
+///
+/// Comments, CDATA sections, processing instructions, declarations,
+/// namespace declarations, carriage returns and character references are
+/// outside it. Nesting is not checked: the view's XML parser refuses markup
+/// that is not balanced.
+pub fn markup_text_units(markup: &str) -> Option<u32> {
+    fn plain(c: char) -> bool {
+        !c.is_control() && !matches!(c, '\u{feff}' | '\u{fffe}' | '\u{ffff}')
+    }
+    fn entity<'a>(rest: &'a str, allowed: &[&str]) -> Option<&'a str> {
+        let found = allowed.iter().find(|e| rest.starts_with(**e))?;
+        Some(&rest[found.len()..])
+    }
+    /// A name at the start of `rest`, and what follows it.
+    fn name(rest: &str) -> Option<(&str, &str)> {
+        let end = rest
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+            .unwrap_or(rest.len());
+        (end > 0).then(|| rest.split_at(end))
+    }
+    /// The rest after one tag that starts at `<`.
+    fn tag(rest: &str) -> Option<&str> {
+        let rest = &rest[1..];
+        if let Some(end) = rest.strip_prefix('/') {
+            let (element, rest) = name(end)?;
+            return MARKUP_ELEMENTS
+                .contains(&element)
+                .then(|| rest.strip_prefix('>'))?;
+        }
+        let (element, mut rest) = name(rest)?;
+        if !MARKUP_ELEMENTS.contains(&element) {
+            return None;
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        loop {
+            if let Some(done) = rest.strip_prefix("/>").or_else(|| rest.strip_prefix('>')) {
+                return Some(done);
+            }
+            let (attribute, after) = name(rest.strip_prefix(' ')?)?;
+            let known = MARKUP_ATTRIBUTES.contains(&attribute)
+                || (element == "a" && matches!(attribute, "href" | "data-external"))
+                || (element == "img" && attribute == "src");
+            if !known || seen.contains(&attribute) {
+                return None;
+            }
+            seen.push(attribute);
+            let value = after.strip_prefix("=\"")?;
+            rest = value;
+            loop {
+                let c = rest.chars().next()?;
+                rest = match c {
+                    '"' => break,
+                    '<' | '>' => return None,
+                    '&' => entity(rest, &["&amp;", "&lt;", "&gt;", "&quot;"])?,
+                    c if plain(c) => &rest[c.len_utf8()..],
+                    _ => return None,
+                };
+            }
+            let value = &value[..value.len() - rest.len()];
+            let placed = match attribute {
+                "href" => book_address(value, "/c/", true),
+                "src" => book_address(value, "/r/", false),
+                _ => true,
+            };
+            if !placed {
+                return None;
+            }
+            rest = &rest[1..];
+        }
+    }
+    let mut units = 0u32;
+    let mut rest = markup;
+    while let Some(c) = rest.chars().next() {
+        match c {
+            '<' => rest = tag(rest)?,
+            '>' => return None,
+            '&' => {
+                rest = entity(rest, &["&amp;", "&lt;", "&gt;"])?;
+                units = units.checked_add(1)?;
+            }
+            c if plain(c) || c == '\t' || c == '\n' => {
+                units = units.checked_add(c.len_utf16() as u32)?;
+                rest = &rest[c.len_utf8()..];
+            }
+            _ => return None,
+        }
+    }
+    Some(units)
+}
+
+pub fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        for (i, shift) in [18u32, 12, 6, 0].into_iter().enumerate() {
+            if i <= chunk.len() {
+                out.push(BASE64[(n >> shift & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// `None` for anything but canonical padded base64.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let text = text.as_bytes();
+    if !text.len().is_multiple_of(4) {
+        return None;
+    }
+    let value = |c: u8| BASE64.iter().position(|b| *b == c).map(|p| p as u32);
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let last = text.len() / 4;
+    for (at, chunk) in text.chunks(4).enumerate() {
+        let padding = chunk.iter().rev().take_while(|c| **c == b'=').count();
+        if padding > 2 || (padding > 0 && at + 1 != last) {
+            return None;
+        }
+        let mut n = 0u32;
+        for c in &chunk[..4 - padding] {
+            n = n << 6 | value(*c)?;
+        }
+        n <<= 6 * padding as u32;
+        // The bits padding stands in for are 0 in canonical text.
+        if n & ((1u32 << (8 * padding as u32)) - 1) != 0 {
+            return None;
+        }
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&bytes[..3 - padding]);
+    }
+    Some(out)
 }
 
 /// A survey as the helper sends it. The host checks the cover before it
@@ -83,5 +357,26 @@ impl WireError {
     }
     pub fn limit(detail: impl Into<String>) -> Self {
         Self::new(WireErrorKind::Limit, detail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_decode, base64_encode};
+
+    #[test]
+    fn base64_round_trips_every_length_and_refuses_bad_text() {
+        for len in 0..40usize {
+            let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + 250) as u8).collect();
+            assert_eq!(base64_decode(&base64_encode(&bytes)), Some(bytes));
+        }
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+        assert_eq!(base64_encode(b"Ma"), "TWE=");
+        assert_eq!(base64_encode(b"M"), "TQ==");
+        for bad in [
+            "TWF", "TW=u", "T===", "TQ==TWFu", "TW!u", "TWFu\n", "TR==", "TWF=",
+        ] {
+            assert_eq!(base64_decode(bad), None, "{bad}");
+        }
     }
 }

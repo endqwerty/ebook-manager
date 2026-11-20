@@ -195,7 +195,7 @@ pub fn extract(src: &str, max_blocks: usize, resolve: &dyn Fn(&str) -> Option<Li
     }
 }
 
-fn is_remote(reference: &str) -> bool {
+pub(super) fn is_remote(reference: &str) -> bool {
     let r = reference.trim_start().to_ascii_lowercase();
     ["http://", "https://", "ftp://", "//"]
         .iter()
@@ -205,7 +205,7 @@ fn is_remote(reference: &str) -> bool {
 /// Style text that loads something from a remote address: a `url(...)` or
 /// an `@import "..."` whose target is remote. Addresses that only appear in
 /// comments or other text do not count.
-fn css_is_remote(css: &str) -> bool {
+pub(super) fn css_is_remote(css: &str) -> bool {
     let css = css.to_ascii_lowercase();
     let target = |rest: &str, closers: &[char]| -> bool {
         let rest = rest.trim_start();
@@ -230,7 +230,7 @@ fn css_is_remote(css: &str) -> bool {
     false
 }
 
-fn hidden(attrs: &[(String, String)]) -> bool {
+pub(super) fn hidden(attrs: &[(String, String)]) -> bool {
     if attr(attrs, "hidden").is_some() {
         return true;
     }

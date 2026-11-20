@@ -34,6 +34,11 @@ pub struct Limits {
     pub max_cover_bytes: u64,
     /// Most pixels, width times height, a cover image may declare.
     pub max_cover_pixels: u64,
+    /// Largest picture, as unpacked, that a resource request returns.
+    pub max_resource_bytes: u64,
+    /// Most elements and text runs written for one chapter's markup. A longer
+    /// chapter is cut and flagged.
+    pub max_markup_nodes: u32,
 }
 
 impl Default for Limits {
@@ -53,6 +58,8 @@ impl Default for Limits {
             memory_bytes: 768 * MIB,
             max_cover_bytes: 20 * MIB,
             max_cover_pixels: 40_000_000,
+            max_resource_bytes: 32 * MIB,
+            max_markup_nodes: 400_000,
         }
     }
 }
@@ -211,6 +218,11 @@ pub struct ChapterInfo {
     pub title: Option<String>,
     /// `false` for items the book marks as outside the main reading line.
     pub linear: bool,
+    /// The chapter document's unpacked size in bytes as the archive states
+    /// it, capped at the chapter limit, and 0 when the archive lacks it. The
+    /// book controls this number. Use it only to weigh chapters for progress.
+    #[serde(default)]
+    pub size: u32,
 }
 
 /// A place in the book: a chapter and, optionally, a named point inside it.
@@ -265,6 +277,83 @@ impl Chapter {
             out.push('\n');
         }
         out
+    }
+}
+
+/// One chapter as markup for a web view. See [`crate::Book::read_content`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChapterContent {
+    pub index: u32,
+    /// Contents label, else the first heading, else the document title.
+    pub title: Option<String>,
+    /// The children of an XHTML `body`: well-formed XML written by the helper
+    /// from an allow-list of elements and attributes. A place in the book is
+    /// `href="/c/<chapter>#<anchor>"`, a picture is `src="/r/<id>"` with a
+    /// [`ResourceId`], and an address outside the book is the inert attribute
+    /// `data-external`. It is still the book's content: show it only in a
+    /// view that runs no script and loads nothing else.
+    pub markup: String,
+    /// Length of the text in `markup` in UTF-16 code units, the unit a place
+    /// in a chapter is counted in.
+    pub length: u32,
+    /// The book's style sheets for this chapter, in cascade order.
+    pub styles: Vec<ResourceId>,
+    pub language: Option<String>,
+    pub right_to_left: bool,
+    /// The chapter was longer than the limit; the rest was dropped.
+    pub truncated: bool,
+    pub warnings: Vec<ChapterWarning>,
+}
+
+/// Names one file of the book without its path: the position of its item in
+/// the package manifest. It means the same file for as long as the book file
+/// is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ResourceId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResourceKind {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+}
+
+impl ResourceKind {
+    pub fn media_type(self) -> &'static str {
+        match self {
+            ResourceKind::Png => "image/png",
+            ResourceKind::Jpeg => "image/jpeg",
+            ResourceKind::Gif => "image/gif",
+            ResourceKind::Webp => "image/webp",
+        }
+    }
+
+    /// The kind these bytes begin as, by signature.
+    pub fn of(bytes: &[u8]) -> Option<ResourceKind> {
+        match bytes {
+            [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, ..] => Some(ResourceKind::Png),
+            [0xff, 0xd8, 0xff, ..] => Some(ResourceKind::Jpeg),
+            [b'G', b'I', b'F', b'8', b'7' | b'9', b'a', ..] => Some(ResourceKind::Gif),
+            [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => {
+                Some(ResourceKind::Webp)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// One picture from the book: untrusted bytes whose first bytes match `kind`.
+/// Nothing here has decoded them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Resource {
+    pub kind: ResourceKind,
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for Resource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Resource({:?}, {} bytes)", self.kind, self.bytes.len())
     }
 }
 

@@ -3,12 +3,12 @@
 
 use crate::error::{ReaderError, Unsupported};
 use crate::model::{
-    Chapter, ChapterInfo, Limits, Link, Metadata, Position, Survey, SurveyedCover, Thumbnail,
-    TocEntry,
+    Chapter, ChapterContent, ChapterInfo, Limits, Link, Metadata, Position, Resource, ResourceId,
+    ResourceKind, Survey, SurveyedCover, Thumbnail, TocEntry,
 };
 use crate::wire::{
-    BookOutline, Payload, Response, WireError, WireErrorKind, WireSurvey, BOOK_IN_SANDBOX,
-    HELPER_IN_SANDBOX,
+    base64_decode, markup_text_units, BookOutline, Payload, Response, WireError, WireErrorKind,
+    WireSurvey, BOOK_IN_SANDBOX, HELPER_IN_SANDBOX,
 };
 use std::ffi::OsString;
 use std::io::Read;
@@ -427,8 +427,10 @@ impl Book {
         }
         scrub_metadata(&mut metadata);
         let count = chapters.len() as u32;
+        let largest = limits.max_chapter_bytes.min(u64::from(u32::MAX)) as u32;
         for (i, c) in chapters.iter_mut().enumerate() {
             c.index = i as u32;
+            c.size = c.size.min(largest);
             if let Some(t) = &mut c.title {
                 scrub(t);
             }
@@ -483,6 +485,74 @@ impl Book {
                 chapter.index = index;
                 self.scrub_chapter(&mut chapter);
                 Ok(chapter)
+            }
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Read one chapter as markup for a web view: a strict subset of XHTML
+    /// the helper wrote itself, with the book's scripts, styles, frames and
+    /// outside addresses left out. See [`ChapterContent::markup`].
+    pub fn read_content(&self, index: u32) -> Result<ChapterContent, ReaderError> {
+        let count = self.chapters.len() as u32;
+        if index >= count {
+            return Err(ReaderError::ChapterOutOfRange { index, count });
+        }
+        if !self.source.unchanged() {
+            return Err(ReaderError::SourceChanged);
+        }
+        let n = index.to_string();
+        match self.reader.run(Some(&self.source.path), &["content", &n])? {
+            Payload::Content(mut content) => {
+                content.index = index;
+                // No style sheet is served yet, so none is named.
+                content.styles.clear();
+                // The markup is checked to be in the writer's exact form and
+                // its text is counted, because every saved place and search
+                // result rests on the length being the text's own. Nothing
+                // is repaired: a reply that is not in that form is refused.
+                if markup_text_units(&content.markup) != Some(content.length) {
+                    return Err(ReaderError::HelperFailed {
+                        detail: "inconsistent reply".into(),
+                    });
+                }
+                if let Some(t) = &mut content.title {
+                    scrub(t);
+                }
+                if let Some(l) = &mut content.language {
+                    scrub(l);
+                }
+                Ok(content)
+            }
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Read one picture that a chapter's markup names as `/r/<id>`. The
+    /// bytes are the book's, checked only to begin as the kind they claim.
+    /// A picture that is missing, too large, not a PNG, JPEG, GIF or WebP, or
+    /// not what its type says is an error; show its text alternative.
+    pub fn read_resource(&self, id: ResourceId) -> Result<Resource, ReaderError> {
+        if !self.source.unchanged() {
+            return Err(ReaderError::SourceChanged);
+        }
+        let n = id.0.to_string();
+        match self
+            .reader
+            .run(Some(&self.source.path), &["resource", &n])?
+        {
+            Payload::Resource(wire) => {
+                let bytes = base64_decode(&wire.base64).ok_or_else(unexpected)?;
+                let fits = bytes.len() as u64 <= self.reader.inner.limits.max_resource_bytes;
+                if !fits || ResourceKind::of(&bytes) != Some(wire.kind) {
+                    return Err(ReaderError::HelperFailed {
+                        detail: "inconsistent reply".into(),
+                    });
+                }
+                Ok(Resource {
+                    kind: wire.kind,
+                    bytes,
+                })
             }
             _ => Err(unexpected()),
         }
