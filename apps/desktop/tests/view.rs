@@ -11,6 +11,13 @@ mod view;
 #[allow(dead_code)]
 #[path = "../src/reader/place.rs"]
 mod place;
+// The text settings panel, which the panel's tests build alone.
+#[allow(dead_code, unused_imports)]
+#[path = "../src/reader/settings.rs"]
+mod settings;
+#[allow(dead_code)]
+#[path = "../src/reader/text_panel.rs"]
+mod text_panel;
 
 use libtest_mimic::{Arguments, Failed, Trial};
 use std::cell::RefCell;
@@ -1328,15 +1335,47 @@ fn two_columns_when_they_fit() -> Outcome {
         two_column < one_column,
         "two columns gave {two_column} pages, one gave {one_column}"
     );
-    // The page holds two columns: paragraphs at two left edges, both on screen.
-    let edges = stage.app("const xs = new Set(); for (const p of document.querySelectorAll('p')) { const r = p.getBoundingClientRect(); if (r.left >= 0 && r.right <= innerWidth) xs.add(Math.round(r.left)); } return [...xs].sort((a, b) => a - b).join(',')")?;
-    let edges: Vec<f64> = edges.split(',').filter_map(|e| e.parse().ok()).collect();
-    check!(edges.len() == 2, "columns start at {edges:?}");
-    let column = (1200.0 - 4.0 * 48.0) / 2.0;
+    // The page holds two columns: paragraphs at two left edges, both on
+    // screen. Each column is at most the measure, 34 em, and the pair is
+    // centred, with the margins' width between them.
+    let columns = |stage: &Stage| -> Result<(Vec<f64>, f64, f64), Failed> {
+        let found = stage.app("const xs = new Set(); let widest = 0; for (const p of document.querySelectorAll('p')) { const r = p.getBoundingClientRect(); if (r.left >= 0 && r.right <= innerWidth) { xs.add(Math.round(r.left)); widest = Math.max(widest, r.width); } } return [...xs].sort((a, b) => a - b).join(',') + ' ' + widest + ' ' + parseFloat(getComputedStyle(document.body).fontSize)")?;
+        let mut parts = found.split(' ');
+        let edges = parts
+            .next()
+            .unwrap_or("")
+            .split(',')
+            .filter_map(|e| e.parse().ok())
+            .collect();
+        let widest = parts.next().and_then(|w| w.parse().ok()).unwrap_or(0.0);
+        let em = parts.next().and_then(|e| e.parse().ok()).unwrap_or(16.0);
+        Ok((edges, widest, em))
+    };
+    let expected = |em: f64| {
+        let column = f64::min(34.0 * em, (1200.0 - 4.0 * 48.0) / 2.0);
+        let side = (1200.0 - 2.0 * column) / 4.0;
+        (column, side, side + column + 2.0 * side)
+    };
+    let (edges, _, em) = columns(&stage)?;
+    let (_, first, second) = expected(em);
     check!(
-        (edges[0] - 48.0).abs() < 2.0 && (edges[1] - (48.0 + column + 96.0)).abs() < 2.0,
-        "columns start at {edges:?}"
+        edges.len() == 2 && (edges[0] - first).abs() < 2.0 && (edges[1] - second).abs() < 2.0,
+        "columns start at {edges:?}, not {first} and {second}"
     );
+    // Smaller text in the same window: the columns stop at the measure and
+    // the pair stays centred.
+    restyle(&stage, &[("--size", "0.6")])?;
+    let (edges, widest, em) = columns(&stage)?;
+    let (column, first, second) = expected(em);
+    check!(
+        column < (1200.0 - 4.0 * 48.0) / 2.0 && widest <= column + 1.0,
+        "at size 0.6 a column is {widest} wide, the measure {column}"
+    );
+    check!(
+        edges.len() == 2 && (edges[0] - first).abs() < 2.0 && (edges[1] - second).abs() < 2.0,
+        "at size 0.6 the columns start at {edges:?}, not {first} and {second}"
+    );
+    restyle(&stage, &[("--size", "0.8")])?;
     check!(stage.turn(1)?, "no turn");
     check!(
         stage.app("return Math.round(document.documentElement.scrollLeft)")? == "1200",
@@ -1492,14 +1531,21 @@ fn an_animated_turn_answers_with_the_place_it_leads_to() -> Outcome {
 }
 
 /// Two turns made in quick succession, the second before the first slide
-/// ends, land two pages on and report two places in order, in pages and in
-/// scrolling.
+/// or fade ends, land two pages on and report two places in order, in pages
+/// and in scrolling.
 fn two_quick_turns_land_two_pages_on() -> Outcome {
     let stage = Stage::new(one(long_chapter()), |_| {})?;
-    for flow in ["paged", "scroll"] {
+    for (flow, turn) in [
+        ("paged", "slide"),
+        ("scroll", "slide"),
+        ("paged", "fade"),
+        ("scroll", "fade"),
+    ] {
+        let flow = &format!("{flow} {turn}");
+        let (flow_name, _) = flow.split_once(' ').unwrap();
         stage
             .view
-            .set_style(&[("--flow", flow), ("--turn", "slide")]);
+            .set_style(&[("--flow", flow_name), ("--turn", turn)]);
         // Where two plain turns lead.
         stage.open(0, Landing::Start)?;
         let (Some(first), Some(second)) = (stage.turned(1, false)?, stage.turned(1, false)?) else {
@@ -1573,6 +1619,392 @@ fn two_quick_turns_land_two_pages_on() -> Outcome {
             stage.scrolled()?
         );
     }
+    Ok(())
+}
+
+/// In scrolling, the bottom of the scroll is the last screen, however
+/// little of it is left, so the fraction read counts the whole chapter
+/// there, and a chapter at its end with no text there stays at its end
+/// through a reflow.
+fn the_bottom_of_a_scroll_is_the_last_screen() -> Outcome {
+    let bottom = "const r = document.documentElement; return Math.round(r.scrollHeight - r.clientHeight) + ' ' + Math.round(r.scrollTop) + ' ' + r.clientHeight";
+    // A chapter with no text, at its end, stays at the bottom through a
+    // reflow.
+    let blank = Stage::new(one("<div style=\"height: 1500px\"></div>".into()), |_| {})?;
+    blank.view.set_style(&[("--flow", "scroll")]);
+    let (_, _, page, pages) = blank.open(0, Landing::End)?;
+    check!(
+        page + 1 == pages,
+        "a blank chapter's end is screen {} of {pages}",
+        page + 1
+    );
+    restyle(&blank, &[("--size", "1.3")])?;
+    let at = blank.app(bottom)?;
+    let at: Vec<&str> = at.split(' ').collect();
+    check!(
+        at[0] == at[1],
+        "a reflow moved a blank chapter from its end: {at:?}"
+    );
+    // About two screens and a sixth of a 700 high window.
+    let text = "<p>First line.</p><div style=\"height: 1300px\"></div><p>Last line.</p>";
+    let stage = Stage::new(one(text.into()), |_| {})?;
+    stage.view.set_style(&[("--flow", "scroll")]);
+    let (_, _, page, pages) = stage.open(0, Landing::End)?;
+    let at = stage.app(bottom)?;
+    let at: Vec<&str> = at.split(' ').collect();
+    check!(
+        pages >= 3 && at[0] == at[1],
+        "the end is not the bottom: {at:?}, page {page} of {pages}"
+    );
+    check!(
+        page + 1 == pages,
+        "the bottom is screen {} of {pages} ({at:?})",
+        page + 1
+    );
+    // Scrolled there by hand from the start, too.
+    stage.open(0, Landing::Start)?;
+    stage.events.borrow_mut().clear();
+    stage.app("window.dispatchEvent(new WheelEvent('wheel')); const r = document.documentElement; r.scrollTop = r.scrollHeight; return 1")?;
+    let Event::Place { page, pages, .. } = stage.wait("a move to the bottom", |e| {
+        matches!(e, Event::Place { moved: true, .. })
+    })?
+    else {
+        unreachable!()
+    };
+    check!(
+        page + 1 == pages,
+        "scrolled to the bottom: screen {} of {pages}",
+        page + 1
+    );
+    Ok(())
+}
+
+/// In scrolling, the reader scrolling by hand while a turn animates ends
+/// the animation where the reader left the text, and that is the move. A
+/// fade that has not reached its second half does not jump back to the
+/// turn's place.
+fn a_hand_scroll_during_an_animation_is_the_move() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    for turn in ["fade", "slide"] {
+        stage
+            .view
+            .set_style(&[("--flow", "scroll"), ("--turn", turn)]);
+        stage.open(0, Landing::Start)?;
+        stage.events.borrow_mut().clear();
+        // The turn and the hand scroll in one task, so the hand comes
+        // before the fade's second half and before the slide has moved.
+        let answer = stage.app("const r = document.documentElement; const a = __reader.turn(1, true); window.dispatchEvent(new WheelEvent('wheel')); r.classList.remove('slide'); r.scrollTop = 300; return a")?;
+        let turned: u32 = answer.split(',').next().unwrap_or("").parse().unwrap_or(0);
+        let Event::Place { offset, .. } = stage.wait("a move after a hand scroll", |e| {
+            matches!(e, Event::Place { moved: true, .. })
+        })?
+        else {
+            unreachable!()
+        };
+        pause(Duration::from_millis(600));
+        let top = stage.scrolled()?;
+        check!(
+            top == "300",
+            "{turn}: the text went on to {top} after the reader scrolled to 300"
+        );
+        check!(
+            offset != turned && offset > 0,
+            "{turn}: the hand scroll was told as {offset}, the turn was {turned}"
+        );
+        let places = stage
+            .events
+            .borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Place { .. }))
+            .count();
+        check!(
+            places == 1,
+            "{turn}: {places} places told: {:?}",
+            stage.events.borrow()
+        );
+    }
+    Ok(())
+}
+
+/// A turn made after the layout changed and before the place is shown in
+/// it counts from the held place's page in the new layout, not from where
+/// an unfinished slide or fade was going in the old one.
+fn a_turn_after_a_reflow_counts_from_the_held_place() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    for turn in ["slide", "fade"] {
+        stage.view.set_style(&[("--turn", turn), ("--size", "1")]);
+        stage.open(0, Landing::Start)?;
+        let answer = stage.app("__reader.turn(1, true); __reader.style({'--size': '0.8'}); return __reader.turn(1, true)")?;
+        let quick: u32 = answer.split(',').next().unwrap_or("").parse().unwrap_or(0);
+        pause(Duration::from_millis(600));
+        // The same, one step at a time.
+        stage.open(0, Landing::Start)?;
+        let Some((first, _)) = stage.turned(1, false)? else {
+            return Err("no turn".into());
+        };
+        restyle(&stage, &[("--size", "0.8")])?;
+        let Some((expected, _)) = stage.turned(1, false)? else {
+            return Err("no turn after the reflow".into());
+        };
+        check!(
+            quick == expected,
+            "{turn}: a turn before the reflow was shown went to {quick}, after it to {expected} (the first turn held {first})"
+        );
+    }
+    Ok(())
+}
+
+/// When the system asks for less motion, the reader sets `--motion` to
+/// "none", and a turn asked to animate moves the text at once, in pages and
+/// in scrolling, whatever the page turn setting. WebKitGTK 2.54 did not
+/// answer `prefers-reduced-motion` from GTK's animation setting when this
+/// was written, so the reader passes it on itself.
+fn less_motion_turns_at_once() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    for (flow, turn) in [
+        ("paged", "slide"),
+        ("paged", "fade"),
+        ("scroll", "slide"),
+        ("scroll", "fade"),
+    ] {
+        stage
+            .view
+            .set_style(&[("--flow", flow), ("--turn", turn), ("--motion", "none")]);
+        stage.open(0, Landing::Start)?;
+        let probe = stage.app("const r = document.documentElement; const at = () => Math.round(r.classList.contains('scroll') ? r.scrollTop : r.scrollLeft); const before = at(); __reader.turn(1, true); return [before, at()].join(' ')")?;
+        let probe: Vec<&str> = probe.split(' ').collect();
+        check!(
+            probe[0] != probe[1],
+            "{flow} {turn}: with less motion the text had not moved after the turn: {probe:?}"
+        );
+    }
+    Ok(())
+}
+
+/// Every widget under `root`, in order.
+fn widgets(root: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut all = vec![root.clone()];
+    let mut child = root.first_child();
+    while let Some(c) = child {
+        all.extend(widgets(&c));
+        child = c.next_sibling();
+    }
+    all
+}
+
+/// A text settings panel in a window, opened, on its own settings.
+struct Panel {
+    window: gtk::Window,
+    popover: gtk::Popover,
+    settings: Rc<RefCell<settings::Settings>>,
+}
+
+impl Panel {
+    fn new(saved: settings::Settings) -> Panel {
+        let settings = Rc::new(RefCell::new(saved));
+        let popover = text_panel::build(settings.clone(), Vec::new(), Rc::new(|| {}));
+        let button = gtk::MenuButton::builder().label("Aa").build();
+        button.set_popover(Some(&popover));
+        let window = gtk::Window::builder()
+            .default_width(600)
+            .default_height(700)
+            .child(&button)
+            .build();
+        window.present();
+        pause(Duration::from_millis(200));
+        popover.popup();
+        pause(Duration::from_millis(300));
+        Panel {
+            window,
+            popover,
+            settings,
+        }
+    }
+
+    fn all(&self) -> Vec<gtk::Widget> {
+        widgets(self.popover.upcast_ref())
+    }
+
+    /// A button by its tooltip, which is its name in words, or its label.
+    fn button(&self, name: &str) -> gtk::Button {
+        self.all()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .find(|b| {
+                b.tooltip_text().as_deref() == Some(name) || b.label().as_deref() == Some(name)
+            })
+            .unwrap_or_else(|| panic!("no button {name}"))
+    }
+
+    fn swatch(&self, name: &str) -> gtk::ToggleButton {
+        self.all()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::ToggleButton>().ok())
+            .find(|b| b.tooltip_text().as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no swatch {name}"))
+    }
+
+    /// The switch on the row named `label`.
+    fn switch(&self, label: &str) -> gtk::Switch {
+        self.all()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .find(|l| l.text() == label)
+            .and_then(|l| l.parent())
+            .and_then(|row| row.last_child())
+            .and_then(|w| w.downcast::<gtk::Switch>().ok())
+            .unwrap_or_else(|| panic!("no switch {label}"))
+    }
+
+    fn level(&self) -> String {
+        self.popover
+            .child()
+            .and_then(|c| c.downcast::<gtk::Stack>().ok())
+            .and_then(|s| s.visible_child_name())
+            .map(|n| n.to_string())
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for Panel {
+    fn drop(&mut self) {
+        self.popover.popdown();
+        self.window.destroy();
+        pause(Duration::from_millis(100));
+    }
+}
+
+/// The panel's controls always show the settings, and showing them never
+/// moves the panel to another level: choosing a colour of one's own turns
+/// "follows light and dark" off where it opens, and opening the panel on a
+/// saved colour of one's own stays on the first level.
+fn the_panel_shows_the_settings_and_showing_them_moves_nothing() -> Outcome {
+    let panel = Panel::new(settings::Settings::default());
+    // What the settings apply to is said on both levels.
+    let scopes = panel
+        .all()
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Label>().ok())
+        .filter(|l| l.text() == "For every book")
+        .count();
+    check!(scopes == 2, "the scope is said {scopes} times");
+    check!(
+        panel
+            .switch("Page colour follows light and dark")
+            .is_active(),
+        "the defaults do not follow light and dark"
+    );
+    panel.swatch("A colour of your own").set_active(true);
+    pause(Duration::from_millis(300));
+    check!(panel.level() == "more", "+ opened {}", panel.level());
+    check!(
+        panel.settings.borrow().colour == settings::Colour::Custom,
+        "+ chose {:?}",
+        panel.settings.borrow().colour
+    );
+    check!(
+        !panel
+            .switch("Page colour follows light and dark")
+            .is_active(),
+        "after +, the panel says the page colour follows light and dark"
+    );
+    drop(panel);
+    let saved = settings::Settings {
+        colour: settings::Colour::Custom,
+        ..settings::Settings::default()
+    };
+    let panel = Panel::new(saved);
+    check!(
+        panel.level() == "first",
+        "opening the panel on a colour of one's own went to {}",
+        panel.level()
+    );
+    check!(
+        panel.swatch("A colour of your own").is_active(),
+        "the saved colour of one's own is not shown"
+    );
+    Ok(())
+}
+
+/// Reset shows the defaults in every control, the steppers included, with
+/// the second level open.
+fn reset_shows_the_defaults_in_every_control() -> Outcome {
+    let panel = Panel::new(settings::Settings::default());
+    panel.button("More").emit_clicked();
+    let tighter = panel.button("Tighter lines");
+    while tighter.is_sensitive() {
+        tighter.emit_clicked();
+    }
+    check!(
+        panel.settings.borrow().line == 0,
+        "line spacing is {}",
+        panel.settings.borrow().line
+    );
+    panel.button("Reset").emit_clicked();
+    pause(Duration::from_millis(100));
+    check!(
+        panel.settings.borrow().line == settings::Settings::default().line,
+        "Reset left line spacing at {}",
+        panel.settings.borrow().line
+    );
+    check!(
+        tighter.is_sensitive(),
+        "after Reset, Tighter lines is still disabled"
+    );
+    Ok(())
+}
+
+/// The panel is freed with the window that holds it: nothing in it holds
+/// itself. The popover, the stack of levels, a stepper's button and the
+/// switch whose handler shows the settings again are each watched.
+fn the_panel_is_freed_with_its_window() -> Outcome {
+    let watched: Vec<(&str, glib::WeakRef<gtk::Widget>)> = {
+        let panel = Panel::new(settings::Settings::default());
+        // Use the controls that hold others, so their handlers have run.
+        panel.button("More").emit_clicked();
+        panel.button("Back").emit_clicked();
+        panel.swatch("Grey").set_active(true);
+        panel
+            .switch("Page colour follows light and dark")
+            .set_active(true);
+        panel.button("Larger text").emit_clicked();
+        let stack = panel.popover.child().unwrap();
+        vec![
+            (
+                "popover",
+                panel.popover.upcast_ref::<gtk::Widget>().downgrade(),
+            ),
+            ("stack", stack.downgrade()),
+            (
+                "Larger text",
+                panel
+                    .button("Larger text")
+                    .upcast::<gtk::Widget>()
+                    .downgrade(),
+            ),
+            (
+                "follow switch",
+                panel
+                    .switch("Page colour follows light and dark")
+                    .upcast::<gtk::Widget>()
+                    .downgrade(),
+            ),
+            (
+                "Grey",
+                panel.swatch("Grey").upcast::<gtk::Widget>().downgrade(),
+            ),
+        ]
+    };
+    spin(
+        || watched.iter().all(|(_, w)| w.upgrade().is_none()),
+        Duration::from_secs(5),
+    );
+    let kept: Vec<&str> = watched
+        .iter()
+        .filter(|(_, w)| w.upgrade().is_some())
+        .map(|(name, _)| *name)
+        .collect();
+    check!(kept.is_empty(), "outlived the window: {kept:?}");
     Ok(())
 }
 
@@ -2084,6 +2516,31 @@ const TESTS: &[Test] = &[
         "two_quick_turns_land_two_pages_on",
         two_quick_turns_land_two_pages_on,
     ),
+    (
+        "the_bottom_of_a_scroll_is_the_last_screen",
+        the_bottom_of_a_scroll_is_the_last_screen,
+    ),
+    (
+        "a_hand_scroll_during_an_animation_is_the_move",
+        a_hand_scroll_during_an_animation_is_the_move,
+    ),
+    (
+        "a_turn_after_a_reflow_counts_from_the_held_place",
+        a_turn_after_a_reflow_counts_from_the_held_place,
+    ),
+    (
+        "the_panel_shows_the_settings_and_showing_them_moves_nothing",
+        the_panel_shows_the_settings_and_showing_them_moves_nothing,
+    ),
+    (
+        "reset_shows_the_defaults_in_every_control",
+        reset_shows_the_defaults_in_every_control,
+    ),
+    (
+        "the_panel_is_freed_with_its_window",
+        the_panel_is_freed_with_its_window,
+    ),
+    ("less_motion_turns_at_once", less_motion_turns_at_once),
     (
         "a_move_carries_its_place_and_a_reflow_does_not_move_it",
         a_move_carries_its_place_and_a_reflow_does_not_move_it,

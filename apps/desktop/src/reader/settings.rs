@@ -373,9 +373,17 @@ impl Settings {
 
     /// The settings in `file`, or the defaults when it cannot be read.
     pub fn load(file: &Path) -> Settings {
-        std::fs::read_to_string(file)
-            .map(|text| Settings::from_text(&text))
-            .unwrap_or_default()
+        use std::io::Read;
+        // The file is read on the window's thread. One of the size this
+        // app writes is a few hundred bytes, so anything past the limit is
+        // not this file, and is not read past it.
+        let mut text = String::new();
+        let read = std::fs::File::open(file)
+            .and_then(|f| f.take(SETTINGS_LIMIT + 1).read_to_string(&mut text));
+        match read {
+            Ok(n) if n as u64 <= SETTINGS_LIMIT => Settings::from_text(&text),
+            _ => Settings::default(),
+        }
     }
 
     /// Write the settings to `file`, by way of a file beside it so a crash
@@ -389,6 +397,10 @@ impl Settings {
         std::fs::rename(&beside, file)
     }
 }
+
+/// The largest settings file that is read, in bytes. A larger one is left
+/// alone and the defaults are used.
+pub const SETTINGS_LIMIT: u64 = 64 * 1024;
 
 /// A face's name as the page may be given it: letters, digits, spaces and
 /// hyphens, so it cannot end the CSS it is written into.
@@ -582,5 +594,23 @@ mod tests {
         assert_eq!(face_name("Noto Serif"), Some("Noto Serif".into()));
         assert_eq!(face_name("a'b"), None);
         assert_eq!(face_name(""), None);
+    }
+
+    #[test]
+    fn a_file_past_the_limit_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("reader.conf");
+        std::fs::write(&file, "size=5\n").unwrap();
+        assert_eq!(Settings::load(&file).size, 5);
+        // Every line is a good one, so only the size can refuse it.
+        let lines = "size=5\n".repeat(SETTINGS_LIMIT as usize / 7 + 1);
+        assert!(lines.len() as u64 > SETTINGS_LIMIT);
+        std::fs::write(&file, &lines).unwrap();
+        assert_eq!(Settings::load(&file), Settings::default());
+        // Exactly at the limit is still read.
+        let mut at_limit = "size=5\n".to_owned();
+        at_limit.push_str(&"#".repeat(SETTINGS_LIMIT as usize - at_limit.len()));
+        std::fs::write(&file, &at_limit).unwrap();
+        assert_eq!(Settings::load(&file).size, 5);
     }
 }

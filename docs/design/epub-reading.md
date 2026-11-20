@@ -559,9 +559,12 @@ over anything the book's sheets say for the same property.
   sideways a page at a time. One column per page, or two when the reader asks
   and the window fits them. A turn sets the scroll offset. The slide is
   `scroll-behavior: smooth` and the cross-fade takes the page out and back
-  in over 120 ms each way. Both are inside `@media (prefers-reduced-motion: no-preference)`,
-  which WebKitGTK answers from GTK's animation setting, so they work on GTK
-  4.22, and the script checks the same query before it animates.
+  in over 120 ms each way. When the system asks for less motion, by GTK's
+  animation setting or, from GTK 4.20, its reduced motion setting, a turn
+  moves at once. WebKitGTK 2.54 does not answer `prefers-reduced-motion`
+  from either, so the shell passes it as `--motion: none` and the script
+  checks that. `less_motion_turns_at_once` checks the script's side; the
+  shell's reading of the two GTK settings has no test.
 - **Scrolling** is the same document in normal flow.
 - **Settings** reach the page as CSS custom properties: face, size, weight,
   line height, letter and word spacing, margin scale, justification,
@@ -574,12 +577,21 @@ over anything the book's sheets say for the same property.
   of 60 characters. CSS columns have one gap, so the space between the two is
   the space between one page's last column and the next page's first, which
   has to be both side margins. The reader design's 48 became twice the side
-  margin for that reason, and its page says so.
+  margin for that reason, and its page says so. Each column is at most the
+  34 em measure. In a wider window the pair is centred: the side margins
+  grow, and the space between the columns, which is both of them, grows
+  with them. `two_columns_when_they_fit` checks both widths.
 - **Scrolling** counts screens as pages, so the fraction read and the line
-  under the page work the same. A turn moves a screenful less a line. A
-  scroll by wheel, key or scroll bar is a move, reported 150 ms after its
-  last step. A scroll the script made itself, for a turn, a landing or a
-  reflow, is not reported again when it settles.
+  under the page work the same. The bottom of the scroll is the last
+  screen however little of it is left, so the fraction read counts the
+  whole chapter there, and a chapter with no text at its end is held as
+  its end through a reflow (`the_bottom_of_a_scroll_is_the_last_screen`).
+  A turn moves a screenful less a line. A scroll by wheel, key or scroll
+  bar is a move, reported 150 ms after its last step. A scroll the script
+  made itself, for a turn, a landing or a reflow, is not reported again
+  when it settles. A scroll by hand while a turn slides or waits to fade
+  ends that animation where the reader left the text, and is the move
+  (`a_hand_scroll_during_an_animation_is_the_move`).
 - **The text column** is centred and never wider than 34 em, about 68
   characters, whatever the window's width.
 - **Page colours** are the four in [the reader design](interface-reader.md#page-colours),
@@ -667,7 +679,10 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   it, an instant move replaces it, or the reader scrolls by hand, so no
   timer decides it and a slow slide changes nothing. When the animation
   ends nothing more is reported. `two_quick_turns_land_two_pages_on` checks
-  two turns made before the first slide ends. The
+  two turns made before the first slide or fade ends. A change of layout
+  ends an unfinished animation, and a turn made after the change and
+  before the held place is shown in the new layout first shows it there
+  and counts from it (`a_turn_after_a_reflow_counts_from_the_held_place`). The
   view test `an_animated_turn_answers_with_the_place_it_leads_to` checks
   each animation in pages and in scrolling.
 - **A move's place is taken for the chapter it was made in**, whatever is

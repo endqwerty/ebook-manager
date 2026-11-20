@@ -68,9 +68,14 @@
 		scrolling
 			? Math.max(1, Math.ceil((root.scrollHeight - 1) / height()))
 			: Math.max(1, Math.round(root.scrollWidth / width()));
+	// The bottom of the scroll is the last screen, however little of it
+	// there is, so the fraction read counts the whole chapter there.
+	const bottom = () => root.scrollTop >= root.scrollHeight - height() - 1;
 	const page = () =>
 		scrolling
-			? Math.min(pages() - 1, Math.round(root.scrollTop / height()))
+			? bottom()
+				? pages() - 1
+				: Math.min(pages() - 1, Math.round(root.scrollTop / height()))
 			: Math.round(Math.abs(root.scrollLeft) / width());
 	// The scroll position along the way the text moves.
 	const at = () => (scrolling ? root.scrollTop : root.scrollLeft);
@@ -84,13 +89,21 @@
 	// Where the app last put the text. A scroll that settles anywhere else
 	// was the reader's own.
 	let expect = 0;
-	// The fade's second half, until it runs.
+	// The fade's second half, until it runs, and where the text was when
+	// the fade began.
 	let fading = 0;
+	let fadeFrom = 0;
+	// End a fade that has not reached its second half where the text is,
+	// and bring the page back in.
+	const stopFade = () => {
+		clearTimeout(fading);
+		fading = 0;
+		root.classList.remove("fading");
+	};
 	// Scroll to `x` at once, or as a slide. Going anywhere at once ends a
 	// slide or a fade that has not finished.
 	const goTo = (x, smooth) => {
-		clearTimeout(fading);
-		root.classList.remove("fading");
+		stopFade();
 		// A slide to where the text already is has nothing to wait for.
 		const slide = smooth && Math.abs(at() - x) >= 1;
 		root.classList.toggle("slide", slide);
@@ -103,12 +116,21 @@
 	};
 	// Fade the page out, go to `x`, and fade it back in.
 	const fadeTo = (x) => {
-		clearTimeout(fading);
+		stopFade();
 		root.classList.add("fade", "fading");
 		aim = x;
 		expect = x;
 		touched = false;
+		fadeFrom = at();
 		fading = setTimeout(() => goTo(x, false), 120);
+	};
+	// The layout is changing: an unfinished slide or fade and where it was
+	// going belong to the old layout, so they end here. The held place is
+	// shown in the new one.
+	const forget = () => {
+		stopFade();
+		root.classList.remove("slide");
+		aim = null;
 	};
 	// Show page `n` at once.
 	const show = (n) => {
@@ -245,6 +267,7 @@
 	// Show the held place again after the layout changed.
 	const restore = () => {
 		reflowing = false;
+		forget();
 		layout();
 		if (!landed) return;
 		if (held.edge === "start") show(0);
@@ -300,6 +323,9 @@
 		// that one is going.
 		turn(by, smooth) {
 			if (!ready || !landed) return "";
+			// The layout changed and the held place is not shown in it yet:
+			// show it first, so the turn counts from it.
+			if (reflowing) restore();
 			const before = at();
 			let target;
 			if (scrolling) {
@@ -315,7 +341,9 @@
 			}
 			goTo(target, false);
 			const now = settle_place(true);
-			const motion = smooth && matchMedia("(prefers-reduced-motion: no-preference)").matches;
+			// The shell says when the system asks for less motion. WebKitGTK
+			// does not tell the page itself.
+			const motion = smooth && setting("--motion") !== "none" && matchMedia("(prefers-reduced-motion: no-preference)").matches;
 			const kind = motion ? setting("--turn") : "none";
 			if (kind === "slide" || kind === "fade") {
 				goTo(before, false);
@@ -335,6 +363,7 @@
 		style(properties) {
 			assign(properties);
 			reflowing = true;
+			forget();
 			const after = () => settle(restore);
 			document.fonts.ready.then(after, after);
 			return true;
@@ -390,7 +419,15 @@
 		"scroll",
 		() => {
 			// A slide has ended when the text reaches its end.
-			if (aim !== null && Math.abs(at() - aim) < 1) aim = null;
+			if (aim !== null && !fading && Math.abs(at() - aim) < 1) aim = null;
+			// Nothing of the app's moves the text while a fade waits for its
+			// second half, so a move then is the reader's own: the fade ends
+			// where the reader has put the text.
+			if (fading && Math.abs(at() - fadeFrom) >= 1) {
+				stopFade();
+				aim = null;
+				touched = true;
+			}
 			clearTimeout(scrolled);
 			scrolled = setTimeout(settled, 150);
 		},
@@ -413,6 +450,7 @@
 	addEventListener("resize", () => {
 		if (!ready) return;
 		reflowing = true;
+		forget();
 		cancelAnimationFrame(resizing);
 		resizing = requestAnimationFrame(restore);
 	});

@@ -80,7 +80,9 @@ so [the view tests](../../tests/view.rs) include it directly.
   message. A turn's place is where it leads, also when the page animates
   it: the page reads the place at the destination before the slide or fade
   starts, and reports nothing more when it ends. In scrolling, a scroll the
-  page made itself is not reported again when it settles. Each has `moved: true`, the `Load` record of the load it was made
+  page made itself is not reported again when it settles. When the system
+  asks for less motion the reader sets `--motion: none` and turns move at
+  once. Each has `moved: true`, the `Load` record of the load it was made
   in (its number, its chapter and that chapter's length) and a `count`, the
   page's count of its moves in that load. `View::load` returns the number,
   which grows with every load, so the load's number and then the count put
@@ -155,6 +157,12 @@ function from a real page.
 
 The same line runs `settings.rs`'s tests. Name the `--bin`: without it a
 filter can also match a view test and run it on your own desktop.
+
+The view tests also build the text settings panel alone, from
+`settings.rs` and `text_panel.rs`, and check that its controls show the
+settings, that showing them never changes the level, that Reset refreshes
+every control, and that the panel is freed with its window. Its controls'
+handlers hold the panel's widgets weakly for that reason.
 
 The view tests serve hostile chapters to a real web view and count
 connections to a local listener. Each is named for the statement of the

@@ -466,12 +466,37 @@ def settings(evidence):
     assert pages() == before, (pages(), before)
     capture(title, evidence / "settings-reset.png")
     assert pixel(evidence / "settings-reset.png", 20, 300) == "f4ecd8"
+    # Grey again, for `settings_after_restart` to find once the app has
+    # ended and started again.
+    swatch("Grey")
     click("Back to library")
     time.sleep(0.3)
     print(
         f"PASS text settings: larger text makes {before} pages {larger}, Grey is kept after closing, Reset restores both",
         flush=True,
     )
+
+
+def settings_after_restart(evidence):
+    """The page colour chosen before the app ended is in force after it starts again."""
+    title = "The Lantern Atlas · Revised"
+    select_book("lantern")
+    key("Return")
+    find("Page ", contains=True)
+    time.sleep(0.8)
+    capture(title, evidence / "settings-restarted.png")
+    assert pixel(evidence / "settings-restarted.png", 20, 300) == "2b2b2e", pixel(
+        evidence / "settings-restarted.png", 20, 300
+    )
+    find("Text settings", "toggle button").do_action(0)
+    click("More")
+    click("Reset")
+    time.sleep(0.6)
+    key("Escape")
+    time.sleep(0.6)
+    click("Back to library")
+    time.sleep(0.3)
+    print("PASS a page colour chosen before the app ended is in force after it starts again", flush=True)
 
 
 def keys(evidence):
@@ -1013,6 +1038,7 @@ def run(binary, evidence, root):
         print("PASS the library closes when asked with no reader open", flush=True)
         proc = launch_app(binary, env)
         find("Mira Vale")
+        settings_after_restart(evidence)
         covers(binary, evidence, root, proc)
         proc = None
     finally:

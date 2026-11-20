@@ -10,7 +10,7 @@ use gtk::gdk;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// The faces offered when the system has them, in the design's order: the
 /// reader's serif, the system's serifs and sans serifs, then faces made for
@@ -64,14 +64,16 @@ fn row(label: &str, control: &(impl IsA<gtk::Widget> + IsA<gtk::Accessible>)) ->
     row
 }
 
-/// A pair of buttons that step an index down and up between 0 and `last`.
+/// A pair of buttons that step an index down and up between 0 and `last`,
+/// and the function that shows the index in them again. The buttons'
+/// handlers hold the buttons weakly, so the pair can be freed.
 fn stepper(
     less: (&str, &str),
     more: (&str, &str),
     last: usize,
     get: impl Fn() -> usize + 'static,
     set: impl Fn(usize) + 'static,
-) -> gtk::Box {
+) -> (gtk::Box, Rc<dyn Fn()>) {
     let pair = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     pair.add_css_class("linked");
     let down = gtk::Button::new();
@@ -82,11 +84,13 @@ fn stepper(
     }
     let get = Rc::new(get);
     let set = Rc::new(set);
-    let refresh = {
-        let (down, up, get) = (down.clone(), up.clone(), get.clone());
+    let refresh: Rc<dyn Fn()> = {
+        let (down, up, get) = (down.downgrade(), up.downgrade(), get.clone());
         Rc::new(move || {
-            down.set_sensitive(get() > 0);
-            up.set_sensitive(get() < last);
+            if let (Some(down), Some(up)) = (down.upgrade(), up.upgrade()) {
+                down.set_sensitive(get() > 0);
+                up.set_sensitive(get() < last);
+            }
         })
     };
     refresh();
@@ -98,9 +102,7 @@ fn stepper(
             refresh();
         });
     }
-    // The popover can be reset while it is open.
-    pair.connect_map(move |_| refresh());
-    pair
+    (pair, refresh)
 }
 
 fn rgba(colour: Rgb) -> gdk::RGBA {
@@ -125,6 +127,11 @@ fn rgb(colour: &gdk::RGBA) -> Rgb {
 /// reader window at its default height of 640 has about 540 under its
 /// controls, less the popover's arrow and padding.
 const MORE_HEIGHT: i32 = 460;
+
+thread_local! {
+    /// Whether the swatches' style sheet has been added to the display.
+    static SWATCH_STYLE: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Build the popover. `changed` is called after every change, with the
 /// settings already updated.
@@ -179,10 +186,37 @@ pub fn build(
         .build();
     stack.add_named(&scroller, Some("more"));
 
-    let scope = gtk::Label::new(Some("For every book"));
-    scope.set_xalign(0.0);
-    scope.add_css_class("dim-label");
-    first.append(&scope);
+    // Everything that shows the settings in the controls, so a change made
+    // by one control shows in the others. It is filled in below, and held
+    // weakly by the controls' own handlers so nothing owns itself.
+    let sync_slot: Rc<RefCell<Weak<dyn Fn()>>> = Rc::new(RefCell::new(Weak::<fn()>::new()));
+    let resync = {
+        let slot = sync_slot.clone();
+        move || {
+            let sync = slot.borrow().upgrade();
+            if let Some(sync) = sync {
+                sync();
+            }
+        }
+    };
+    // Steppers' functions that show their index again.
+    let mut refreshers: Vec<Rc<dyn Fn()>> = Vec::new();
+    let go = |name: &'static str| {
+        let stack = stack.downgrade();
+        move || {
+            if let Some(stack) = stack.upgrade() {
+                stack.set_visible_child_name(name);
+            }
+        }
+    };
+
+    // What the settings apply to, at the top of both levels.
+    for page in [&first, &second] {
+        let scope = gtk::Label::new(Some("For every book"));
+        scope.set_xalign(0.0);
+        scope.add_css_class("dim-label");
+        page.append(&scope);
+    }
 
     // 1. Page colour: four swatches, and one for colours of the reader's own.
     let swatches = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -199,11 +233,14 @@ pub fn build(
             ))
             .collect::<String>()
     ));
-    gtk::style_context_add_provider_for_display(
-        &gtk::prelude::WidgetExt::display(&popover),
-        &css,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    // One sheet serves every panel on the display.
+    if !SWATCH_STYLE.replace(true) {
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&popover),
+            &css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
     let mut group: Option<gtk::ToggleButton> = None;
     let mut swatch_buttons = Vec::new();
     for (name, class, colour) in [
@@ -226,13 +263,17 @@ pub fn build(
         } else {
             group = Some(button.clone());
         }
-        let (change, stack) = (change.clone(), stack.clone());
+        let (change, syncing, resync, more) =
+            (change.clone(), syncing.clone(), resync.clone(), go("more"));
         button.connect_toggled(move |b| {
-            if b.is_active() {
-                change(&|s| s.colour = colour);
-                if colour == Colour::Custom {
-                    stack.set_visible_child_name("more");
-                }
+            // Showing the settings never changes them or moves the panel.
+            if syncing.get() || !b.is_active() {
+                return;
+            }
+            change(&|s| s.colour = colour);
+            resync();
+            if colour == Colour::Custom {
+                more();
             }
         });
         swatches.append(&button);
@@ -256,7 +297,7 @@ pub fn build(
     first.append(&row("Font", &font));
 
     // 3. Size: a small and a large letter A, and no number.
-    let size = {
+    let (size, refresh) = {
         let (get, set) = (settings.clone(), change.clone());
         stepper(
             ("A", "Smaller text"),
@@ -266,6 +307,7 @@ pub fn build(
             move |n| set(&|s| s.size = n),
         )
     };
+    refreshers.push(refresh);
     if let Some(small) = size.first_child() {
         small.add_css_class("caption");
     }
@@ -277,8 +319,8 @@ pub fn build(
     // 4. More.
     let more = gtk::Button::with_label("More");
     {
-        let stack = stack.clone();
-        more.connect_clicked(move |_| stack.set_visible_child_name("more"));
+        let more_level = go("more");
+        more.connect_clicked(move |_| more_level());
     }
     first.append(&more);
 
@@ -286,8 +328,8 @@ pub fn build(
     let back = gtk::Button::with_label("Back");
     back.set_halign(gtk::Align::Start);
     {
-        let stack = stack.clone();
-        back.connect_clicked(move |_| stack.set_visible_child_name("first"));
+        let first_level = go("first");
+        back.connect_clicked(move |_| first_level());
     }
     second.append(&back);
 
@@ -325,7 +367,7 @@ pub fn build(
         ),
     ] {
         let (get, set) = (settings.clone(), change.clone());
-        let control = stepper(
+        let (control, refresh) = stepper(
             ("−", less),
             ("+", more),
             last,
@@ -341,6 +383,7 @@ pub fn build(
                 })
             },
         );
+        refreshers.push(refresh);
         second.append(&row(label, &control));
     }
 
@@ -446,7 +489,7 @@ pub fn build(
 
     // Show the settings in the controls. Run when the popover opens and
     // after a reset, so the controls never show something else.
-    let sync = {
+    let sync: Rc<dyn Fn()> = {
         let (settings, syncing, judge) = (settings.clone(), syncing.clone(), judge.clone());
         let (font, weight, margin, turn, follow) = (
             font.clone(),
@@ -499,11 +542,15 @@ pub fn build(
             page_colour.set_rgba(&rgba(s.custom.0));
             text_colour.set_rgba(&rgba(s.custom.1));
             judge();
+            for refresh in &refreshers {
+                refresh();
+            }
             syncing.set(false);
         })
     };
+    sync_slot.replace(Rc::downgrade(&sync));
     {
-        let (change, sync) = (change.clone(), sync.clone());
+        let (change, syncing, resync) = (change.clone(), syncing.clone(), resync.clone());
         follow.connect_active_notify(move |f| {
             let on = f.is_active();
             change(&|s| {
@@ -515,7 +562,7 @@ pub fn build(
             });
             // The swatches show the change.
             if !syncing.get() {
-                sync();
+                resync();
             }
         });
     }
@@ -528,9 +575,11 @@ pub fn build(
         });
     }
     {
-        let (sync, stack) = (sync.clone(), stack.clone());
+        let first_level = go("first");
+        // The popover's own handler holds the one strong `sync`: the
+        // popover owns its controls, and none of them owns the popover.
         popover.connect_show(move |_| {
-            stack.set_visible_child_name("first");
+            first_level();
             sync();
         });
     }

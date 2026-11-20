@@ -19,6 +19,8 @@
 	--columns: 1;
 	--flow: paged;
 	--turn: slide;
+	/* "none" when the system asks for less motion. */
+	--motion: full;
 	/* A line of 60 to 70 characters, centred, never wider. */
 	--measure: 34em;
 	--edge: calc(48px * var(--margin));
@@ -67,9 +69,11 @@ body {
 	transition: none;
 }
 /* Two columns to a page: the margins' width between them, so every column
-   is as far from the next as the page's edge is from its first. */
+   is as far from the next as the page's edge is from its first. Each column
+   is at most the measure, and the pair is centred: the side margin grows,
+   and the space between the columns with it. */
 html.two {
-	--side: var(--edge);
+	--side: max(var(--edge), calc((100vw - 2 * var(--measure)) / 4));
 }
 html.two body {
 	column-width: calc((100vw - 4 * var(--side)) / 2) !important;

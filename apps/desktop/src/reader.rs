@@ -210,6 +210,22 @@ fn position_error(w: &gtk::Window, e: &anyhow::Error) {
     }
 }
 
+/// GTK's setting for less motion. It arrived in GTK 4.20, and the app runs
+/// on 4.12, so it is looked up by name.
+const REDUCED_MOTION: &str = "gtk-interface-reduced-motion";
+
+/// Whether the system asks for less motion: animations are off, or the
+/// reduced motion setting says so.
+fn less_motion() -> bool {
+    gtk::Settings::default().is_some_and(|settings| {
+        !settings.is_gtk_enable_animations()
+            || settings.find_property(REDUCED_MOTION).is_some_and(|_| {
+                let value = settings.property_value(REDUCED_MOTION);
+                glib::EnumValue::from_value(&value).is_some_and(|(_, v)| v.nick() == "reduce")
+            })
+    })
+}
+
 /// Where the text settings are kept. They are the reader's own and never
 /// leave the machine.
 fn settings_file() -> std::path::PathBuf {
@@ -358,6 +374,19 @@ impl Reading {
                 r.apply();
             }
         });
+        if let Some(gtk_settings) = gtk::Settings::default() {
+            for name in ["gtk-enable-animations", REDUCED_MOTION] {
+                if gtk_settings.find_property(name).is_none() {
+                    continue;
+                }
+                let weak = Rc::downgrade(&reading);
+                gtk_settings.connect_notify_local(Some(name), move |_, _| {
+                    if let Some(r) = weak.upgrade() {
+                        r.apply();
+                    }
+                });
+            }
+        }
         let weak = Rc::downgrade(&reading);
         text.set_popover(Some(&text_panel::build(
             settings,
@@ -491,7 +520,13 @@ impl Reading {
             page.page.hex(),
             page.ink.hex()
         ));
-        let properties = settings.properties(dark, stark, &self.default_face);
+        let mut properties = settings.properties(dark, stark, &self.default_face);
+        // WebKitGTK does not tell the page that the system asks for less
+        // motion, so the reader does.
+        properties.push((
+            "--motion",
+            if less_motion() { "none" } else { "full" }.to_owned(),
+        ));
         let borrowed: Vec<(&str, &str)> = properties
             .iter()
             .map(|(name, value)| (*name, value.as_str()))
