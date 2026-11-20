@@ -1754,6 +1754,84 @@ fn a_turn_after_a_reflow_counts_from_the_held_place() -> Outcome {
     Ok(())
 }
 
+/// In scrolling, a place with no text of its own is held by where the
+/// reader is, as a share of the way down, so a reflow neither moves the
+/// reader to an end they were not at nor back to the top.
+fn scrolling_holds_a_place_without_text_where_it_is() -> Outcome {
+    let state = "const r = document.documentElement; return Math.round(r.scrollTop) + ' ' + Math.round(r.scrollHeight - r.clientHeight)";
+    let read = |stage: &Stage| -> Result<(f64, f64), Failed> {
+        let at = stage.app(state)?;
+        let mut at = at.split(' ').map(|v| v.parse::<f64>().unwrap_or(-1.0));
+        Ok((at.next().unwrap_or(-1.0), at.next().unwrap_or(-1.0)))
+    };
+    let hand = |stage: &Stage, top: u32| -> Outcome {
+        stage.events.borrow_mut().clear();
+        stage.app(&format!("window.dispatchEvent(new WheelEvent('wheel')); document.documentElement.scrollTop = {top}; return 1"))?;
+        stage.wait("a move after a hand scroll", |e| {
+            matches!(e, Event::Place { moved: true, .. })
+        })?;
+        Ok(())
+    };
+    let stage = Stage::new(one("<div style=\"height: 2000px\"></div>".into()), |_| {})?;
+    stage.view.set_style(&[("--flow", "scroll")]);
+    // (b) Inside the first screen, then a setting that changes nothing on
+    // the page: the text stays.
+    stage.open(0, Landing::Start)?;
+    hand(&stage, 200)?;
+    restyle(&stage, &[("--turn", "fade")])?;
+    let (now, _) = read(&stage)?;
+    check!(
+        now == 200.0,
+        "a change of page turn moved the text from 200 to {now}"
+    );
+    // (a) Partway down, then a shorter window: the same share of the way.
+    stage.open(0, Landing::Start)?;
+    hand(&stage, 700)?;
+    let (top, most) = read(&stage)?;
+    check!(top == 700.0, "the hand scroll went to {top}");
+    stage.events.borrow_mut().clear();
+    stage.window.set_default_size(900, 600);
+    stage.wait("place after a resize", |e| matches!(e, Event::Place { .. }))?;
+    pause(Duration::from_millis(300));
+    let (now, new_most) = read(&stage)?;
+    let expected = (700.0 / most * new_most).round();
+    check!(
+        new_most != most && (now - expected).abs() <= 2.0,
+        "after the window shrank the text is at {now} of {new_most}, not {expected} (was 700 of {most})"
+    );
+    // The very top and bottom stay there.
+    stage.open(0, Landing::End)?;
+    restyle(&stage, &[("--size", "1.2")])?;
+    let (now, most) = read(&stage)?;
+    check!(now == most, "a reflow moved the end to {now} of {most}");
+    stage.open(0, Landing::Start)?;
+    restyle(&stage, &[("--size", "1")])?;
+    let (now, _) = read(&stage)?;
+    check!(now == 0.0, "a reflow moved the start to {now}");
+    Ok(())
+}
+
+/// The reader's own scroll ends an unfinished slide at once, so a turn
+/// made straight after counts from where the text is, not from where the
+/// slide was going. In pages the root does not scroll by hand, so only
+/// scrolling is checked.
+fn a_hand_scroll_ends_a_slide_at_once() -> Outcome {
+    let stage = Stage::new(one(long_chapter()), |_| {})?;
+    stage
+        .view
+        .set_style(&[("--flow", "scroll"), ("--turn", "slide")]);
+    stage.open(0, Landing::Start)?;
+    let probe = stage.app("const r = document.documentElement; __reader.turn(1, true); window.dispatchEvent(new WheelEvent('wheel')); r.classList.remove('slide'); r.scrollTop = 300; const step = Math.max(40, r.clientHeight - parseFloat(getComputedStyle(r).lineHeight)); __reader.turn(1, false); return Math.round(r.scrollTop) + ' ' + Math.round(300 + step)")?;
+    let probe: Vec<&str> = probe.split(' ').collect();
+    check!(
+        probe[0] == probe[1],
+        "a turn after a hand scroll to 300 went to {}, not {}",
+        probe[0],
+        probe[1]
+    );
+    Ok(())
+}
+
 /// When the system asks for less motion, the reader sets `--motion` to
 /// "none", and a turn asked to animate moves the text at once, in pages and
 /// in scrolling, whatever the page turn setting. WebKitGTK 2.54 did not
@@ -1797,12 +1875,23 @@ struct Panel {
     window: gtk::Window,
     popover: gtk::Popover,
     settings: Rc<RefCell<settings::Settings>>,
+    /// The settings as the last change left them, where the reader saves.
+    saved: Rc<RefCell<Option<settings::Settings>>>,
 }
 
 impl Panel {
     fn new(saved: settings::Settings) -> Panel {
         let settings = Rc::new(RefCell::new(saved));
-        let popover = text_panel::build(settings.clone(), Vec::new(), Rc::new(|| {}));
+        let saved = Rc::new(RefCell::new(None));
+        let changed = {
+            let (settings, saved) = (Rc::downgrade(&settings), saved.clone());
+            Rc::new(move || {
+                if let Some(settings) = settings.upgrade() {
+                    saved.replace(Some(settings.borrow().clone()));
+                }
+            })
+        };
+        let popover = text_panel::build(settings.clone(), Vec::new(), changed);
         let button = gtk::MenuButton::builder().label("Aa").build();
         button.set_popover(Some(&popover));
         let window = gtk::Window::builder()
@@ -1818,6 +1907,7 @@ impl Panel {
             window,
             popover,
             settings,
+            saved,
         }
     }
 
@@ -1854,6 +1944,108 @@ impl Panel {
             .and_then(|row| row.last_child())
             .and_then(|w| w.downcast::<gtk::Switch>().ok())
             .unwrap_or_else(|| panic!("no switch {label}"))
+    }
+
+    /// The control on the row named `label`.
+    fn control<T: IsA<gtk::Widget>>(&self, label: &str) -> T {
+        self.all()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .find(|l| l.text() == label)
+            .and_then(|l| l.parent())
+            .and_then(|row| row.last_child())
+            .and_then(|w| w.downcast::<T>().ok())
+            .unwrap_or_else(|| panic!("no control {label}"))
+    }
+
+    /// Whether every control shows the settings, and if not, which does not.
+    fn consistent(&self) -> Result<(), String> {
+        use settings::{Colour, LETTERS, LINES, Margin, SIZES, Turn, WORDS};
+        let s = self.settings.borrow().clone();
+        let mut wrong = Vec::new();
+        if self
+            .switch("Page colour follows light and dark")
+            .is_active()
+            != (s.colour == Colour::System)
+        {
+            wrong.push("follow".to_owned());
+        }
+        for (name, colour) in [
+            ("White", Colour::White),
+            ("Paper", Colour::Paper),
+            ("Grey", Colour::Grey),
+            ("Black", Colour::Black),
+            ("A colour of your own", Colour::Custom),
+        ] {
+            if self.swatch(name).is_active() != (s.colour == colour) {
+                wrong.push(name.to_owned());
+            }
+        }
+        let selected = |label: &str| self.control::<gtk::DropDown>(label).selected();
+        if selected("Font") != 0 || s.face.is_some() {
+            wrong.push("font".to_owned());
+        }
+        if selected("Weight") as usize != s.weight {
+            wrong.push("weight".to_owned());
+        }
+        let margin = match s.margin {
+            Margin::Narrow => 0,
+            Margin::Medium => 1,
+            Margin::Wide => 2,
+        };
+        if selected("Margins") != margin {
+            wrong.push("margins".to_owned());
+        }
+        let turn = match s.turn {
+            Turn::Slide => 0,
+            Turn::Fade => 1,
+            Turn::None => 2,
+        };
+        if selected("Page turn") != turn {
+            wrong.push("turn".to_owned());
+        }
+        for (label, on) in [
+            ("Justified", s.justify),
+            ("Hyphenation", s.hyphenate),
+            ("Two columns", s.two_columns),
+            ("Continuous scrolling", s.scrolling),
+        ] {
+            if self.switch(label).is_active() != on {
+                wrong.push(label.to_owned());
+            }
+        }
+        for (less, more, at, last) in [
+            ("Smaller text", "Larger text", s.size, SIZES.len() - 1),
+            ("Tighter lines", "Looser lines", s.line, LINES.len() - 1),
+            (
+                "Closer letters",
+                "Wider letters",
+                s.letter,
+                LETTERS.len() - 1,
+            ),
+            ("Closer words", "Wider words", s.word, WORDS.len() - 1),
+        ] {
+            if self.button(less).is_sensitive() != (at > 0)
+                || self.button(more).is_sensitive() != (at < last)
+            {
+                wrong.push(less.to_owned());
+            }
+        }
+        let rgba = |label: &str| self.control::<gtk::ColorDialogButton>(label).rgba();
+        let as_rgb = |c: gtk::gdk::RGBA| {
+            let part = |v: f32| (v * 255.0).round() as u8;
+            settings::Rgb(part(c.red()), part(c.green()), part(c.blue()))
+        };
+        if as_rgb(rgba("Your page colour")) != s.custom.0
+            || as_rgb(rgba("Your text colour")) != s.custom.1
+        {
+            wrong.push("custom colours".to_owned());
+        }
+        if wrong.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("{wrong:?} do not show {s:?}"))
+        }
     }
 
     fn level(&self) -> String {
@@ -1951,6 +2143,209 @@ fn reset_shows_the_defaults_in_every_control() -> Outcome {
         tighter.is_sensitive(),
         "after Reset, Tighter lines is still disabled"
     );
+    Ok(())
+}
+
+/// One change to each control, as the reader would make it, from the
+/// defaults.
+type Action = (&'static str, fn(&Panel), fn(&mut settings::Settings));
+
+fn actions() -> Vec<Action> {
+    use settings::{Colour, Margin, Rgb, Turn};
+    fn swatch(panel: &Panel, name: &str) {
+        panel.swatch(name).set_active(true);
+    }
+    fn colour(panel: &Panel, label: &str, rgb: (f32, f32, f32)) {
+        panel
+            .control::<gtk::ColorDialogButton>(label)
+            .set_rgba(&gtk::gdk::RGBA::new(rgb.0, rgb.1, rgb.2, 1.0));
+    }
+    vec![
+        (
+            "White",
+            |p| swatch(p, "White"),
+            |s| s.colour = Colour::White,
+        ),
+        (
+            "Paper",
+            |p| swatch(p, "Paper"),
+            |s| s.colour = Colour::Paper,
+        ),
+        ("Grey", |p| swatch(p, "Grey"), |s| s.colour = Colour::Grey),
+        (
+            "Black",
+            |p| swatch(p, "Black"),
+            |s| s.colour = Colour::Black,
+        ),
+        (
+            "+",
+            |p| swatch(p, "A colour of your own"),
+            |s| s.colour = Colour::Custom,
+        ),
+        (
+            "follow off",
+            |p| {
+                p.switch("Page colour follows light and dark")
+                    .set_active(false)
+            },
+            |s| s.colour = Colour::Paper,
+        ),
+        (
+            "Larger text",
+            |p| p.button("Larger text").emit_clicked(),
+            |s| s.size += 1,
+        ),
+        (
+            "Smaller text",
+            |p| p.button("Smaller text").emit_clicked(),
+            |s| s.size -= 1,
+        ),
+        (
+            "Weight",
+            |p| p.control::<gtk::DropDown>("Weight").set_selected(3),
+            |s| s.weight = 3,
+        ),
+        (
+            "Tighter lines",
+            |p| p.button("Tighter lines").emit_clicked(),
+            |s| s.line -= 1,
+        ),
+        (
+            "Looser lines",
+            |p| p.button("Looser lines").emit_clicked(),
+            |s| s.line += 1,
+        ),
+        (
+            "Wider letters",
+            |p| p.button("Wider letters").emit_clicked(),
+            |s| s.letter += 1,
+        ),
+        (
+            "Wider words",
+            |p| p.button("Wider words").emit_clicked(),
+            |s| s.word += 1,
+        ),
+        (
+            "Margins",
+            |p| p.control::<gtk::DropDown>("Margins").set_selected(2),
+            |s| s.margin = Margin::Wide,
+        ),
+        (
+            "Justified",
+            |p| p.switch("Justified").set_active(true),
+            |s| {
+                s.justify = true;
+                s.hyphenate = true;
+            },
+        ),
+        (
+            "Hyphenation",
+            |p| p.switch("Hyphenation").set_active(true),
+            |s| s.hyphenate = true,
+        ),
+        (
+            "Two columns",
+            |p| p.switch("Two columns").set_active(true),
+            |s| s.two_columns = true,
+        ),
+        (
+            "Continuous scrolling",
+            |p| p.switch("Continuous scrolling").set_active(true),
+            |s| s.scrolling = true,
+        ),
+        (
+            "Page turn",
+            |p| p.control::<gtk::DropDown>("Page turn").set_selected(1),
+            |s| s.turn = Turn::Fade,
+        ),
+        (
+            "Your page colour",
+            |p| colour(p, "Your page colour", (0.2, 0.4, 0.6)),
+            |s| {
+                s.custom.0 = Rgb(51, 102, 153);
+                s.colour = Colour::Custom;
+            },
+        ),
+        (
+            "Your text colour",
+            |p| colour(p, "Your text colour", (1.0, 1.0, 0.8)),
+            |s| {
+                s.custom.1 = Rgb(255, 255, 204);
+                s.colour = Colour::Custom;
+            },
+        ),
+    ]
+}
+
+/// Changing any one control from the defaults changes exactly its setting,
+/// and every control then shows the settings.
+fn each_control_changes_only_its_setting() -> Outcome {
+    for (name, act, expect) in actions() {
+        let panel = Panel::new(settings::Settings::default());
+        act(&panel);
+        pause(Duration::from_millis(50));
+        let mut expected = settings::Settings::default();
+        expect(&mut expected);
+        check!(
+            *panel.settings.borrow() == expected,
+            "{name} made {:?}, not {expected:?}",
+            panel.settings.borrow()
+        );
+        panel
+            .consistent()
+            .map_err(|e| format!("after {name}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Reset from every control changed, with a colour of one's own and with
+/// following light and dark turned back on after it, ends with the
+/// defaults saved and shown.
+fn reset_from_every_change_restores_the_defaults() -> Outcome {
+    for follow in [false, true] {
+        let panel = Panel::new(settings::Settings::default());
+        panel.button("More").emit_clicked();
+        for (name, act, _) in actions() {
+            if ![
+                "White",
+                "Paper",
+                "Grey",
+                "Black",
+                "+",
+                "follow off",
+                "Smaller text",
+                "Looser lines",
+            ]
+            .contains(&name)
+            {
+                act(&panel);
+            }
+        }
+        if follow {
+            panel
+                .switch("Page colour follows light and dark")
+                .set_active(true);
+        }
+        check!(
+            *panel.settings.borrow() != settings::Settings::default(),
+            "nothing changed"
+        );
+        panel
+            .consistent()
+            .map_err(|e| format!("before Reset: {e}"))?;
+        panel.button("Reset").emit_clicked();
+        pause(Duration::from_millis(200));
+        check!(
+            *panel.settings.borrow() == settings::Settings::default()
+                && panel.saved.borrow().as_ref() == Some(&settings::Settings::default()),
+            "follow {follow}: Reset left {:?}, saved {:?}",
+            panel.settings.borrow(),
+            panel.saved.borrow()
+        );
+        panel
+            .consistent()
+            .map_err(|e| format!("follow {follow}, after Reset: {e}"))?;
+    }
     Ok(())
 }
 
@@ -2540,7 +2935,23 @@ const TESTS: &[Test] = &[
         "the_panel_is_freed_with_its_window",
         the_panel_is_freed_with_its_window,
     ),
+    (
+        "each_control_changes_only_its_setting",
+        each_control_changes_only_its_setting,
+    ),
+    (
+        "reset_from_every_change_restores_the_defaults",
+        reset_from_every_change_restores_the_defaults,
+    ),
     ("less_motion_turns_at_once", less_motion_turns_at_once),
+    (
+        "scrolling_holds_a_place_without_text_where_it_is",
+        scrolling_holds_a_place_without_text_where_it_is,
+    ),
+    (
+        "a_hand_scroll_ends_a_slide_at_once",
+        a_hand_scroll_ends_a_slide_at_once,
+    ),
     (
         "a_move_carries_its_place_and_a_reflow_does_not_move_it",
         a_move_carries_its_place_and_a_reflow_does_not_move_it,

@@ -128,6 +128,24 @@ fn rgb(colour: &gdk::RGBA) -> Rgb {
 /// controls, less the popover's arrow and padding.
 const MORE_HEIGHT: i32 = 460;
 
+/// The panel is showing the settings in its controls, from when this is
+/// made until it is dropped. Showings nest, and the panel counts as showing
+/// until the outermost ends.
+struct Showing(Rc<Cell<u32>>);
+
+impl Showing {
+    fn new(depth: &Rc<Cell<u32>>) -> Showing {
+        depth.set(depth.get() + 1);
+        Showing(depth.clone())
+    }
+}
+
+impl Drop for Showing {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
 thread_local! {
     /// Whether the swatches' style sheet has been added to the display.
     static SWATCH_STYLE: Cell<bool> = const { Cell::new(false) };
@@ -146,15 +164,40 @@ pub fn build(
     stack.set_vhomogeneous(false);
     popover.set_child(Some(&stack));
     // Controls set from code must not answer as if the reader had set them.
-    let syncing = Rc::new(Cell::new(false));
+    // While the panel shows the settings, `Showing` holds this above zero,
+    // and no handler can bring it back down: only the end of the outermost
+    // showing does.
+    let syncing = Rc::new(Cell::new(0u32));
+    // Everything that shows the settings in the controls, so a change made
+    // by one control shows in the others. It is filled in below, and held
+    // weakly by the controls' own handlers so nothing owns itself.
+    let sync_slot: Rc<RefCell<Weak<dyn Fn()>>> = Rc::new(RefCell::new(Weak::<fn()>::new()));
+    let resync = {
+        let slot = sync_slot.clone();
+        move || {
+            let sync = slot.borrow().upgrade();
+            if let Some(sync) = sync {
+                sync();
+            }
+        }
+    };
+    // The one way a control changes a setting. Afterwards every control
+    // shows the settings, so no handler has to remember which others a
+    // change touches.
     let change = {
-        let (settings, changed, syncing) = (settings.clone(), changed.clone(), syncing.clone());
+        let (settings, changed, syncing, resync) = (
+            settings.clone(),
+            changed.clone(),
+            syncing.clone(),
+            resync.clone(),
+        );
         Rc::new(move |edit: &dyn Fn(&mut Settings)| {
-            if syncing.get() {
+            if syncing.get() > 0 {
                 return;
             }
             edit(&mut settings.borrow_mut());
             changed();
+            resync();
         })
     };
 
@@ -186,19 +229,6 @@ pub fn build(
         .build();
     stack.add_named(&scroller, Some("more"));
 
-    // Everything that shows the settings in the controls, so a change made
-    // by one control shows in the others. It is filled in below, and held
-    // weakly by the controls' own handlers so nothing owns itself.
-    let sync_slot: Rc<RefCell<Weak<dyn Fn()>>> = Rc::new(RefCell::new(Weak::<fn()>::new()));
-    let resync = {
-        let slot = sync_slot.clone();
-        move || {
-            let sync = slot.borrow().upgrade();
-            if let Some(sync) = sync {
-                sync();
-            }
-        }
-    };
     // Steppers' functions that show their index again.
     let mut refreshers: Vec<Rc<dyn Fn()>> = Vec::new();
     let go = |name: &'static str| {
@@ -263,15 +293,13 @@ pub fn build(
         } else {
             group = Some(button.clone());
         }
-        let (change, syncing, resync, more) =
-            (change.clone(), syncing.clone(), resync.clone(), go("more"));
+        let (change, syncing, more) = (change.clone(), syncing.clone(), go("more"));
         button.connect_toggled(move |b| {
             // Showing the settings never changes them or moves the panel.
-            if syncing.get() || !b.is_active() {
+            if syncing.get() > 0 || !b.is_active() {
                 return;
             }
             change(&|s| s.colour = colour);
-            resync();
             if colour == Colour::Custom {
                 more();
             }
@@ -418,18 +446,7 @@ pub fn build(
     let hyphenate = switch("Hyphenation", |s, on| s.hyphenate = on);
     let columns = switch("Two columns", |s, on| s.two_columns = on);
     let scrolling = switch("Continuous scrolling", |s, on| s.scrolling = on);
-    {
-        // Justifying turns hyphenation on with it, and the switch shows it.
-        let (hyphenate, settings, syncing) = (hyphenate.clone(), settings.clone(), syncing.clone());
-        justify.connect_active_notify(move |_| {
-            let on = settings.borrow().hyphenate;
-            if hyphenate.is_active() != on {
-                syncing.set(true);
-                hyphenate.set_active(on);
-                syncing.set(false);
-            }
-        });
-    }
+    // Justifying turns hyphenation on with it, and `change` shows it.
 
     let turn = gtk::DropDown::from_strings(&["Slide", "Cross-fade", "None"]);
     {
@@ -506,7 +523,7 @@ pub fn build(
         );
         let (page_colour, text_colour) = (page_colour.clone(), text_colour.clone());
         Rc::new(move || {
-            syncing.set(true);
+            let _showing = Showing::new(&syncing);
             let s = settings.borrow().clone();
             for (colour, button) in &swatch_buttons {
                 button.set_active(*colour == s.colour);
@@ -545,12 +562,11 @@ pub fn build(
             for refresh in &refreshers {
                 refresh();
             }
-            syncing.set(false);
         })
     };
     sync_slot.replace(Rc::downgrade(&sync));
     {
-        let (change, syncing, resync) = (change.clone(), syncing.clone(), resync.clone());
+        let change = change.clone();
         follow.connect_active_notify(move |f| {
             let on = f.is_active();
             change(&|s| {
@@ -560,10 +576,6 @@ pub fn build(
                     s.colour = Colour::Paper;
                 }
             });
-            // The swatches show the change.
-            if !syncing.get() {
-                resync();
-            }
         });
     }
     {

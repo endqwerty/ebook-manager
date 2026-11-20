@@ -14,7 +14,7 @@
 	let landed = false;
 	// The layout has changed and the held place has not been shown again yet.
 	let reflowing = false;
-	let held = { offset: 0, edge: "start", textless: false, page: 0, pages: 1 };
+	let held = { offset: 0, edge: "start", textless: false, page: 0, pages: 1, share: 0 };
 
 	const index = () => {
 		nodes = [];
@@ -240,9 +240,16 @@
 		if (chosen) {
 			moves += 1;
 			const offset = place();
-			const last = page() === pages() - 1;
-			const edge = !textless ? null : last && chosen === "end" ? "end" : page() === 0 ? "start" : last ? "end" : null;
-			held = { offset, edge, textless, page: page(), pages: pages() };
+			// The ends: in pages the first and last page, in scrolling the very
+			// top and bottom of the scroll, not the first and last screen.
+			const first = scrolling ? root.scrollTop < 1 : page() === 0;
+			const last = scrolling ? bottom() : page() === pages() - 1;
+			const edge = !textless ? null : last && chosen === "end" ? "end" : first ? "start" : last ? "end" : null;
+			// How far down the scroll, or through the pages, the reader is.
+			// In scrolling a place with no text of its own is held by this.
+			const most = root.scrollHeight - height();
+			const share = scrolling ? (most > 0 ? root.scrollTop / most : 0) : pages() > 1 ? page() / (pages() - 1) : 0;
+			held = { offset, edge, textless, page: page(), pages: pages(), share };
 		}
 		return { offset: held.offset, page: page(), pages: pages(), move: moves, moved: !!chosen };
 	};
@@ -272,6 +279,9 @@
 		if (!landed) return;
 		if (held.edge === "start") show(0);
 		else if (held.edge === "end") show(pages() - 1);
+		// In scrolling, a place with no text in the middle stays the same
+		// share of the way down, whatever the screens now number.
+		else if (held.textless && scrolling) goTo(Math.round(held.share * Math.max(0, root.scrollHeight - height())), false);
 		// A text-less page in the middle keeps its number while the chapter
 		// keeps its page count. Otherwise only the text after it can be found.
 		else if (held.textless && held.pages === pages()) show(held.page);
@@ -434,14 +444,25 @@
 		true,
 	);
 	// Input that scrolls the page by hand.
-	const byHand = () => {
+	// Input that scrolls the text itself ends an unfinished slide or fade
+	// where the text is, at once, so whatever comes next counts from there.
+	// A press that may be a tap only marks the input, since a tap turns the
+	// page and the turn counts from where the slide is going. In pages the
+	// root cannot be scrolled by hand, so nothing is ended there.
+	const byHand = (scrolls) => {
+		if (scrolls && scrolling && (aim !== null || fading)) goTo(at(), false);
 		touched = true;
 	};
-	for (const kind of ["wheel", "pointerdown", "touchstart"]) addEventListener(kind, byHand, { capture: true, passive: true });
+	const options = { capture: true, passive: true };
+	addEventListener("wheel", () => byHand(true), options);
+	addEventListener("touchmove", () => byHand(true), options);
+	addEventListener("touchstart", () => byHand(false), options);
+	// A press on the scroll bar, which lies outside the client area.
+	addEventListener("pointerdown", (event) => byHand(event.clientX >= root.clientWidth || event.clientY >= root.clientHeight), options);
 	addEventListener(
 		"keydown",
 		(event) => {
-			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) byHand();
+			if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) byHand(true);
 		},
 		true,
 	);

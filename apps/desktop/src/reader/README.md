@@ -161,8 +161,12 @@ filter can also match a view test and run it on your own desktop.
 The view tests also build the text settings panel alone, from
 `settings.rs` and `text_panel.rs`, and check that its controls show the
 settings, that showing them never changes the level, that Reset refreshes
-every control, and that the panel is freed with its window. Its controls'
-handlers hold the panel's widgets weakly for that reason.
+every control, that changing one control changes only its setting, and
+that the panel is freed with its window. Its controls' handlers hold the
+panel's widgets weakly for that reason. Every change goes through one
+function that then shows the settings in every control, and while it shows
+them a counter that only the outermost showing can bring back to zero
+keeps any control from writing a setting.
 
 The view tests serve hostile chapters to a real web view and count
 connections to a local listener. Each is named for the statement of the

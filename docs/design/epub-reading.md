@@ -560,7 +560,7 @@ over anything the book's sheets say for the same property.
   and the window fits them. A turn sets the scroll offset. The slide is
   `scroll-behavior: smooth` and the cross-fade takes the page out and back
   in over 120 ms each way. When the system asks for less motion, by GTK's
-  animation setting or, from GTK 4.20, its reduced motion setting, a turn
+  animation setting or, from GTK 4.22, its reduced motion setting, a turn
   moves at once. WebKitGTK 2.54 does not answer `prefers-reduced-motion`
   from either, so the shell passes it as `--motion: none` and the script
   checks that. `less_motion_turns_at_once` checks the script's side; the
@@ -574,11 +574,12 @@ over anything the book's sheets say for the same property.
   properties, the page reflows, and the script goes back to the place it
   held before the change.
 - **Two columns** show when the reader asked for them and the window fits two
-  of 60 characters. CSS columns have one gap, so the space between the two is
-  the space between one page's last column and the next page's first, which
-  has to be both side margins. The reader design's 48 became twice the side
-  margin for that reason, and its page says so. Each column is at most the
-  34 em measure. In a wider window the pair is centred: the side margins
+  of at least 30 em, about 60 characters, each. That is when two show, not
+  how wide they are: each is at most the 34 em measure below. CSS columns
+  have one gap, so the space between the two is the space between one
+  page's last column and the next page's first, which has to be both side
+  margins. The reader design's 48 became twice the side margin for that
+  reason, and its page says so. In a wider window the pair is centred: the side margins
   grow, and the space between the columns, which is both of them, grows
   with them. `two_columns_when_they_fit` checks both widths.
 - **Scrolling** counts screens as pages, so the fraction read and the line
@@ -586,12 +587,23 @@ over anything the book's sheets say for the same property.
   screen however little of it is left, so the fraction read counts the
   whole chapter there, and a chapter with no text at its end is held as
   its end through a reflow (`the_bottom_of_a_scroll_is_the_last_screen`).
+  Only the very top and bottom of the scroll are ends. A place with no
+  text of its own anywhere else is held by how far down the scroll it is,
+  as a share, so a reflow keeps that share and neither moves the reader to
+  an end nor back to the top. What is saved for it is still the offset of
+  the first text after it (`scrolling_holds_a_place_without_text_where_it_is`).
+  Pages keep their own rule for a text-less page in the middle.
   A turn moves a screenful less a line. A scroll by wheel, key or scroll
   bar is a move, reported 150 ms after its last step. A scroll the script
   made itself, for a turn, a landing or a reflow, is not reported again
-  when it settles. A scroll by hand while a turn slides or waits to fade
-  ends that animation where the reader left the text, and is the move
-  (`a_hand_scroll_during_an_animation_is_the_move`).
+  when it settles. Input that scrolls by hand (a wheel, a touch drag, a
+  press on the scroll bar, a scrolling key) ends an unfinished slide or
+  fade at once where the text is, so a turn made straight after counts
+  from there (`a_hand_scroll_ends_a_slide_at_once`). A press that may be a
+  tap does not, since a tap turns the page. A move of the text while a
+  fade waits for its second half also ends it, and the scroll is the move
+  (`a_hand_scroll_during_an_animation_is_the_move`). In pages the root
+  cannot be scrolled by hand.
 - **The text column** is centred and never wider than 34 em, about 68
   characters, whatever the window's width.
 - **Page colours** are the four in [the reader design](interface-reader.md#page-colours),
