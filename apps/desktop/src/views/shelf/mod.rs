@@ -440,13 +440,20 @@ impl State {
             }
         });
         cell.add_controller(focus);
-        let preview = self.shared.preview.clone();
-        cell.set_has_tooltip(true);
-        cell.connect_query_tooltip(move |cell, _, _, _, _| {
-            preview(cell, true);
-            false
-        });
         let motion = gtk::EventControllerMotion::new();
+        let preview = self.shared.preview.clone();
+        motion.connect_enter(move |motion, _, _| {
+            let weak = motion.downgrade();
+            let preview = preview.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+                if let Some(motion) = weak.upgrade()
+                    && motion.contains_pointer()
+                    && let Some(cell) = motion.widget().and_downcast::<BookCell>()
+                {
+                    preview(&cell, true);
+                }
+            });
+        });
         let preview = self.shared.preview.clone();
         let c = cell.downgrade();
         motion.connect_leave(move |_| {

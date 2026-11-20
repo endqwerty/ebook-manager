@@ -1458,6 +1458,12 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
     pane = find("", "scroll pane").get_extents(Atspi.CoordType.WINDOW)
     left = (size("Ebook Manager")[0] - pane.width) // 2 - pane.x
     top = left
+    if look == "light":
+        xd("mousemove", "--window", wid,
+           left + bounds.x + bounds.width // 2, top + bounds.y + bounds.height // 2)
+        find("The Glass Orchard", "label")
+        xd("mousemove", 2, 2)
+        gone("The Glass Orchard", role="label")
     xd(
         "mousemove",
         "--window",

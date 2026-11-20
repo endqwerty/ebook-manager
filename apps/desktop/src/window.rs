@@ -558,21 +558,21 @@ impl Library {
     }
 
     fn preview(&self, cell: &BookCell, show: bool) {
+        let current = self
+            .preview_cell
+            .borrow()
+            .as_ref()
+            .and_then(|c| c.upgrade());
         if !show {
-            if self
-                .preview_cell
-                .borrow()
-                .as_ref()
-                .and_then(|c| c.upgrade())
-                .as_ref()
-                == Some(cell)
-            {
+            if current.as_ref() == Some(cell) {
                 self.preview.popdown();
                 self.preview_cell.take();
             }
             return;
         }
-        if self.context_popover.is_visible() {
+        if self.context_popover.is_visible()
+            || (self.preview.is_visible() && current.as_ref() == Some(cell))
+        {
             return;
         }
         let Some(row) = cell.book().and_then(|book| book.row()) else {
@@ -597,7 +597,7 @@ impl Library {
             bounds.x() as i32,
             bounds.y() as i32 + 14,
             bounds.width() as i32,
-            1,
+            (bounds.height() as i32 - 14).max(1),
         )));
         self.preview_cell.replace(Some(cell.downgrade()));
         self.preview.popup();
