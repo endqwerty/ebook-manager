@@ -705,10 +705,13 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 17. When the reader switches between Grid, List, Table and Shelf, sorts, types
     a search, and opens, edits and exports a book using only the keyboard,
     then each works, and the view and sort are as left after a restart.
-    `apps/desktop/tests/smoke.py`, for all but the shelf.
+    CI runs `apps/desktop/tests/smoke.py` and its `--shelf` invocation.
+    The latter reads and exports by keyboard after restarting in Shelf.
 18. When the shelf is resized, then the first fully visible book stays at the
-    top, and when a book is selected then only that spine changes.
-    `apps/desktop/tests/smoke.py`, and a unit test of the row packing.
+    top as far as the scroll range and keeping keyboard focus visible allow.
+    Selecting a book changes only that spine.
+    `apps/desktop/tests/scale.py` narrows and widens deep in the shelf.
+    `apps/desktop/tests/smoke.py` checks selection leaves neighbouring spines in place.
 
 ## Alternatives
 
@@ -780,7 +783,71 @@ same time.
      pull request's contract did not allow and an import needs.
    - Second: List and Table, the view switch, the Sort menu and its
      editor, the cover sizes and the remembered choices.
-4. **The shelf** (open). After 3. Behaviour 18.
+4. **The shelf** (implemented on Linux). Behaviour 18. The read thread
+   returns the strip with the opened view so the model can place the reader
+   as soon as the view has a size. GTK scrolls a viewport over a fixed canvas.
+   The canvas holds the visible rows and one extra at either end.
+   Cairo lifts the head of the selected spine four units, leaves its foot on
+   the board and enlarges its top strip. Projecting the lettering in pixel
+   bands made it unreadable. Other renderers use the perspective transform.
+   A labelled spine uses the plain style when its label cannot contain
+   the title line, including all thicknesses under 26. The back and the cloth
+   use the same seeded grain at their two specified strengths so Cairo and OpenGL
+   draw the same contrast. The caption reserves 24 logical pixels. The desktop
+   has no touch details page or details pane yet. The focused or hovered book
+   uses the window's preview. GTK can put it below a spine when there is no
+   room above. The focus ring follows the untipped cell, including the
+   clearance for the top edge. The clamped libadwaita spring uses damping
+   ratio 1, mass 1 and stiffness 450.
+
+   At 100,000 books the grouped shelf appeared in 0.595 s on the host and
+   0.516 s on Ubuntu 26.04. Both runs counted 186 spine widgets against a
+   bound of 336. On a width change the window waits for the new scroll range
+   before placing the first full book. A later move by the reader cancels
+   that placement. The window clamps the new position to keep the focused
+   spine on screen. During import it resolves the top book by ID and
+   restores its offset, including when added books sort above it. While
+   the focused spine is recycled, the viewport shows focus and the model
+   keeps the book by ID, including when an import window has keyboard focus.
+   The read thread returns its new rank and the viewport pages with the
+   placement reply. The model publishes those pages with the new strip.
+   If the reader moves during the read, the model asks for the new place
+   before replacing the old books. Menu brings the focused book back before
+   opening its menu. Opening the reader dismisses the shelf preview.
+
+   Earlier runs timed paint alone under Xvfb and Cairo, from the end of GDK
+   layout through after-paint. The two original scale runs reached
+   25.72 and 25.21 ms on the host and Ubuntu. Both had six frames over
+   16.7 ms. Removing each spine's offscreen texture made shadows and grain
+   paint again while scrolling. The maximum rose to 51.72 and 38.13 ms.
+   The shelf now caches up to 64 cloth surfaces by colour and dimensions
+   and flattens the finished spine once per snapshot. The final scale runs
+   reached 20.72 ms on the host (4 of 24 frames over 16.7 ms) and 17.14 ms
+   on Ubuntu (1 of 24). The no-dropped-frame target remains open. These
+   samples exclude update, layout and compositor presentation. The cache
+   renders cloth at the display scale and lifted height so its grain
+   keeps its size during selection.
+
+   Five alternating runs per build used the same 100,000-book fixture and
+   wheel gesture. On the host the median of the run maxima fell from 25.90
+   to 18.49 ms, and frames over budget fell from 30/112 to 13/119. The
+   worst host maximum rose from 26.65 to 29.59 ms. On Ubuntu the median
+   maximum fell from 34.75 to 21.51 ms, the worst from 62.16 to 29.73 ms,
+   and frames over budget from 29/98 to 21/111.
+
+   The driver now measures the whole GTK frame, from before update through
+   after paint, for each frame in which the wheel moved the adjustment.
+   Under Xvfb with Cairo, three host runs had maxima of 19.90–20.39 ms.
+   Ten of their 71 moving frames exceeded 16.7 ms. Four Ubuntu 26.04 runs
+   on two CPUs had maxima of 18.61–19.63 ms, with 20 of 95 frames over
+   budget. Including the independent verifier's 28.6 ms maximum, the
+   observed Ubuntu range is 18.6–28.6 ms. The software frame budget
+   remains unmet. Xvfb does not measure hardware presentation time.
+
+   Over five release runs, packing one
+   million 24-unit spines into a width of 999 took a median of 0.846 ms on
+   the host and 1.060 ms on Ubuntu. This measures the arithmetic for 25,000
+   rows, excluding GTK and catalogue reads.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).
 
 ## Open questions

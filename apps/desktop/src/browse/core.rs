@@ -15,7 +15,7 @@
 //!
 //! A view on screen is always one the model was given by the read thread
 //! for a query. The model never shows a view and an error together.
-use super::worker::{Reply, Request, Why};
+use super::worker::{Pages, Reply, Request, Why};
 use super::{Anchors, Placed, Placement, Query};
 use ebook_library::{BrowseRow, Cancel, OpenView, ViewToken};
 use std::collections::{HashMap, HashSet};
@@ -48,7 +48,10 @@ pub enum Effect {
     /// Show these books in place of whatever is shown.
     Swap {
         view: OpenView,
+        strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
         background: bool,
+        pages: Pages,
+        shelf_focus: Option<u32>,
     },
     /// A page of the view on screen arrived.
     Fill {
@@ -72,7 +75,11 @@ pub struct Opening {
     query: Query,
     reason: Placement,
     /// The view it made, waiting for the reader's place to be found in it.
-    arrived: Option<(OpenView, Anchors)>,
+    arrived: Option<(
+        OpenView,
+        Option<std::sync::Arc<ebook_library::ShelfStrip>>,
+        Anchors,
+    )>,
 }
 
 /// A view on screen.
@@ -240,19 +247,30 @@ impl Core {
         effects: &mut Vec<Effect>,
     ) {
         self.tag += 1;
+        let shelf = match (&why, self.opening()) {
+            (Locating::Place { .. }, Some(o))
+                if o.reason == Placement::Refresh && o.query.shelf =>
+            {
+                o.arrived.as_ref().and_then(|(_, _, anchors)| anchors.shelf)
+            }
+            _ => None,
+        };
         self.locating.insert(self.tag, why);
         effects.push(Effect::Send(Request::Locate {
             tag: self.tag,
             token,
             ids,
+            shelf,
         }));
     }
 
     fn place_ids(anchors: &Anchors) -> Vec<String> {
-        vec![
+        let mut ids = vec![
             anchors.current.clone().unwrap_or_default(),
             anchors.top.clone().unwrap_or_default(),
-        ]
+        ];
+        ids.extend(anchors.shelf_focus.iter().cloned());
+        ids
     }
 
     /// The open in flight has been answered. Runs the refresh that was put
@@ -335,7 +353,11 @@ impl Core {
 
     fn reply(&mut self, reply: Reply, anchors: &dyn Fn() -> Anchors, effects: &mut Vec<Effect>) {
         match reply {
-            Reply::Opened { serial, view } => {
+            Reply::Opened {
+                serial,
+                view,
+                strip,
+            } => {
                 if !self.is_opening(serial) {
                     return;
                 }
@@ -345,12 +367,16 @@ impl Core {
                 let token = view.token;
                 let ids = Self::place_ids(&now);
                 if let Some(opening) = self.opening() {
-                    opening.arrived = Some((view, now));
+                    opening.arrived = Some((view, strip, now));
                 }
                 self.locate(token, ids, Locating::Place { serial }, effects);
             }
-            Reply::Located { tag, ranks } => self.located(tag, Ok(ranks), anchors, effects),
-            Reply::NotLocated { tag, why } => self.located(tag, Err(why), anchors, effects),
+            Reply::Located { tag, ranks, pages } => {
+                self.located(tag, Ok(ranks), pages, anchors, effects)
+            }
+            Reply::NotLocated { tag, why } => {
+                self.located(tag, Err(why), Vec::new(), anchors, effects)
+            }
             Reply::Unchanged { serial } => {
                 if !self.is_opening(serial) {
                     return;
@@ -448,6 +474,7 @@ impl Core {
         &mut self,
         tag: u64,
         ranks: Result<Vec<Option<u32>>, Why>,
+        pages: Pages,
         anchors: &dyn Fn() -> Anchors,
         effects: &mut Vec<Effect>,
     ) {
@@ -470,6 +497,21 @@ impl Core {
                     self.fail("The library could not be read.".into(), effects);
                     return;
                 }
+                let now = anchors();
+                if let Some(opening) = self.opening()
+                    && opening.reason == Placement::Refresh
+                    && opening.query.shelf
+                    && let Some((view, _, asked)) = &mut opening.arrived
+                    && *asked != now
+                {
+                    // Keep showing the old books while the thread prepares
+                    // the viewport the reader actually moved to.
+                    let token = view.token;
+                    let ids = Self::place_ids(&now);
+                    *asked = now;
+                    self.locate(token, ids, Locating::Place { serial }, effects);
+                    return;
+                }
                 let phase = std::mem::replace(
                     &mut self.phase,
                     Phase::Error {
@@ -487,12 +529,12 @@ impl Core {
                         return;
                     }
                 };
-                let Some((view, asked)) = opening.arrived else {
+                let Some((view, strip, asked)) = opening.arrived else {
                     self.fail("The view arrived without its books.".into(), effects);
                     return;
                 };
                 let token = view.token;
-                let now = anchors();
+                let shelf = opening.query.shelf;
                 self.requested.clear();
                 self.locating
                     .retain(|_, why| matches!(why, Locating::Place { .. }));
@@ -506,8 +548,18 @@ impl Core {
                 };
                 effects.push(Effect::Gone);
                 effects.push(Effect::Swap {
+                    strip,
                     view,
                     background: opening.reason == Placement::Refresh,
+                    pages,
+                    shelf_focus: if shelf && asked.shelf_focus == now.shelf_focus {
+                        ranks
+                            .as_ref()
+                            .ok()
+                            .and_then(|rs| rs.get(2).copied().flatten())
+                    } else {
+                        None
+                    },
                 });
                 match ranks {
                     Ok(ranks) if now == asked => effects.push(Effect::Place(Placed {
@@ -675,9 +727,45 @@ mod tests {
                     }
                     // Every waiting place is told.
                     Effect::Gone => self.waiting.clear(),
-                    Effect::Swap { .. } => {
+                    Effect::Swap {
+                        ref strip,
+                        ref view,
+                        ref pages,
+                        background,
+                        shelf_focus,
+                    } => {
+                        assert_eq!(
+                            strip.as_ref().map(|s| s.thickness.len()),
+                            self.core.query.shelf.then_some(view.count as usize)
+                        );
                         assert!(self.waiting.is_empty(), "a swap left places untold");
                         self.filled = vec![0];
+                        self.filled.extend(pages.iter().map(|(page, _)| *page));
+                        if background
+                            && strip.is_some()
+                            && let Some(window) = self.anchors.borrow().shelf
+                        {
+                            for rank in
+                                window.first..(window.first + window.capacity).min(view.count)
+                            {
+                                assert!(
+                                    self.filled.contains(&(rank / PAGE)),
+                                    "refresh lost a visible page"
+                                );
+                            }
+                            if let Some(rank) = shelf_focus {
+                                let page = rank / PAGE;
+                                let rows = if page == 0 {
+                                    &view.first
+                                } else {
+                                    &pages.iter().find(|(p, _)| *p == page).unwrap().1
+                                };
+                                assert_eq!(
+                                    Some(&rows[(rank % PAGE) as usize].id),
+                                    self.anchors.borrow().shelf_focus.as_ref()
+                                );
+                            }
+                        }
                         self.event(Event::Swapped);
                     }
                     Effect::Fill { page, .. } => {
@@ -697,7 +785,14 @@ mod tests {
         /// and gives it to the core.
         fn deliver(&mut self, reply: Reply) {
             let answered = match &reply {
-                Reply::Opened { serial, view } => {
+                Reply::Opened {
+                    serial,
+                    view,
+                    strip,
+                } => {
+                    if let Some(strip) = strip {
+                        assert_eq!(strip.thickness.len(), view.count as usize);
+                    }
                     self.readers = Some(view.token);
                     open_key(*serial)
                 }
@@ -737,10 +832,12 @@ mod tests {
                     let query = match self.random(5) {
                         0 => Query::default(),
                         1 => Query {
+                            shelf: false,
                             text: "atlas".into(),
                             sort: vec![],
                         },
                         2 => Query {
+                            shelf: true,
                             text: "book 4".into(),
                             sort: vec![SortTerm {
                                 field: Field::Author,
@@ -748,6 +845,7 @@ mod tests {
                             }],
                         },
                         3 => Query {
+                            shelf: false,
                             text: "matches nothing".into(),
                             sort: vec![],
                         },
@@ -757,6 +855,7 @@ mod tests {
                                 descending: false,
                             };
                             Query {
+                                shelf: false,
                                 text: String::new(),
                                 sort: vec![term, term],
                             }
@@ -807,8 +906,13 @@ mod tests {
                     let current = fixture::id(self.random(u64::from(BOOKS)) as u32);
                     let top_offset = -(self.random(40) as f32);
                     *self.anchors.borrow_mut() = Anchors {
-                        current: Some(current),
-                        top: None,
+                        shelf: Some(super::super::ShelfViewport {
+                            first: self.random(BOOKS as u64) as u32,
+                            capacity: 62,
+                        }),
+                        shelf_focus: Some(current.clone()),
+                        current: Some(current.clone()),
+                        top: Some(current),
                         top_offset,
                         focused: true,
                     };
@@ -901,11 +1005,19 @@ mod tests {
         let token = view.token;
         let (mut core, _) = Core::new(Query::default());
         let here = || Anchors::default();
-        core.step(Event::Reply(Reply::Opened { serial: 1, view }), &here);
+        core.step(
+            Event::Reply(Reply::Opened {
+                serial: 1,
+                view,
+                strip: None,
+            }),
+            &here,
+        );
         let placed = core.step(
             Event::Reply(Reply::Located {
                 tag: 1,
                 ranks: vec![None, None],
+                pages: vec![],
             }),
             &here,
         );
@@ -965,7 +1077,14 @@ mod tests {
             .unwrap();
         let (mut core, _) = Core::new(Query::default());
         let here = || Anchors::default();
-        core.step(Event::Reply(Reply::Opened { serial: 1, view }), &here);
+        core.step(
+            Event::Reply(Reply::Opened {
+                serial: 1,
+                view,
+                strip: None,
+            }),
+            &here,
+        );
         let effects = core.step(
             Event::Reply(Reply::NotLocated {
                 tag: 1,
@@ -1038,7 +1157,14 @@ mod tests {
                 .open(&Default::default(), &Cancel::default())
                 .unwrap();
             let serial = asked(&core.step(event, here)).unwrap().0;
-            let located = core.step(Event::Reply(Reply::Opened { serial, view }), here);
+            let located = core.step(
+                Event::Reply(Reply::Opened {
+                    serial,
+                    view,
+                    strip: None,
+                }),
+                here,
+            );
             match located[..] {
                 [Effect::Send(Request::Locate { tag, .. })] => tag,
                 _ => panic!("a view that opened asks where the reader is"),
@@ -1048,6 +1174,7 @@ mod tests {
             Event::Reply(Reply::Located {
                 tag,
                 ranks: vec![Some(4), Some(9)],
+                pages: vec![],
             })
         };
         // The reader does not move: they are placed with the swap.

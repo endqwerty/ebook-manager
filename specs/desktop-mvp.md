@@ -2,11 +2,11 @@
 
 ## Acceptance walk-through
 
-Use an empty XDG data directory and generated EPUBs. Start the app, add a folder containing a multi-chapter EPUB, an exact duplicate, a revised copy and an invalid file. Check each result and resolve the revision. Switch between the grid, the list and the table and sort each. Search by typing, then edit the title, author, sort title, author sort name, series and position from the keyboard and find the new values. Read chapter two, close the application, reopen the same book and check its reading position. Send the book to a folder twice and compare the exported bytes to the imported EPUB. Keep the source files intact throughout. [`smoke.py`](../apps/desktop/tests/smoke.py) exercises the keyboard commands and window resizes, and [`scale.py`](../apps/desktop/tests/scale.py) uses 100,000 generated books to check launch, scroll position when switching views, search, jumping to the last row, and background imports.
+Use an empty XDG data directory and generated EPUBs. Start the app, add a folder containing a multi-chapter EPUB, an exact duplicate, a revised copy and an invalid file. Check each result and resolve the revision. Switch between the grid, list, table and shelf and sort each. Search by typing, then edit the title, author, sort title, author sort name, series and position from the keyboard and find the new values. Read chapter two, close the application, reopen the same book and check its reading position. Send the book to a folder twice and compare the exported bytes to the imported EPUB. Keep the source files intact throughout. [`smoke.py`](../apps/desktop/tests/smoke.py) exercises the keyboard commands and window resizes, and [`scale.py`](../apps/desktop/tests/scale.py) uses 100,000 generated books to check launch, scroll position when switching views, search, jumping to the last row, and background imports.
 
 ## The library window
 
-- The window shows one place, All books, with the number of books beside its name, as a grid of covers, a list or a table. A place with no sort chosen is in title order: a leading article is skipped by the book's language, and numbers sort by value.
+- The window shows one place, All books, with the number of books beside its name, as a grid of covers, a list, a table or a shelf. A place with no sort chosen is in title order: a leading article is skipped by the book's language, and numbers sort by value.
 - Every cover is a 2:3 frame of the same size. A book with a cover image shows it with an edge line, a shade on the side it is bound and a shadow. A book without one shows a binding set in type: its title and author on one of eight colours chosen from the book's ID. While a cover's image is being read its frame is the cover's average colour. Under More contrast the shade and shadows go and an outline is drawn around the cover. The app follows the system's light or dark appearance.
 - A partly read book has a line under its cover, as long as the part read. A finished book has a check mark after its author. A screen reader hears both in words with the title and author.
 - The grid's number of columns follows the window's width, the cover size and the system's text size. Covers grow to share a row, up to a quarter over the chosen width: 96 for small covers, 128 for medium and 160 for large.
@@ -18,9 +18,15 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 
 - A list row is a small cover, the title, the author, and the series with the book's place in it. At its trailing edge is the percentage read, a check mark for a finished book, or, when the list is sorted by a date, that date. The cover is 40, 48 or 60 wide with the cover size.
 - The table has a column for each fact: Title, Author, Series, Date Added and Progress to start with, and Date Published and Last Read to add. Title has a small cover and cannot be removed. A column's width can be dragged, and a header dragged to another place.
-- The table is offered when the window content is at least 640 wide. Under that the view switch is a menu without it, and a window set to the table shows the list. When the system's text size is one and a half times or more, a window set to the grid shows the list. Neither changes the choice.
+- The table is offered when the window content is at least 640 wide. Under that the view switch is a menu without it, and a window set to the table shows the list. When the system's text size is one and a half times or more, a window set to the grid or shelf shows the list. Neither changes the choice.
 - From the first row, Up reaches the table's headers. On a header, Left and Right move along them, Return sorts by that column and again turns the sort round, Control+Return adds the column as the next sort key or turns that key round, and the Menu key or Shift+F10 opens the header's menu. Down returns to the books. A click and a Control+click do what Return and Control+Return do. A second and third key show a small 2 and 3 in their headers.
 - A header's menu shows and hides columns, moves its column toward the start or the end, and offers **Make Wider** and **Make Narrower** in steps of 24.
+
+## Shelf
+
+The three sizes draw spines 144, 192 or 240 logical pixels tall. Thickness comes from the book's length. The first sort key can start rows by author letter, series or year. When the window narrows or widens, the row containing the previous first fully visible book moves to the top, within the scroll range. If that would hide the focused spine, the viewport moves just far enough to show it. Importing books that sort above the viewport keeps the original top book at its vertical offset. The visible spines keep their titles and cloth while the new rows load. A book scrolled out of view keeps its keyboard focus through the import report.
+
+Click or use the arrow keys to select. Shift extends the range. Control-click toggles a book. Up and Down go to the nearest spine centre in the adjacent row. Page Up and Page Down move by a viewport of rows. Home and End reach the ends of the catalogue, and Shift extends the selection there. Ctrl+A selects all books and Ctrl+Shift+A clears the selection. When a focused spine scrolls away, its book regains focus when it comes back into view. Menu or Shift+F10 brings that book back and opens its menu. Escape from search returns keyboard navigation to the shelf. Selection tips the book about its foot. The software renderer lifts the top and keeps the lettering flat. Its neighbours stay in place. Focus and pointer rest show a cover preview. Opening the reader dismisses it. The book menu, Return, F2 and Ctrl+D act as in the other views. More contrast removes the texture and shading, and reduced motion puts the book straight into its tipped position.
 
 ## Sorting
 
@@ -42,7 +48,7 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 | Command | Keys |
 |---|---|
 | Add files, add a folder | Ctrl+O, Ctrl+Shift+O, or the Add menu |
-| Grid, list, table | Ctrl+1, Ctrl+2, Ctrl+3, or the view switch |
+| Grid, list, table, shelf | Ctrl+1, Ctrl+2, Ctrl+3, Ctrl+4, or the view switch |
 | Sort | The Sort menu, a table header, or Ctrl+Shift+S for the sort editor |
 | Small, medium or large covers | The main menu, F10 |
 | Search | Typing, or Ctrl+F |

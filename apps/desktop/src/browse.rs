@@ -32,8 +32,16 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 /// What the reader asked to see. An empty sort is the library's default.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Query {
+    pub shelf: bool,
     pub text: String,
     pub sort: Vec<SortTerm>,
+}
+
+/// Rank at the viewport and an upper bound on the number of spines it can show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShelfViewport {
+    pub first: u32,
+    pub capacity: u32,
 }
 
 /// Where the reader is in the view on screen.
@@ -45,6 +53,9 @@ pub struct Anchors {
     pub top: Option<String>,
     /// Where that book starts, from the top of the view.
     pub top_offset: f32,
+    pub shelf: Option<ShelfViewport>,
+    /// The shelf remembers its book while another widget or window has focus.
+    pub shelf_focus: Option<String>,
     /// A book holds the keyboard focus.
     pub focused: bool,
 }
@@ -166,6 +177,7 @@ impl BookObject {
 /// handed out, and the selection.
 #[derive(Default)]
 struct State {
+    strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
     count: u32,
     pages: HashMap<u32, Vec<Rc<BrowseRow>>>,
     /// Loaded pages, oldest first.
@@ -195,6 +207,10 @@ impl State {
     }
     /// Keeps a page, and returns whether any of its books is selected.
     fn store_page(&mut self, page: u32, rows: Vec<BrowseRow>) -> bool {
+        self.store_page_with_limit(page, rows, CACHED_PAGES)
+    }
+
+    fn store_page_with_limit(&mut self, page: u32, rows: Vec<BrowseRow>, limit: usize) -> bool {
         let mut any = false;
         for (n, row) in rows.iter().enumerate() {
             let rank = page * PAGE + n as u32;
@@ -206,7 +222,7 @@ impl State {
         self.pages
             .insert(page, rows.into_iter().map(Rc::new).collect());
         self.recent.push_back(page);
-        while self.recent.len() > CACHED_PAGES {
+        while self.recent.len() > limit {
             if let Some(old) = self.recent.pop_front() {
                 self.pages.remove(&old);
             }
@@ -246,6 +262,7 @@ impl State {
     }
     /// Empties the view, and returns how many items there were.
     fn clear(&mut self) -> u32 {
+        self.strip = None;
         self.live.clear();
         self.pages.clear();
         self.recent.clear();
@@ -267,6 +284,7 @@ mod imp {
         /// The protocol with the read thread. `None` until the first query.
         pub(super) core: RefCell<Option<Core>>,
         pub(super) state: RefCell<State>,
+        pub(super) parked: RefCell<Option<BookObject>>,
         pub(super) hooks: RefCell<Option<Rc<Hooks>>>,
     }
     #[glib::object_subclass]
@@ -538,7 +556,13 @@ impl BookListModel {
                         place.leave();
                     }
                 }
-                Effect::Swap { view, background } => self.swap(view, background),
+                Effect::Swap {
+                    view,
+                    strip,
+                    background,
+                    pages,
+                    shelf_focus,
+                } => self.swap(view, strip, background, pages, shelf_focus),
                 Effect::Fill { page, rows } => {
                     let (arrived, selected) = {
                         let mut state = self.imp().state.borrow_mut();
@@ -556,7 +580,8 @@ impl BookListModel {
                     // Books selected in an earlier view show as selected
                     // now that their rows say which they are.
                     if selected {
-                        self.selection_changed(page * PAGE, PAGE);
+                        let first = page * PAGE;
+                        self.selection_changed(first, PAGE.min(self.n_items() - first));
                     }
                 }
                 Effect::Place(placed) => {
@@ -576,6 +601,7 @@ impl BookListModel {
                     self.changed(false);
                 }
                 Effect::Empty => {
+                    self.park_focus(None);
                     self.before_replace();
                     // With an error shown there are no books, so there is
                     // no selection either: a command must not reach a book
@@ -594,15 +620,30 @@ impl BookListModel {
         }
     }
 
+    /// Geometry for the view now on screen, when opened for a shelf.
+    pub fn strip(&self) -> Option<std::sync::Arc<ebook_library::ShelfStrip>> {
+        self.imp().state.borrow().strip.clone()
+    }
+
     /// Shows the books of a view in place of whatever is shown. The
     /// selection is by ID and needs nothing found: each row says whether
     /// its book is selected as it arrives.
-    fn swap(&self, view: OpenView, background: bool) {
+    fn swap(
+        &self,
+        view: OpenView,
+        strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
+        background: bool,
+        pages: worker::Pages,
+        shelf_focus: Option<u32>,
+    ) {
         self.before_replace();
         let before = {
             let mut state = self.imp().state.borrow_mut();
             // The interval runs from when a refresh is shown.
             if background {
+                if strip.is_some() && std::env::var_os("EBOOK_SHELF_REFRESH_TRACE").is_some() {
+                    eprintln!("shelf-refresh");
+                }
                 state.last_refresh = Some(Instant::now());
             }
             state.clear()
@@ -615,9 +656,17 @@ impl BookListModel {
         let selected: Vec<String> = {
             let mut state = self.imp().state.borrow_mut();
             state.count = view.count;
-            state.store_page(0, view.first);
+            state.strip = strip;
+            // Even a viewport larger than the normal cache must bind its
+            // first boards from the pages delivered with the swap.
+            let limit = CACHED_PAGES.max(1 + pages.len());
+            state.store_page_with_limit(0, view.first, limit);
+            for (page, rows) in pages {
+                state.store_page_with_limit(page, rows, limit);
+            }
             state.selected.iter().cloned().collect()
         };
+        self.park_focus(shelf_focus.and_then(|rank| self.item(rank)?.downcast().ok()));
         self.items_changed(0, 0, view.count);
         self.changed(true);
         self.run(Event::Swapped);
@@ -695,6 +744,15 @@ impl BookListModel {
     pub fn selected_count(&self) -> u64 {
         let state = self.imp().state.borrow();
         (state.selected.len() + state.pending.len()) as u64
+    }
+
+    /// Retain the book (including a pending page read) when its cell is reused.
+    pub fn park_focus(&self, book: Option<BookObject>) {
+        self.imp().parked.replace(book);
+    }
+
+    pub fn parked_focus(&self) -> Option<BookObject> {
+        self.imp().parked.borrow().clone()
     }
 
     /// The selected book, when there is one and only one.

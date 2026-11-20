@@ -75,7 +75,11 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   rows. Every spine is one height, its thickness follows the book's length, its
   colour comes from the cover, and a selected book tips out from the top. It is
   drawn as [the shelf design](../design/interface-views.md#shelf) says and stays
-  smooth at 100,000 books.
+  smooth at 100,000 books. The Linux shelf draws the spines and groups,
+  keeps the first full book’s row at the top when narrowing or widening as far as focus visibility allows,
+  and shares the library selection and commands, including Select All.
+  At 100,000 books the desktop driver checks the on-screen widget count,
+  scrolls, resizes and extends a selection. The frame-time target remains open.
 - `LIB-27` (core) Bulk edit with a preview of every change and undo.
 - `LIB-28` (core) Every action is reachable from the keyboard. This is a common
   complaint about existing tools. Done for the Linux library window, including column widths. Every command [has a key](../../specs/desktop-mvp.md#commands-and-keys), and the smoke check exercises keyboard commands. The desktop checks also resize the window and scroll with the wheel. The import report's buttons are reached with Tab.
@@ -171,7 +175,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   within 2 seconds of launch, and a quick search answers within 100 milliseconds. It never reads every file at start. Reports of existing tools slowing
   or failing start at about 20,000 books. The catalogue meets its open and search targets at 100,000 books and stays within the benchmark's looser limits at 1,000,000, where a search takes about 150 ms. The Linux window shows the first titles of 100,000 books about 0.26 seconds after launch and answers a search as the reader types. [Desktop behaviour](../../specs/desktop-mvp.md#large-libraries) [Catalogue benchmark](../design/library-browsing.md#the-benchmark)
 - `LIB-71` (core) The grid scrolls smoothly at any size, with covers drawn from
-  cached thumbnails. The Linux grid creates rows only for what is on screen and draws covers from cached thumbnails. Its frame rate has not been measured.
+  cached thumbnails. The Linux grid creates rows only for what is on screen and draws covers from cached thumbnails. Its frame rate has not been measured. For the shelf, the scale driver measures each sampled frame from before update through after paint, including layout, while the scroll position moves in the private X11 session. Whole GTK frames exceeded 16.7 ms on the Cairo software renderer. Run maxima on two CPUs under Ubuntu 26.04 have ranged from 18.6 to 28.6 ms. The software frame budget and hardware presentation-time checks both remain open.
 - `LIB-72` (core) No long job blocks the window: import, conversion, metadata fetch,
   indexing, device transfer. On Linux, import, the survey of covers and sending to a device run off the window's thread, and during an import the list refreshes at most once a second and keeps its place. Conversion, metadata fetch and indexing do not exist yet.
 

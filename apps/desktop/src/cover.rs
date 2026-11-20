@@ -43,12 +43,16 @@ const BINDINGS: [(u32, u32); 8] = [
 
 /// The binding for a book with no cover image: the first four bytes of the
 /// SHA-256 of its identifier, as a big-endian number, modulo 8.
-fn binding(id: &str) -> (u32, u32) {
-    let hash = Sha256::digest(id.as_bytes());
-    BINDINGS[(u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]) % 8) as usize]
+pub(crate) fn binding(id: &str) -> (u32, u32) {
+    BINDINGS[(binding_hash(id) % 8) as usize]
 }
 
-fn rgb(colour: u32, alpha: f32) -> gdk::RGBA {
+pub(crate) fn binding_hash(id: &str) -> u32 {
+    let hash = Sha256::digest(id.as_bytes());
+    u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]])
+}
+
+pub(crate) fn rgb(colour: u32, alpha: f32) -> gdk::RGBA {
     let channel = |shift: u32| ((colour >> shift) & 0xff) as f32 / 255.0;
     gdk::RGBA::new(channel(16), channel(8), channel(0), alpha)
 }
@@ -82,7 +86,7 @@ fn place(image: (f32, f32), frame: (f32, f32)) -> (graphene::Rect, bool) {
 }
 
 /// The desktop asks for less motion.
-fn reduced_motion() -> bool {
+pub(crate) fn reduced_motion() -> bool {
     // The setting arrived in GTK 4.20, and the app runs on 4.12.
     gtk::Settings::default().is_some_and(|settings| {
         settings

@@ -2,13 +2,16 @@
 //! requests in order: one reply to every request, with what was asked for
 //! or with the reason it cannot be given. It never drops one. What a reason
 //! means is the model's to decide.
-use super::{PAGE, Query};
+use super::{PAGE, Query, ShelfViewport};
 use crate::store::Store;
 use ebook_library::{
     BrowseQuery, BrowseReader, BrowseRow, Cancel, Cancelled, CatalogueReplaced, OpenView,
     SortOrder, StaleView, ViewToken,
 };
+use std::collections::BTreeSet;
 use std::sync::mpsc;
+
+pub type Pages = Vec<(u32, Vec<BrowseRow>)>;
 
 pub enum Request {
     Open {
@@ -27,6 +30,7 @@ pub enum Request {
         tag: u64,
         token: ViewToken,
         ids: Vec<String>,
+        shelf: Option<ShelfViewport>,
     },
     Page {
         token: ViewToken,
@@ -48,6 +52,7 @@ pub enum Reply {
     Opened {
         serial: u64,
         view: OpenView,
+        strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
     },
     /// The view the model named as the one it is showing is the reader's
     /// own, and the catalogue has not changed since it opened. Never said
@@ -67,6 +72,7 @@ pub enum Reply {
     Located {
         tag: u64,
         ranks: Vec<Option<u32>>,
+        pages: Pages,
     },
     NotLocated {
         tag: u64,
@@ -150,6 +156,7 @@ pub fn serve(
         reader: None,
         held: None,
     };
+    let mut cached_strip = None;
     for request in requests {
         let reply = match request {
             Request::Open {
@@ -183,8 +190,38 @@ pub fn serve(
                 });
                 match opened {
                     Ok(Some(view)) => {
+                        let strip = if query.shelf {
+                            if reader.held.as_ref().map(|held| held.1) != Some(view.token)
+                                || cached_strip.is_none()
+                            {
+                                cached_strip = Some(
+                                    reader
+                                        .run(|r, _| r.shelf(view.token))
+                                        .map(std::sync::Arc::new),
+                                );
+                            }
+                            cached_strip
+                                .as_ref()
+                                .map(|result| result.as_ref().map(std::sync::Arc::clone))
+                        } else {
+                            cached_strip = None;
+                            None
+                        };
                         reader.held = Some((query, view.token, view.count));
-                        Reply::Opened { serial, view }
+                        match strip.transpose() {
+                            Ok(strip) => Reply::Opened {
+                                serial,
+                                view,
+                                strip,
+                            },
+                            Err(e) => {
+                                reader.held = None;
+                                Reply::Failed {
+                                    serial,
+                                    message: format!("{e:#}"),
+                                }
+                            }
+                        }
                     }
                     Ok(None) => Reply::Unchanged { serial },
                     Err(e) if e.is::<Cancelled>() => Reply::Cancelled { serial },
@@ -194,16 +231,41 @@ pub fn serve(
                     },
                 }
             }
-            Request::Locate { tag, token, ids } => {
-                match reader
-                    .reader
-                    .as_mut()
-                    .map(|reader| reader.locate(token, &ids))
-                {
-                    Some(Ok(ranks)) => Reply::Located { tag, ranks },
-                    failed => Reply::NotLocated {
+            Request::Locate {
+                tag,
+                token,
+                ids,
+                shelf,
+            } => {
+                let located = reader.run(|reader, held| {
+                    let ranks = reader.locate(token, &ids)?;
+                    let mut pages = Vec::new();
+                    if let Some(viewport) = shelf {
+                        let count = held.as_ref().map_or(0, |v| v.2);
+                        let top = ranks.get(1).copied().flatten().unwrap_or(viewport.first);
+                        // The old scroll offset can paint once before placement. Load
+                        // both windows, including a row on either side of the anchor.
+                        let mut needed = BTreeSet::new();
+                        for first in [viewport.first, top] {
+                            let start = first.saturating_sub(viewport.capacity);
+                            let end = first.saturating_add(viewport.capacity).min(count);
+                            if start < end {
+                                needed.extend(start / PAGE..=(end - 1) / PAGE);
+                            }
+                        }
+                        needed.extend(ranks.get(2).copied().flatten().map(|r| r / PAGE));
+                        needed.remove(&0); // OpenView already includes it.
+                        for page in needed {
+                            pages.push((page, reader.window(token, page * PAGE, PAGE)?));
+                        }
+                    }
+                    Ok((ranks, pages))
+                });
+                match located {
+                    Ok((ranks, pages)) => Reply::Located { tag, ranks, pages },
+                    Err(e) => Reply::NotLocated {
                         tag,
-                        why: why(failed.and_then(Result::err)),
+                        why: why(Some(e)),
                     },
                 }
             }
@@ -284,6 +346,7 @@ mod tests {
                 descending: false,
             };
             let query = Query {
+                shelf: false,
                 text: String::new(),
                 sort: vec![term, term],
             };
@@ -297,7 +360,12 @@ mod tests {
         }
         fn locate(&self, token: ViewToken, ids: Vec<String>) -> Reply {
             self.requests
-                .send(Request::Locate { tag: 7, token, ids })
+                .send(Request::Locate {
+                    tag: 7,
+                    token,
+                    ids,
+                    shelf: None,
+                })
                 .unwrap();
             self.replies.recv_blocking().unwrap()
         }
@@ -363,6 +431,7 @@ mod tests {
         let mut thread = Thread::start(&app);
         let a = opened(thread.open());
         let other = Query {
+            shelf: false,
             text: "first".into(),
             sort: vec![],
         };
@@ -381,7 +450,7 @@ mod tests {
         assert!(matches!(thread.page(b.token), Reply::Page { .. }));
         assert!(matches!(
             thread.locate(b.token, vec![b.first[0].id.clone(), "missing".into()]),
-            Reply::Located { tag: 7, ranks } if ranks == [Some(0), None]
+            Reply::Located { tag: 7, ranks, .. } if ranks == [Some(0), None]
         ));
     }
 
@@ -415,6 +484,7 @@ mod tests {
         // the reader's view, which is the same one while nothing changed.
         assert_eq!(opened(refresh(&mut thread, None)).token, a.token);
         let other = Query {
+            shelf: false,
             text: "first".into(),
             sort: vec![],
         };

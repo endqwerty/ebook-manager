@@ -50,7 +50,9 @@ jobs:
 
       - name: Import, read, restart and export from the desktop
         id: desktop
-        run: /usr/bin/python3 apps/desktop/tests/smoke.py "$RUNNER_TEMP/ebook-manager/bin/ebook-manager" "$RUNNER_TEMP/desktop-evidence"
+        run: |
+          /usr/bin/python3 apps/desktop/tests/smoke.py "$RUNNER_TEMP/ebook-manager/bin/ebook-manager" "$RUNNER_TEMP/desktop-evidence"
+          /usr/bin/python3 apps/desktop/tests/smoke.py "$RUNNER_TEMP/ebook-manager/bin/ebook-manager" "$RUNNER_TEMP/desktop-evidence/shelf-only" --shelf
 
       - name: Exercise mounted FAT32 card export
         id: card

@@ -2,6 +2,8 @@
 checks that it stays quick. See apps/desktop/README.md."""
 
 import argparse
+import json
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -260,6 +262,7 @@ def view_switches():
         wait_for_focus(expect_view(target), target, book)
         print(f"PASS view {source} → {target} keeps focus visible on {book!r}", flush=True)
     key("ctrl+1")
+    expect_view(1)
 
 
 def small_epub(path, n):
@@ -284,11 +287,372 @@ def small_epub(path, n):
         )
 
 
+def shelf_run(binary, root):
+    settings = root / "config/ebook-manager/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps({"view": "shelf", "sort": {"shelf": [{"field": "author"}]}})
+    )
+    db = sqlite3.connect(root / "data/ebook-manager/library.sqlite")
+    last = db.execute(
+        "select title,authors from book order by author_key desc,n desc limit 1"
+    ).fetchone()
+    db.close()
+    started = time.monotonic()
+    proc = smoke.launch_app(binary, environment(root, EBOOK_SHELF_FRAME_TIMES="1"))
+    try:
+        body = find("Bookshelf")
+        find("Book ", "table cell", contains=True, parent=body)
+        launch_time = time.monotonic() - started
+        assert launch_time < LAUNCH_LIMIT, launch_time
+        find("#", "label", parent=body)
+        wid = focus("Ebook Manager")
+
+        def spines():
+            return [n for n in walk(body) if n.get_role_name() == "table cell"]
+
+        count = len(spines())
+        pane = find("", "scroll pane")
+        bounds = pane.get_extents(Atspi.CoordType.WINDOW)
+        limit = (bounds.width // 16 + 1) * (bounds.height // 263 + 4)
+        assert 0 < count <= limit, (count, limit)
+        smoke.xd(
+            "mousemove",
+            "--window",
+            wid,
+            100,
+            350,
+            "click",
+            "--repeat",
+            24,
+            "--delay",
+            18,
+            5,
+        )
+        time.sleep(0.5)
+
+        samples = [
+            int(line.split()[-1]) / 1000
+            for line in (root / "app-stderr.log").read_text().splitlines()
+            if line.startswith("shelf-frame-us ")
+        ]
+        assert samples, "no moving frames were timed"
+        print(
+            f"Shelf whole frame (before update through after paint) under Xvfb and Cairo: {len(samples)} frames, maximum {max(samples):.2f} ms, {sum(ms > 16.7 for ms in samples)} over 16.7 ms",
+            flush=True,
+        )
+
+        def first_full_row():
+            top = pane.get_extents(Atspi.CoordType.WINDOW).y
+            places = [(n.get_extents(Atspi.CoordType.WINDOW), n) for n in spines()]
+            y = min(r.y for r, n in places if r.y >= top and r.height > 0)
+            return [n for r, n in places if r.y == y]
+
+        def resize_keeping_top(width):
+            anchor = first_full_row()[0].get_name()
+            old_width = pane.get_extents(Atspi.CoordType.WINDOW).width
+            smoke.xd("windowsize", wid, width, 720)
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    if pane.get_extents(
+                        Atspi.CoordType.WINDOW
+                    ).width != old_width and anchor in [
+                        n.get_name() for n in first_full_row()
+                    ]:
+                        break
+                except (GLib.Error, ValueError):
+                    pass
+                assert time.monotonic() < deadline, (
+                    anchor,
+                    old_width,
+                    pane.get_extents(Atspi.CoordType.WINDOW).width,
+                    [n.get_name() for n in first_full_row()][:3],
+                )
+                time.sleep(POLL)
+            return anchor
+
+        anchor = resize_keeping_top(1020)
+        book = first_full_row()[0]
+        r = book.get_extents(Atspi.CoordType.WINDOW)
+        smoke.xd(
+            "mousemove",
+            "--window",
+            wid,
+            r.x + r.width // 2,
+            r.y + r.height // 2,
+            "click",
+            1,
+        )
+        key("End", "shift+Left")
+        end = find(", ".join(last), "table cell", contains=True, parent=body)
+        deadline = time.monotonic() + 5
+        while True:
+            selected = [
+                n
+                for n in spines()
+                if n.get_state_set().contains(Atspi.StateType.SELECTED)
+            ]
+            if len(selected) == 2:
+                break
+            assert time.monotonic() < deadline, [n.get_name() for n in selected]
+            time.sleep(POLL)
+        print(
+            f"PASS grouped shelf launch {launch_time:.3f}s, {count} spines (bound {limit}), resize kept {anchor}, selection reaches {end.get_name()}",
+            flush=True,
+        )
+        key("End")
+        def focused_name():
+            for n in spines():
+                n.clear_cache()
+                if n.get_state_set().contains(Atspi.StateType.FOCUSED):
+                    return n.get_name()
+            return None
+
+        key(*(["Up"] * 35))
+        time.sleep(0.4)
+        # Put focus on the anchor for this check so both fit after narrowing.
+        r = first_full_row()[0].get_extents(Atspi.CoordType.WINDOW)
+        inset = (smoke.size("Ebook Manager")[0] - pane.get_extents(Atspi.CoordType.WINDOW).width) // 2
+        smoke.xd("mousemove", "--window", wid, inset + r.x + r.width // 2, inset + r.y + r.height // 2, "click", 1)
+        narrow = resize_keeping_top(540)
+        wide = resize_keeping_top(1020)
+        print(f"PASS deep resize kept {narrow} at 540 and {wide} at 1020", flush=True)
+        # Move the pointer over the books. Keyboard focus may stay on an
+        # offscreen book even though its row of widgets has been recycled.
+        key("End", "ctrl+Left")
+        focus_before_wheel = focused_name()
+        assert focus_before_wheel and focus_before_wheel != end.get_name()
+        smoke.xd("mousemove", "--window", wid, 400, 350, "click", "--repeat", 45, "--delay", 12, 4)
+        time.sleep(0.3)
+        assert focus_before_wheel not in [n.get_name() for n in spines()]
+        smoke.xd("click", "--repeat", 65, "--delay", 12, 5)
+        deadline = time.monotonic() + 8
+        while focused_name() != focus_before_wheel:
+            assert time.monotonic() < deadline, (focus_before_wheel, focused_name())
+            time.sleep(POLL)
+        print("PASS wheel away and back restored focus to the same unselected book", flush=True)
+        smoke.xd("click", "--repeat", 45, "--delay", 12, 4)
+        time.sleep(0.3)
+        assert focus_before_wheel not in [n.get_name() for n in spines()]
+        key("Menu")
+        find("", "menu item")
+        key("Escape")
+        assert focused_name() == focus_before_wheel
+        print("PASS Menu reveals the parked book and returns focus to it", flush=True)
+        key("Page_Up")
+        above = focused_name()
+        assert above not in (None, focus_before_wheel)
+        key("Page_Down")
+        assert focused_name() not in (None, above)
+        print("PASS Page Up and Page Down move shelf focus", flush=True)
+        key("End", "ctrl+2")
+        wait_for_focus(expect_view(2), 2, last)
+        key("ctrl+4")
+        shelf = find("Bookshelf")
+        body = shelf
+        deadline = time.monotonic() + 10
+        while True:
+            cell = find(", ".join(last), "table cell", contains=True, parent=shelf)
+            cell.clear_cache()
+            frame = pane.get_extents(Atspi.CoordType.WINDOW)
+            location = cell.get_extents(Atspi.CoordType.WINDOW)
+            if (
+                cell.get_state_set().contains(Atspi.StateType.FOCUSED)
+                and location.y < frame.y + frame.height
+                and location.y + location.height > frame.y
+            ):
+                break
+            assert time.monotonic() < deadline, (
+                last,
+                location.y,
+                frame.y,
+                frame.height,
+            )
+            time.sleep(POLL)
+        print(
+            "PASS the focused book stays visible through Shelf to List and back",
+            flush=True,
+        )
+        smoke.xd("windowsize", wid, 540, 720)
+        deadline = time.monotonic() + 8
+        while True:
+            frame = pane.get_extents(Atspi.CoordType.WINDOW)
+            cell = find(", ".join(last), "table cell", contains=True, parent=shelf)
+            box = cell.get_extents(Atspi.CoordType.WINDOW)
+            if (
+                frame.width < 600
+                and focused_name() == cell.get_name()
+                and frame.y <= box.y
+                and box.y + box.height <= frame.y + frame.height
+            ):
+                break
+            assert time.monotonic() < deadline, (frame, box, focused_name())
+            time.sleep(POLL)
+        print("PASS last focused spine stays on screen after narrowing", flush=True)
+        for query, result in [("atlas", f"{BOOKS // 4:,} books"), ("qqqqqqqq", "No books match")]:
+            smoke.search(query)
+            find(result)
+            key("Escape")
+            find(f"{BOOKS:,} books")
+            deadline = time.monotonic() + 8
+            while not focused_name():
+                assert time.monotonic() < deadline, "Escape did not return focus to the shelf"
+                time.sleep(POLL)
+            key("Home")
+            first = focused_name()
+            key("Right")
+            assert focused_name() and focused_name() != first
+            print(f"PASS arrow navigation resumes after Escape from {result}", flush=True)
+        smoke.xd("windowsize", wid, 1020, 720)
+        key("ctrl+1")
+        find("Books", "table")
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+    finally:
+        if proc.poll() is None:
+            stop(proc)
+
+
+def shelf_import_focus(binary, fixture, root):
+    root.mkdir()
+    env = environment(root)
+    subprocess.run([fixture, root / "data/ebook-manager", "3998"], check=True, env=env)
+    settings = root / "config/ebook-manager/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({
+        "view": "shelf", "sort": {"shelf": [{"field": "title", "descending": True}]},
+    }))
+    proc = smoke.launch_app(binary, env)
+    try:
+        body = find("Bookshelf")
+        wid = focus("Ebook Manager")
+
+        def add(folder, numbers):
+            folder.mkdir()
+            for n in numbers:
+                small_epub(folder / f"{n}.epub", n)
+            key("ctrl+shift+o")
+            smoke.picker(folder, "Choose a folder of EPUBs")
+            find("Import complete")
+            smoke.click("Done")
+
+        add(root / "Readable", [1000, 1001])
+        find("4,000 books")
+        spine = find("Imported 1001", "table cell", contains=True, parent=body)
+        box = spine.get_extents(Atspi.CoordType.WINDOW)
+        width = find("", "scroll pane").get_extents(Atspi.CoordType.WINDOW).width
+        inset = (smoke.size("Ebook Manager")[0] - width) // 2
+        smoke.xd("mousemove", "--window", wid, inset + box.x + box.width // 2,
+                 inset + box.y + box.height // 2, "click", 1)
+        spine.clear_cache()
+        assert spine.get_state_set().contains(Atspi.StateType.FOCUSED)
+        smoke.xd("click", "--repeat", 12, "--delay", 25, 5)
+        wait_for_wheel_stop(body.get_parent())
+        assert not any(n.get_name().startswith("Imported 1001") for n in walk(body))
+        add(root / "Incoming", range(2000, 2060))
+        find("4,060 books")
+        # The report and library are separate native windows. Send the key
+        # once the window manager has actually returned input to the library.
+        deadline = time.monotonic() + 8
+        while subprocess.run(["xdotool", "getactivewindow"], capture_output=True, text=True).stdout.strip() != wid:
+            assert time.monotonic() < deadline, "library did not regain keyboard input"
+            time.sleep(POLL)
+        key("Right")
+        deadline = time.monotonic() + 8
+        while True:
+            neighbour = find("Imported 1000", "table cell", contains=True, parent=body)
+            neighbour.clear_cache()
+            if neighbour.get_state_set().contains(Atspi.StateType.FOCUSED):
+                break
+            assert time.monotonic() < deadline, [
+                (n.get_role_name(), n.get_name()) for n in walk(Atspi.get_desktop(0))
+                if n.get_state_set().contains(Atspi.StateType.FOCUSED)
+            ]
+            time.sleep(POLL)
+        key("Menu")
+        find("", "menu item")
+        key("Escape", "Return")
+        reader = find("Imported 1000", "frame")
+        find("Page 1 of", contains=True, parent=reader)
+        smoke.click("Back to library")
+        print("PASS Right, Menu and Return on the original neighbour after 60 imports with focus scrolled away", flush=True)
+    finally:
+        stop(proc)
+        smoke.check_diagnostics(root)
+
+
+def shelf_import_above(binary, fixture, root):
+    root.mkdir()
+    env = environment(root, EBOOK_SHELF_REFRESH_TRACE="1")
+    subprocess.run([fixture, root / "data/ebook-manager", "5000"], check=True, env=env)
+    settings = root / "config/ebook-manager/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({
+        "view": "shelf",
+        "sort": {"shelf": [{"field": "title", "descending": True}]},
+    }))
+    incoming = root / "Incoming"
+    incoming.mkdir()
+    for n in range(400):
+        small_epub(incoming / f"{n}.epub", n)
+    proc = smoke.launch_app(binary, env)
+    try:
+        body = find("Bookshelf")
+        find("Book ", "table cell", contains=True, parent=body)
+        wid = focus("Ebook Manager")
+        smoke.xd("mousemove", "--window", wid, 400, 350, "click", "--repeat", 16, "--delay", 20, 5)
+        wait_for_wheel_stop(body.get_parent())
+        pane = find("", "scroll pane")
+        top = pane.get_extents(Atspi.CoordType.WINDOW).y
+
+        def row():
+            entries = []
+            for n in walk(body):
+                if n.get_role_name() == "table cell":
+                    r = n.get_extents(Atspi.CoordType.WINDOW)
+                    if r.y + r.height > top and r.height > 0:
+                        entries.append((r.y, r.x, n.get_name()))
+            return sorted(entries)
+
+        entries = row()
+        y, _, book = entries[0]
+        log = root / "app-stderr.log"
+        start = log.stat().st_size
+        count = find("5,000 books")
+        key("ctrl+shift+o")
+        smoke.picker(incoming, "Choose a folder of EPUBs")
+        deadline = time.monotonic() + 180
+        while count.get_name() != "5,400 books":
+            assert time.monotonic() < deadline, count.get_name()
+            count.clear_cache()
+            time.sleep(POLL)
+        deadline = time.monotonic() + 10
+        while True:
+            entries = row()
+            if any(abs(at - y) <= 2 and name == book for at, _, name in entries):
+                break
+            assert time.monotonic() < deadline, (book, y, entries[:2])
+            time.sleep(POLL)
+        trace = log.read_bytes()[start:].splitlines()
+        swaps = trace.count(b"shelf-refresh")
+        placeholders = trace.count(b"shelf-visible-placeholder")
+        assert swaps and not placeholders, (swaps, placeholders)
+        print(f"PASS {swaps} shelf refreshes drew {placeholders} visible placeholders", flush=True)
+        print(f"PASS 400 imports above the shelf kept {book} at y={y}", flush=True)
+    finally:
+        stop(proc)
+        smoke.check_diagnostics(root)
+
+
 def run(binary, fixture, root):
     env = environment(root)
     subprocess.run(
         [fixture, root / "data/ebook-manager", str(BOOKS)], check=True, env=env
     )
+    shelf_import_above(binary, fixture, root / "shelf-refresh")
+    shelf_import_focus(binary, fixture, root / "shelf-import-focus")
+    shelf_run(binary, root)
     incoming = root / "Incoming"
     incoming.mkdir()
     for n in range(IMPORTS):
@@ -379,8 +743,7 @@ def run(binary, fixture, root):
                 smoke.xd("mousemove", "--window", wid, 60, 400, "click", "--repeat", 24, "--delay", 12, 5)
                 wait_for_scroll(body, 1, before, first_only=True)
                 wait_for_wheel_stop(body)
-                after = first_row_titles(body, 1)
-                assert after and after[0] != before[0], (before, after)
+                after = wait_for_scroll(body, 1, before, first_only=True)
                 scrolled = settled()
                 # Still moved once the view is still: a view put back after
                 # the wheel would match what was there before it.
