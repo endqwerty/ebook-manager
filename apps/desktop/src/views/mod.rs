@@ -2,6 +2,7 @@
 //! its place in the model, and finding cells again on screen.
 pub mod grid;
 pub mod list;
+pub mod shelf;
 pub mod table;
 
 use crate::{
@@ -20,6 +21,7 @@ use std::{
     rc::Rc,
 };
 
+type Preview = dyn Fn(&BookCell, bool);
 type OpenMenu = dyn Fn(&BookCell);
 
 /// What every view is built with.
@@ -28,6 +30,7 @@ pub struct Shared {
     pub thumbs: Thumbs,
     /// Opens the context menu for a cell.
     pub menu: Rc<OpenMenu>,
+    pub preview: Rc<Preview>,
     pub cover_size: CoverSize,
     /// The first sort key, which the list shows when no line of a row does.
     pub sorted_by: Rc<Cell<SortField>>,
@@ -38,12 +41,14 @@ pub enum View {
     Grid(gtk::GridView),
     List(gtk::ListView),
     Table(table::Table),
+    Shelf(shelf::Shelf),
 }
 
 impl View {
     pub fn widget(&self) -> &gtk::Widget {
         match self {
             View::Grid(view) => view.upcast_ref(),
+            View::Shelf(view) => view.widget.upcast_ref(),
             View::List(view) => view.upcast_ref(),
             View::Table(table) => table.view.upcast_ref(),
         }
@@ -62,8 +67,22 @@ impl View {
         }
         self.widget().clone()
     }
+    pub fn focus_books(&self) {
+        if let View::Shelf(shelf) = self
+            && shelf
+                .widget
+                .root()
+                .and_then(|root| root.focus())
+                .is_some_and(|w| w.is_ancestor(&shelf.widget))
+        {
+            return;
+        }
+        self.body().grab_focus();
+    }
+
     pub fn scroll_to(&self, rank: u32, flags: gtk::ListScrollFlags) {
         match self {
+            View::Shelf(view) => view.scroll_to(rank, flags),
             View::Grid(view) => view.scroll_to(rank, flags, None),
             View::List(view) => view.scroll_to(rank, flags, None),
             View::Table(table) => table.view.scroll_to(rank, None, flags, None),
@@ -71,6 +90,7 @@ impl View {
     }
     pub fn connect_activate(&self, activated: impl Fn(u32) + 'static) {
         match self {
+            View::Shelf(_) => return,
             View::Grid(view) => view.connect_activate(move |_, rank| activated(rank)),
             View::List(view) => view.connect_activate(move |_, rank| activated(rank)),
             View::Table(table) => table.view.connect_activate(move |_, rank| activated(rank)),
@@ -301,7 +321,7 @@ pub fn row_bounds(cell: &BookCell, body: &gtk::Widget) -> Option<gtk::graphene::
     let mut row: gtk::Widget = cell.clone().upcast();
     loop {
         let parent = row.parent()?;
-        if parent == *body {
+        if parent == *body || (body.is::<gtk::Viewport>() && parent.is::<gtk::Fixed>()) {
             return row.compute_bounds(body);
         }
         row = parent;

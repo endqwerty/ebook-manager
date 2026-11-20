@@ -24,6 +24,8 @@ struct Library {
     scrolled: gtk::ScrolledWindow,
     overlay: gtk::Overlay,
     context_popover: gtk::PopoverMenu,
+    preview: gtk::Popover,
+    preview_cell: RefCell<Option<glib::WeakRef<BookCell>>>,
     context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     menu_buttons: [gtk::MenuButton; 3],
     /// As wide as the books' area and no taller than nothing: it reports
@@ -198,7 +200,7 @@ impl Library {
                 self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::FOCUS));
             }
             if was.focused {
-                self.with_view(|view| view.body().grab_focus());
+                self.with_view(|view| view.focus_books());
             }
         }
         if !keep_top {
@@ -239,7 +241,7 @@ impl Library {
                     };
                     let focus_book = |rank| {
                         view.scroll_to(rank, gtk::ListScrollFlags::FOCUS);
-                        body.grab_focus();
+                        view.focus_books();
                     };
                     let Some(top) = bounds_of(rank) else {
                         if frames.get() <= 10 {
@@ -307,6 +309,14 @@ impl Library {
         let menu = Rc::downgrade(self);
         let shared = Shared {
             thumbs: self.thumbs.clone(),
+            preview: {
+                let weak = Rc::downgrade(self);
+                Rc::new(move |cell, show| {
+                    if let Some(lib) = weak.upgrade() {
+                        lib.preview(cell, show);
+                    }
+                })
+            },
             menu: Rc::new(move |cell| {
                 if let Some(library) = menu.upgrade() {
                     library.context_menu(cell);
@@ -316,6 +326,11 @@ impl Library {
             sorted_by: self.sorted_by.clone(),
         };
         let view = match kind {
+            ViewKind::Shelf => View::Shelf(views::shelf::Shelf::new(
+                &self.model,
+                &shared,
+                &self.scrolled,
+            )),
             ViewKind::Grid => View::Grid(grid::build(&self.model, &shared)),
             ViewKind::List => View::List(list::build(&self.model, &shared)),
             ViewKind::Table => {
@@ -368,6 +383,8 @@ impl Library {
         self.scrolled
             .set_hscrollbar_policy(if kind == ViewKind::Table {
                 gtk::PolicyType::Automatic
+            } else if kind == ViewKind::Shelf {
+                gtk::PolicyType::External
             } else {
                 gtk::PolicyType::Never
             });
@@ -540,7 +557,55 @@ impl Library {
         }
     }
 
+    fn preview(&self, cell: &BookCell, show: bool) {
+        if !show {
+            if self
+                .preview_cell
+                .borrow()
+                .as_ref()
+                .and_then(|c| c.upgrade())
+                .as_ref()
+                == Some(cell)
+            {
+                self.preview.popdown();
+                self.preview_cell.take();
+            }
+            return;
+        }
+        if self.context_popover.is_visible() {
+            return;
+        }
+        let Some(row) = cell.book().and_then(|book| book.row()) else {
+            return;
+        };
+        let Some(bounds) = cell.compute_bounds(&self.overlay) else {
+            return;
+        };
+        let cover = crate::cover::Cover::new(crate::cover::Kind::List, 96, &self.thumbs);
+        cover.set_halign(gtk::Align::Center);
+        cover.set_book(Some(&row));
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        content.append(&cover);
+        for text in [&row.title, &row.authors, &views::shelf::state_label(&row)] {
+            let label = gtk::Label::new(Some(text));
+            label.set_max_width_chars(25);
+            label.set_wrap(true);
+            content.append(&label);
+        }
+        self.preview.set_child(Some(&content));
+        self.preview.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+            bounds.x() as i32,
+            bounds.y() as i32 + 14,
+            bounds.width() as i32,
+            1,
+        )));
+        self.preview_cell.replace(Some(cell.downgrade()));
+        self.preview.popup();
+    }
+
     fn close_context_menu(&self) {
+        self.preview.popdown();
+        self.preview_cell.take();
         if self.context_popover.is_visible() {
             self.context_popover.popdown();
         }
@@ -704,6 +769,7 @@ pub fn accelerators(app: &adw::Application) {
         ("win.view('grid')", &["<Control>1"]),
         ("win.view('list')", &["<Control>2"]),
         ("win.view-table", &["<Control>3"]),
+        ("win.view('shelf')", &["<Control>4"]),
         ("win.sort-more", &["<Control><Shift>s"]),
         ("win.refresh", &["F5", "<Control>r"]),
         ("win.edit", &["F2"]),
@@ -820,6 +886,15 @@ pub fn open(app: &adw::Application) {
             scrolled,
             overlay: gtk::Overlay::new(),
             context_popover,
+            preview: gtk::Popover::builder()
+                .visible(false)
+                .position(gtk::PositionType::Top)
+                .focusable(false)
+                .can_target(false)
+                .autohide(false)
+                .halign(gtk::Align::Start)
+                .build(),
+            preview_cell: Default::default(),
             context_focus: RefCell::new(None),
             menu_buttons: [add, main_menu, add_first.clone()],
             width: gtk::DrawingArea::builder().hexpand(true).build(),
@@ -899,6 +974,7 @@ pub fn open(app: &adw::Application) {
     library.overlay.set_child(Some(&frame));
     // Reuse the native popup surface. Older GTK can still have a tooltip
     // query pending when the menu closes.
+    library.overlay.add_overlay(&library.preview);
     library.overlay.add_overlay(&library.context_popover);
     let weak = Rc::downgrade(&library);
     library.context_popover.connect_closed(move |_| {
@@ -1141,7 +1217,7 @@ pub fn open(app: &adw::Application) {
                 let to = gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT;
                 library.with_view(|view| view.scroll_to(0, to));
             }
-            library.with_view(|view| view.body().grab_focus());
+            library.with_view(|view| view.focus_books());
             glib::Propagation::Stop
         }
         _ => glib::Propagation::Proceed,
@@ -1193,7 +1269,7 @@ pub fn open(app: &adw::Application) {
         glib::Propagation::Stop
     });
     let query = Query {
-        shelf: false,
+        shelf: library.shown() == ViewKind::Shelf,
         text: String::new(),
         sort: library.sort().terms(),
     };

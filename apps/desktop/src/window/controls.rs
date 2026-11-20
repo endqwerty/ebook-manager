@@ -135,6 +135,7 @@ impl Library {
         self.sorted_by.set(sort.first().field);
         let mut query = self.model.query();
         query.sort = sort.terms();
+        query.shelf = kind == ViewKind::Shelf;
         // A view built anew is put on screen when the model has the books
         // for it, in `shown_again`. Until then the old one stays, so the
         // model can ask it where the reader is.

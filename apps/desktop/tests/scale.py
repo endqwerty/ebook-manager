@@ -2,6 +2,8 @@
 checks that it stays quick. See apps/desktop/README.md."""
 
 import argparse
+import json
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -284,11 +286,127 @@ def small_epub(path, n):
         )
 
 
+def shelf_run(binary, root):
+    settings = root / "config/ebook-manager/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps({"view": "shelf", "sort": {"shelf": [{"field": "author"}]}})
+    )
+    db = sqlite3.connect(root / "data/ebook-manager/library.sqlite")
+    last = db.execute(
+        "select title,authors from book order by author_key desc,n desc limit 1"
+    ).fetchone()
+    db.close()
+    started = time.monotonic()
+    proc = smoke.launch_app(binary, environment(root, EBOOK_SHELF_FRAME_TIMES="1"))
+    try:
+        body = find("Bookshelf")
+        find("Book ", "table cell", contains=True, parent=body)
+        launch_time = time.monotonic() - started
+        assert launch_time < LAUNCH_LIMIT, launch_time
+        find("#", "label", parent=body)
+        wid = focus("Ebook Manager")
+
+        def spines():
+            return [n for n in walk(body) if n.get_role_name() == "table cell"]
+
+        count = len(spines())
+        pane = find("", "scroll pane")
+        bounds = pane.get_extents(Atspi.CoordType.WINDOW)
+        limit = (bounds.width // 16 + 1) * (bounds.height // 263 + 4)
+        assert 0 < count <= limit, (count, limit)
+        smoke.xd(
+            "mousemove",
+            "--window",
+            wid,
+            100,
+            350,
+            "click",
+            "--repeat",
+            24,
+            "--delay",
+            18,
+            5,
+        )
+        time.sleep(0.5)
+
+        samples = [
+            int(line.split()[-1]) / 1000
+            for line in (root / "app-stderr.log").read_text().splitlines()
+            if line.startswith("shelf-scroll-frame-us ")
+        ]
+        assert samples, "no scroll frame timings"
+        print(
+            f"Shelf scroll frame intervals under Xvfb and Cairo, {len(samples)} samples: median {statistics.median(samples):.2f} ms, max {max(samples):.2f} ms",
+            flush=True,
+        )
+
+        def first_full_row():
+            top = pane.get_extents(Atspi.CoordType.WINDOW).y
+            places = [(n.get_extents(Atspi.CoordType.WINDOW), n) for n in spines()]
+            y = min(r.y for r, n in places if r.y >= top and r.height > 0)
+            return [n for r, n in places if r.y == y]
+
+        anchor = first_full_row()[0].get_name()
+        old_width = pane.get_extents(Atspi.CoordType.WINDOW).width
+        smoke.xd("windowsize", wid, 1020, 720)
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                if pane.get_extents(
+                    Atspi.CoordType.WINDOW
+                ).width != old_width and anchor in [
+                    n.get_name() for n in first_full_row()
+                ]:
+                    break
+            except (GLib.Error, ValueError):
+                pass
+            assert time.monotonic() < deadline, (anchor,old_width,pane.get_extents(Atspi.CoordType.WINDOW).width,[n.get_name() for n in first_full_row()][:3])
+            time.sleep(POLL)
+        book = first_full_row()[0]
+        r = book.get_extents(Atspi.CoordType.WINDOW)
+        smoke.xd(
+            "mousemove",
+            "--window",
+            wid,
+            r.x + r.width // 2,
+            r.y + r.height // 2,
+            "click",
+            1,
+        )
+        key("End", "shift+Left")
+        end = find(", ".join(last), "table cell", contains=True, parent=body)
+        deadline = time.monotonic() + 5
+        while True:
+            selected = [
+                n
+                for n in spines()
+                if n.get_state_set().contains(Atspi.StateType.SELECTED)
+            ]
+            if len(selected) == 2:
+                break
+            assert time.monotonic() < deadline, [n.get_name() for n in selected]
+            time.sleep(POLL)
+        print(
+            f"PASS grouped shelf launch {launch_time:.3f}s, {count} spines (bound {limit}), resize kept {anchor}, selection reaches {end.get_name()}",
+            flush=True,
+        )
+        key("ctrl+1")
+        find("Books", "table")
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+    finally:
+        if proc.poll() is None:
+            stop(proc)
+
+
+
 def run(binary, fixture, root):
     env = environment(root)
     subprocess.run(
         [fixture, root / "data/ebook-manager", str(BOOKS)], check=True, env=env
     )
+    shelf_run(binary, root)
     incoming = root / "Incoming"
     incoming.mkdir()
     for n in range(IMPORTS):

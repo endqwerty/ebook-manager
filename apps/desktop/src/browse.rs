@@ -602,6 +602,11 @@ impl BookListModel {
         }
     }
 
+    /// Geometry for the view now on screen, when opened for a shelf.
+    pub fn strip(&self) -> Option<std::sync::Arc<ebook_library::ShelfStrip>> {
+        self.imp().state.borrow().strip.clone()
+    }
+
     /// Shows the books of a view in place of whatever is shown. The
     /// selection is by ID and needs nothing found: each row says whether
     /// its book is selected as it arrives.

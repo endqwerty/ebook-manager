@@ -13,15 +13,17 @@ pub enum ViewKind {
     Grid,
     List,
     Table,
+    Shelf,
 }
 
 impl ViewKind {
     /// The views in the order the switch shows them, with each one's
     /// action target, name and icon. A fourth view is a fourth row.
-    pub const ALL: [(ViewKind, &'static str, &'static str, &'static str); 3] = [
+    pub const ALL: [(ViewKind, &'static str, &'static str, &'static str); 4] = [
         (ViewKind::Grid, "grid", "Grid", "view-grid-symbolic"),
         (ViewKind::List, "list", "List", "view-list-symbolic"),
         (ViewKind::Table, "table", "Table", "view-dual-symbolic"),
+        (ViewKind::Shelf, "shelf", "Shelf", "view-paged-symbolic"),
     ];
     pub fn id(self) -> &'static str {
         Self::ALL
@@ -38,7 +40,7 @@ impl ViewKind {
     pub fn shown(self, narrow: bool, text_scale: f64) -> Self {
         match self {
             ViewKind::Table if narrow => ViewKind::List,
-            ViewKind::Grid if text_scale >= 1.5 => ViewKind::List,
+            ViewKind::Grid | ViewKind::Shelf if text_scale >= 1.5 => ViewKind::List,
             kind => kind,
         }
     }
@@ -277,6 +279,7 @@ pub struct Sorts {
     pub grid: Sort,
     pub list: Sort,
     pub table: Sort,
+    pub shelf: Sort,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +313,7 @@ impl Settings {
             ViewKind::Grid => &self.sort.grid,
             ViewKind::List => &self.sort.list,
             ViewKind::Table => &self.sort.table,
+            ViewKind::Shelf => &self.sort.shelf,
         }
     }
     pub fn set_sort(&mut self, view: ViewKind, sort: Sort) {
@@ -317,6 +321,7 @@ impl Settings {
             ViewKind::Grid => self.sort.grid = sort,
             ViewKind::List => self.sort.list = sort,
             ViewKind::Table => self.sort.table = sort,
+            ViewKind::Shelf => self.sort.shelf = sort,
         }
     }
 
@@ -368,6 +373,7 @@ impl Settings {
                 grid: sort("grid"),
                 list: sort("list"),
                 table: sort("table"),
+                shelf: sort("shelf"),
             },
             cover_size: read(part("cover_size")).unwrap_or(defaults.cover_size),
             columns: part("columns")
@@ -460,7 +466,7 @@ mod tests {
         let path = folder.path().join("settings.json");
         std::fs::write(
             &path,
-            r#"{"view": "shelf", "cover_size": "large",
+            r#"{"view": "panorama", "cover_size": "large",
                 "sort": {"grid": [{"field": "added", "descending": true}],
                          "list": [{"field": "future"}],
                          "table": [{"field": "progress"}]},

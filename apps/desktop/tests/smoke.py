@@ -166,7 +166,9 @@ def gallery(folder):
             )
             archive.writestr(
                 "a.xhtml",
-                f'<html xmlns="{ns}"><head><title>One</title></head><body><p>{escape(title)}.</p></body></html>',
+                f'<html xmlns="{ns}"><head><title>One</title></head><body><p>{escape(title)}.</p>'
+                + ('<p>' + ('sea ' * 1000) + '</p>') * (0 if title == "The Glass Orchard" else (n * 48) % 400)
+                + '</body></html>',
             )
             if art:
                 ground, figure, style, width, height = art
@@ -1390,6 +1392,149 @@ def gallery_view_switches():
     print("PASS all six view switches show books in the gallery", flush=True)
 
 
+def shelf_only(binary, evidence, root):
+    gallery(root / "Gallery")
+    proc = launch_app(binary, environment(root))
+    try:
+        find("No books yet", "label")
+        focus("Ebook Manager")
+        key("ctrl+shift+o")
+        picker(root / "Gallery", "Choose a folder of EPUBs")
+        find("Import complete")
+        click("Done")
+        find(f"{len(GALLERY)} books")
+        shelf_evidence(evidence, "light", keep_author_sort=True)
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+        proc = launch_app(binary, environment(root))
+        find("C", "label", parent=find("Bookshelf"))
+        select_book("glass")
+        key("Return")
+        find("The Glass Orchard", "frame")
+        click("Back to library")
+        gone("Back to library")
+        focus("Ebook Manager")
+        key("ctrl+d")
+        destination = root / "Export"
+        destination.mkdir()
+        picker(destination, "Choose an export folder")
+        find("Book exported", contains=True)
+        click("Close", find("", "dialog"))
+        files=list(destination.glob("*.epub"))
+        assert len(files)==1 and files[0].read_bytes()==(root / "Gallery/01.epub").read_bytes()
+        print("PASS shelf and author sort on restart, keyboard read and export", flush=True)
+    finally:
+        if proc.poll() is None:
+            stop(proc)
+
+
+def shelf_evidence(evidence, look, *, keep_author_sort=False):
+    focus("Ebook Manager")
+    key("ctrl+4")
+    shelf = find("Bookshelf")
+    cell = find("The Glass Orchard", "table cell", contains=True, parent=shelf)
+
+    def positions():
+        return [
+            (
+                n.get_name(),
+                n.get_extents(Atspi.CoordType.WINDOW).x,
+                n.get_extents(Atspi.CoordType.WINDOW).y,
+            )
+            for n in walk(shelf)
+            if n.get_role_name() == "table cell"
+        ]
+
+    before = positions()
+    bounds = cell.get_extents(Atspi.CoordType.WINDOW)
+    wid = focus("Ebook Manager")
+    # GTK's AT-SPI window coordinates omit the client-side shadow.
+    pane = find("", "scroll pane").get_extents(Atspi.CoordType.WINDOW)
+    left = (size("Ebook Manager")[0] - pane.width) // 2 - pane.x
+    top = left
+    xd(
+        "mousemove",
+        "--window",
+        wid,
+        left + bounds.x + bounds.width // 2,
+        top + bounds.y + bounds.height // 2,
+        "click",
+        1,
+    )
+    xd("mousemove", 2, 2)
+
+    deadline = time.monotonic() + 5
+    while True:
+        cell.clear_cache()
+        if cell.get_state_set().contains(Atspi.StateType.SELECTED):
+            break
+        assert time.monotonic() < deadline, (
+            cell.get_name(),
+            [
+                (n.get_name(), n.get_state_set().contains(Atspi.StateType.FOCUSED))
+                for n in walk(shelf)
+                if n.get_state_set().contains(Atspi.StateType.SELECTED)
+            ],
+        )
+        time.sleep(0.05)
+    assert positions() == before, "selecting a spine moved its row"
+    find("The Glass Orchard", "label")
+    capture("Ebook Manager", evidence / f"shelf-{look}.png")
+    key("shift+Right")
+    selected = [
+        n
+        for n in walk(Atspi.get_desktop(0))
+        if n.get_role_name() == "table cell"
+        and n.get_state_set().contains(Atspi.StateType.SELECTED)
+    ]
+    assert len(selected) == 2, [n.get_name() for n in selected]
+    if look == "light":
+        key("Left", "Menu")
+        find("", "menu item")
+        key("Down", "Return")
+        find("Edit book", "frame")
+        key("Escape")
+        gone("Edit book")
+        focus("Ebook Manager")
+        print(
+            "PASS shelf preview, menu, selection range and stationary neighbours",
+            flush=True,
+        )
+        for presses, size_name in [(0, "small"), (2, "large"), (1, "medium")]:
+            send_key("F10")
+            menu = find("Main Menu", "menu")
+            find("", "menu item", parent=menu)
+            key("Home", *(["Down"] * presses), "Return")
+            spine = find(
+                CARTOGRAPHER, "table cell", contains=True, parent=find("Bookshelf")
+            )
+            expected = {"small": 158, "medium": 206, "large": 254}[size_name]
+            deadline = time.monotonic() + 5
+            while spine.get_extents(Atspi.CoordType.WINDOW).height != expected:
+                assert time.monotonic() < deadline, (
+                    size_name,
+                    spine.get_extents(Atspi.CoordType.WINDOW).height,
+                )
+                spine = find(
+                    CARTOGRAPHER, "table cell", contains=True, parent=find("Bookshelf")
+                )
+            capture("Ebook Manager", evidence / f"shelf-{size_name}.png")
+        key("ctrl+shift+s")
+        find("Title", "combo box")
+        choose(1)
+        key("Escape")
+        find("C", "label", parent=find("Bookshelf"))
+        capture("Ebook Manager", evidence / "shelf-author.png")
+        if keep_author_sort:
+            return
+        key("ctrl+shift+s")
+        find("Author", "combo box")
+        choose(0)
+        key("Escape")
+    key("ctrl+1")
+    find(CARTOGRAPHER, "label")
+
+
 def covers(binary, evidence, root, proc):
     """Imports the gallery and checks what is drawn for a book with a cover
     and for one without, in each appearance."""
@@ -1451,6 +1596,7 @@ def covers(binary, evidence, root, proc):
             assert teal > 20000, teal
             bound = sum(painted(image, colour, 0.5) for colour in BINDINGS)
             assert bound > 20000, bound
+            shelf_evidence(evidence, look)
             if look != "contrast":
                 focus("Ebook Manager")
                 key("ctrl+2")
@@ -1465,8 +1611,12 @@ def covers(binary, evidence, root, proc):
                 capture("Ebook Manager", evidence / f"table-{look}.png")
                 key("ctrl+1")
                 time.sleep(0.6)
+            focus("Ebook Manager")
+            key("ctrl+w")
+            assert proc.wait(timeout=10) == 0
         finally:
-            stop(proc)
+            if proc.poll() is None:
+                stop(proc)
     print(
         "PASS covers and bindings in light, dark and more contrast, thumbnails made again",
         flush=True,
@@ -1672,11 +1822,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--private-session", action="store_true", help=argparse.SUPPRESS
     )
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--ending",
         choices=["term", "int", "kill", "abrt", "display"],
         help="instead of the walk-through, end the app this way with a reader open; run by hand, once",
     )
+    modes.add_argument("--shelf", action="store_true", help="exercise the shelf with the synthetic cover gallery")
     args = parser.parse_args()
     binary = args.binary.resolve()
     evidence = args.evidence.resolve()
@@ -1685,9 +1837,7 @@ if __name__ == "__main__":
         if args.ending:
             desktop(lambda home: ending(binary, home, args.ending))
         else:
-            desktop(lambda home: run(binary, evidence, home))
+            desktop(lambda home: (shelf_only if args.shelf else run)(binary, evidence, home))
     else:
-        private_session(
-            __file__,
-            [binary, evidence, *(["--ending", args.ending] if args.ending else [])],
-        )
+        mode = ["--ending", args.ending] if args.ending else ["--shelf"] if args.shelf else []
+        private_session(__file__, [binary, evidence, *mode])
