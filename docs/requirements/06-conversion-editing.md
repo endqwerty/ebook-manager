@@ -138,3 +138,7 @@ EPUB 3.3 and its container rules, the Pandoc manual's EPUB sections, the kepubif
 documentation, Ace by DAISY's rule list, the OCRmyPDF and Tesseract documentation,
 KDP's help pages on formats and covers, the Apple Books Asset Guide, and the Library
 of Congress format descriptions.
+
+## First conversion engine
+
+The [MOBI-to-EPUB spec](../../specs/mobi-to-epub.md) covers one restricted direction of CONV-1. For CONV-2 and EDIT-6 it creates a checked, separate file and returns the source identity. Catalogue linking remains open. For CONV-3 it accepts catalogue metadata and a JPEG or PNG cover. CONV-4 has background execution, progress, cancellation and a success report. Durable queueing and history remain open. CONV-5 has a preflight loss description for this direction. The input remains available for EDIT-7. Version comparison, restore and cross-format location mapping for EDIT-8 remain open.
