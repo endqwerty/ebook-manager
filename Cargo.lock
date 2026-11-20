@@ -277,6 +277,10 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "libc",
+ "png",
+ "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
 ]
 

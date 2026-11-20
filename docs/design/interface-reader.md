@@ -79,8 +79,8 @@ Four are built in. The reader can add their own.
   serif, the platform's sans serif, a face made for dyslexic readers, and any
   fonts the reader loaded.
 - The default is Literata on every platform, so a book looks the same on each
-  of the reader's devices. It needs the same licence check as the library's
-  bundled serif.
+  of the reader's devices. Its licence is checked under
+  [LIC-1](../requirements/10-constraints.md#licences-of-parts).
 - Size is a stepper with twelve steps from 0.8 to 2.5 times the default. The
   stepper shows a small and a large letter A and has no number.
 
@@ -259,8 +259,10 @@ makes a page colour of the reader's own.
   selection menu, or the shell must supply its own.
 - Whether the page stays still when bars appear over a web view on each
   platform, without the view resizing.
-- Literata's licence and whether it covers the scripts the reader needs. A book
-  in a script it lacks falls back to the platform's font for that script.
+- Whether Literata covers the scripts the reader needs. A book in a script it
+  lacks falls back to the platform's font for that script. Its licence is
+  checked: the [SIL Open Font License 1.1](../requirements/10-constraints.md#licences-of-parts),
+  with no reserved font name.
 
 ## Not designed yet
 

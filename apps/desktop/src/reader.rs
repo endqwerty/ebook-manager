@@ -6,10 +6,10 @@ use std::{
     sync::Arc,
 };
 
-pub fn open(s: &Shelf, b: &Rc<Book>) {
+pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
     let w = gtk::Window::builder()
         .title(&b.title)
-        .transient_for(&s.window)
+        .transient_for(parent)
         .modal(true)
         .default_width(760)
         .default_height(640)
@@ -20,13 +20,12 @@ pub fn open(s: &Shelf, b: &Rc<Book>) {
     let status = label("Opening book…", "heading");
     layout.append(&status);
     w.present();
-    let s = s.clone();
+    let store = store.clone();
     let b = b.clone();
     glib::spawn_future_local(async move {
         let id = b.id.clone();
         let result = async {
-            let (path, saved) = s
-                .store
+            let (path, saved) = store
                 .run(move |lib| Ok((lib.managed_file(&id)?, lib.load_position(&id)?)))
                 .await?;
             let book = gio::spawn_blocking(move || -> Result<_> {
@@ -131,7 +130,7 @@ pub fn open(s: &Shelf, b: &Rc<Book>) {
             book: Arc::new(book),
             window: w.downgrade(),
             model: b,
-            store: s.store.clone(),
+            store,
             text,
             picker: picker.clone(),
             arrival: Cell::default(),
@@ -258,6 +257,26 @@ fn previous_page_top(lines: &[(i32, i32)], start: i32, top: i32, height: i32) ->
         .find(|y| *y >= reach - height)
         .filter(|y| *y < top)
         .unwrap_or(top - height)
+}
+
+/// Linear chapters before `chapter` plus the part of it scrolled past, over
+/// the number of linear chapters. A chapter that is not linear counts as
+/// the start of the next linear one. Exactly 1 at the end of the last.
+fn interim_fraction(linear: &[bool], chapter: usize, scrolled: f64) -> f32 {
+    let total = linear.iter().filter(|l| **l).count();
+    let before = linear.iter().take(chapter).filter(|l| **l).count();
+    if total == 0 {
+        return 0.0;
+    }
+    let within = if linear.get(chapter) == Some(&true) {
+        scrolled.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if before + 1 == total && within >= 1.0 - 1e-6 {
+        return 1.0;
+    }
+    ((before as f64 + within) / total as f64).min(1.0) as f32
 }
 
 fn position_error(w: &gtk::Window, e: &anyhow::Error) {
@@ -405,6 +424,20 @@ impl View {
         }
     }
 
+    /// How far through the book the page on screen is. Interim: every
+    /// linear chapter counts the same, whatever its length.
+    fn fraction(&self, chapter: u32) -> f32 {
+        let linear: Vec<_> = self.book.chapters().iter().map(|c| c.linear).collect();
+        let scrolled = self.text.vadjustment().map_or(0.0, |a| {
+            let range = a.upper() - a.lower() - a.page_size();
+            if range < 0.5 {
+                1.0
+            } else {
+                (a.value() - a.lower()) / range
+            }
+        });
+        interim_fraction(&linear, chapter as usize, scrolled)
+    }
     fn position(&self) -> Option<ReadingPosition> {
         let chapter = self.shown.get()?;
         let (iter, _) = self.text.line_at_y(self.text.visible_rect().y());
@@ -414,8 +447,8 @@ impl View {
             .partition_point(|p| *p <= iter.offset())
             .saturating_sub(1) as u32;
         Some(ReadingPosition {
-            last_read: None,
-            fraction: None,
+            last_read: Some(glib::DateTime::now_utc().ok()?.to_unix()),
+            fraction: Some(self.fraction(chapter)),
             version_id: self.model.version_id.clone(),
             chapter,
             offset: block,
@@ -444,8 +477,8 @@ impl View {
     fn persist(&self, chapter: u32, offset: u32) {
         let id = self.model.id.clone();
         let pos = ReadingPosition {
-            last_read: None,
-            fraction: None,
+            last_read: glib::DateTime::now_utc().ok().map(|t| t.to_unix()),
+            fraction: Some(self.fraction(chapter)),
             version_id: self.model.version_id.clone(),
             chapter,
             offset,
@@ -593,7 +626,19 @@ impl View {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_page_top, previous_page_top};
+    use super::{interim_fraction, next_page_top, previous_page_top};
+
+    #[test]
+    fn the_fraction_read_counts_linear_chapters_and_ends_at_exactly_one() {
+        let linear = [true, false, true, true];
+        assert_eq!(interim_fraction(&linear, 0, 0.0), 0.0);
+        assert_eq!(interim_fraction(&linear, 0, 0.5), 0.5 / 3.0);
+        // A chapter outside the reading line is the start of the next.
+        assert_eq!(interim_fraction(&linear, 1, 0.7), 1.0 / 3.0);
+        assert_eq!(interim_fraction(&linear, 3, 0.5), 2.5 / 3.0);
+        assert_eq!(interim_fraction(&linear, 3, 1.0), 1.0);
+        assert_eq!(interim_fraction(&[false], 0, 1.0), 0.0);
+    }
 
     /// Twenty-pixel lines from the top of the chapter.
     fn lines(count: i32) -> Vec<(i32, i32)> {

@@ -4,10 +4,12 @@ The `ebook-reader` crate opens a DRM-free EPUB 2 or EPUB 3 file on Linux and
 gives the desktop interface what it needs to import, browse and read it: title,
 authors, identifiers, series, date and page direction; a word count and a small
 cover picture; the chapters in reading order; the table of contents; and each
-chapter as blocks of styled text. Book files are untrusted, so all parsing and
-image decoding happens in a helper process inside a bubblewrap sandbox with no
-network, and the interface receives text, flags and checked thumbnail pixels
-only. When the sandbox cannot be set up,
+chapter as blocks of styled text or as sanitised markup with its pictures.
+Book files are untrusted, so all parsing and image decoding happens in a
+helper process inside a bubblewrap sandbox with no network. The interface
+receives text, flags and checked thumbnail pixels, and, from the two content
+calls alone, markup the helper wrote and undecoded picture bytes for a web
+view. When the sandbox cannot be set up,
 nothing is opened. The caller-facing contract is in the
 [crate README](../crates/ebook-reader/README.md).
 
@@ -195,6 +197,87 @@ that take more than the package to find: a word count and a cover.
   unchecked thumbnail.
 - **V6** A 90,000-word book with a 1600 by 2400 JPEG cover is surveyed in
   under 5 seconds in a debug build.
+
+## Content for a web view
+
+A second form of each chapter, for a reader that lays the book out in a web
+view. The view that shows it runs no script and loads nothing else. That is
+the [desktop reader's](../docs/design/epub-reading.md#the-trust-boundary) job
+and not this crate's.
+
+- **C1** A chapter is returned as the children of an XHTML `body`. The helper
+  writes every element, attribute and character itself, so the result is
+  well-formed XML whatever the source was: unclosed and misnested tags are
+  balanced, a repeated attribute keeps its first value, and a prefixed
+  element is matched by its local name. Only these elements are written:
+  `a abbr address article aside b bdi bdo blockquote br caption cite code col colgroup dd del details dfn div dl dt em figcaption figure footer h1 h2 h3 h4 h5 h6 header hgroup hr i img ins kbd li main mark nav ol p pre q rp rt ruby s samp section small span strong sub summary sup table tbody td tfoot th thead time tr u ul var wbr`.
+  Only these attributes are written: `id`, `class`, `lang` (also from
+  `xml:lang`), `dir`, `title`, `alt`, `colspan`, `rowspan`, `start`, `value`,
+  and `epub:type` as `data-epub-type`, each value cut at 1,024 characters. An
+  `id` longer than 256 characters is left out whole. In a value `&`, `<`, `>` and `"` are escaped, so `<` and `>`
+  in the markup only ever open and close a tag. Any other element is left out
+  and its content kept. With 400 elements open, a further one is left out the
+  same way, and a picture there is replaced by its text alternative.
+- **C2** Left out with their content: `script`, `style`, `template`, `iframe`,
+  `frame`, `frameset`, `object`, `embed`, `applet`, `audio`, `video`,
+  `canvas`, `svg`, `math`, `input`, `button`, `select`, `textarea`,
+  `datalist`, `noscript`, `head`, `title`, and any element with a `hidden`
+  attribute or an inline `display: none`, `html` and `body` included. An
+  `svg` that is not hidden and whose only drawn element is one `image` naming
+  a picture of the book becomes that picture. Other `svg` and
+  `math` add the unsupported-content warning. A link to a place in the book
+  is `href="/c/<chapter>#<anchor>"`, or `href="/c/<chapter>"` when it names no
+  anchor or names one longer than 256 characters. The anchor is
+  percent-encoded once. An
+  `http`, `https` or `mailto` link has no `href` and carries its address in
+  `data-external`. Any other link has neither. A picture that is a PNG, JPEG,
+  GIF or WebP item of the manifest is `src="/r/<id>"`, and any other picture
+  is replaced by its text alternative. The markup holds no other address.
+  The remote-references warning is raised as in R6, for what is left out as
+  much as for what is kept.
+- **C3** Text keeps its whitespace. Line ends become a line feed, and
+  control characters other than tab and line feed are removed. A chapter's
+  length is the number of UTF-16 code units of text in its markup, text
+  alternatives written as text included. A place in a chapter is a count of
+  those units.
+- **C4** A resource id is the position of an item among the manifest items
+  that have an id and a path inside the book, counted from 0 in package
+  order. When two items name one file, the first says what the file is: a
+  reference resolves to it, and the file is a picture only if that item is.
+- **C5** A resource is returned only when its manifest item is a PNG, JPEG
+  (`image/jpeg` or `image/jpg`), GIF or WebP, it unpacks to at most 32 MiB within the limits of F6, and its
+  first bytes are that type's signature. The host checks the signature and
+  the size again and refuses base64 that is not canonical. The bytes are not
+  decoded. A reference in markup can therefore name a picture that is then
+  refused. Its text alternative is in the markup's `alt`.
+- **C6** Markup with more than 400,000 elements and text runs is cut there,
+  closed so that it is still well-formed, and flagged as truncated.
+- **C7** Each chapter of an opened book has the unpacked size the archive
+  states for it, capped at the chapter size limit, and 0 when the archive
+  lacks the file. The host brings a larger number down to the limit. The
+  book controls that number. It is for weighing chapters
+  when showing progress and for nothing else.
+- **C8** A reading-order item whose own media type is a servable picture's,
+  and whose file is one by C4, gives one `img`.
+  Any other item that is not a text document gives empty markup and the
+  unsupported-content warning. A chapter index past the end and a changed
+  file are refused as for R1 to R9 (F4, F8). The host checks
+  that the markup it receives is in the helper's own form and that the
+  length is the count of its text, and refuses the reply otherwise. The form
+  is text with `&amp;`, `&lt;` and `&gt;` as its only entities, and tags
+  written as `<name attr="value">`, `<name attr="value"/>` and `</name>`,
+  with only the elements and attributes of C1, no attribute twice, `href`
+  and `data-external` only on `a`, alone or together, `href` only as
+  `/c/<digits>` with an optional `#` and unreserved or `%` characters, `src`
+  only on `img` and only as `/r/<digits>`, and double-quoted values that hold no `<`, `>` or
+  `"`. A comment, a CDATA section, a processing instruction, a declaration,
+  a namespace declaration, a character reference or a carriage return is
+  refused. So is any other control character, except a tab or a line feed
+  in text. The host does not check that tags are balanced. The
+  title is the contents label, else the text of the first heading alone, else
+  the document title. The language is the
+  chapter's own, else the package's first. Right-to-left is set by
+  `dir="rtl"` on `html` or `body`.
 
 ## Refusals and limits
 

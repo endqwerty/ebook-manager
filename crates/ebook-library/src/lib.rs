@@ -218,23 +218,6 @@ impl Library {
         b.validate()?;
         Ok(b)
     }
-    pub fn search(&self, query: &str) -> Result<Vec<Book>> {
-        let mut reader = self.browse_reader()?;
-        let view = reader.open(
-            &BrowseQuery {
-                text: query.into(),
-                ..Default::default()
-            },
-            &Cancel::default(),
-        )?;
-        let mut books = Vec::with_capacity(view.count as usize);
-        for start in (0..view.count).step_by(128) {
-            for row in reader.window(view.token, start, 128)? {
-                books.push(self.book(&row.id)?);
-            }
-        }
-        Ok(books)
-    }
     fn directory(&self, part: &str) -> Result<PathBuf> {
         ensure!(
             self.portable.symlink_metadata()?.is_dir(),

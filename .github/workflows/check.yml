@@ -69,11 +69,18 @@ jobs:
         id: scale
         run: cargo run --release --locked -p ebook-library --features fixture --bin scale
 
+      - name: Start, search and import with 100,000 books in the desktop
+        id: desktop_scale
+        run: |
+          cargo build --release --locked -p ebook-library --features fixture --bin fixture
+          /usr/bin/python3 apps/desktop/tests/scale.py "$RUNNER_TEMP/ebook-manager/bin/ebook-manager" target/release/fixture
+
       - name: Report results and read the gate
         if: always()
         env:
           DESKTOP_OUTCOME: ${{ steps.desktop.outcome }}
           SCALE_OUTCOME: ${{ steps.scale.outcome }}
+          DESKTOP_SCALE_OUTCOME: ${{ steps.desktop_scale.outcome }}
           CARD_OUTCOME: ${{ steps.card.outcome }}
           MAINWORTHY_URL: ${{ vars.MAINWORTHY_URL }}
           MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
@@ -88,6 +95,7 @@ jobs:
           for name, outcome in [
               ("Import, read, restart and export", os.environ["DESKTOP_OUTCOME"]),
               ("Scale benchmark", os.environ["SCALE_OUTCOME"]),
+              ("Desktop at 100,000 books", os.environ["DESKTOP_SCALE_OUTCOME"]),
               ("Mounted FAT32 export", os.environ["CARD_OUTCOME"]),
           ]:
               case = ET.SubElement(suite, "testcase", name=name)

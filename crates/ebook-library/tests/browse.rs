@@ -243,19 +243,26 @@ fn an_old_token_is_refused() -> Result<()> {
 #[test]
 fn a_reopened_view_reflects_changes() -> Result<()> {
     let mut s = Shelf::new()?;
-    let v = s.view("", &[])?;
     let b = s.add(meta("Before"))?;
+    s.add(meta("Middle"))?;
+    let old = s.view("", &[(Field::Author, false)])?;
+    assert!(!s.reader.changed()?);
+    s.lib.edit(&b.id, "Zebra", &[])?;
+    s.add(meta("Added"))?;
     assert!(s.reader.changed()?);
-    assert!(s.reader.locate(v.token, &[]).unwrap_err().is::<StaleView>());
-    let old = s.view("", &[])?;
-    s.lib.edit(&b.id, "After", &[])?;
-    assert!(
-        s.reader
-            .window(old.token, 0, 1)
-            .unwrap_err()
-            .is::<StaleView>()
+    // The view is still readable. It shows current values at the ranks the
+    // books had when it opened, and not the book added since.
+    let rows = s.reader.window(old.token, 0, 10)?;
+    assert_eq!(
+        rows.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(),
+        ["Zebra", "Middle"]
     );
-    assert_eq!(titles(s.view("", &[])?), ["After"]);
+    assert_eq!(s.reader.shelf(old.token)?.thickness.len(), 2);
+    assert_eq!(
+        titles(s.view("", &[])?),
+        ["Added", "Middle", "Zebra"],
+        "a reopened view has the new order"
+    );
     s.lib.save_position(
         &b.id,
         &ReadingPosition {
@@ -267,7 +274,20 @@ fn a_reopened_view_reflects_changes() -> Result<()> {
         },
     )?;
     assert!(s.reader.changed()?);
-    assert_eq!(s.view("", &[])?.first[0].progress, Some(0.5));
+    assert_eq!(s.view("zebra", &[])?.first[0].progress, Some(0.5));
+    Ok(())
+}
+#[test]
+fn a_write_after_open_does_not_stop_locate() -> Result<()> {
+    let mut s = Shelf::new()?;
+    let a = s.add(meta("A"))?;
+    let b = s.add(meta("B"))?;
+    let v = s.view("", &[])?;
+    let later = s.add(meta("Aa"))?;
+    assert_eq!(
+        s.reader.locate(v.token, &[b.id, later.id, a.id])?,
+        [Some(1), None, Some(0)]
+    );
     Ok(())
 }
 #[test]
@@ -362,6 +382,44 @@ fn a_new_key_profile_refiles_existing_rows() -> Result<()> {
     assert_eq!(
         titles(reader.open(&Default::default(), &Cancel::default())?),
         ["Book 2", "Book 10"]
+    );
+    Ok(())
+}
+#[test]
+fn a_view_does_not_outlive_its_catalogue_file() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let stage = dir.path().join("stage");
+    let add = |lib: &mut Library, title: &str| -> Result<()> {
+        std::fs::write(&stage, title)?;
+        lib.import(&stage, &stage, &meta(title), ImportChoice::KeepSeparate)?;
+        Ok(())
+    };
+    let app = dir.path().join("app");
+    let mut lib = Library::open(&app)?;
+    add(&mut lib, "First")?;
+    let mut reader = lib.browse_reader()?;
+    let view = reader.open(&Default::default(), &Cancel::default())?;
+    // The catalogue file is replaced, as when it is rebuilt from the
+    // portable folder, and the new one gains a book.
+    drop(lib);
+    std::fs::rename(app.join("library.sqlite"), app.join("library.sqlite.aside"))?;
+    let mut lib = Library::open(&app)?;
+    add(&mut lib, "Second")?;
+    let replaced = |result: Result<()>| result.unwrap_err().is::<CatalogueReplaced>();
+    assert!(replaced(reader.window(view.token, 0, 8).map(drop)));
+    assert!(replaced(reader.locate(view.token, &[]).map(drop)));
+    assert!(replaced(reader.shelf(view.token).map(drop)));
+    assert!(replaced(reader.changed().map(drop)));
+    assert!(replaced(
+        reader
+            .open(&Default::default(), &Cancel::default())
+            .map(drop)
+    ));
+    // A reader opened on the new file sees it whole.
+    let mut reader = lib.browse_reader()?;
+    assert_eq!(
+        titles(reader.open(&Default::default(), &Cancel::default())?),
+        ["First", "Second"]
     );
     Ok(())
 }

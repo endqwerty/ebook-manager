@@ -17,6 +17,7 @@ const FONT_OBFUSCATION: [&str; 2] = [
     "http://ns.adobe.com/pdf/enc#RC",
 ];
 
+#[derive(Clone)]
 pub struct ManifestItem {
     pub path: String,
     pub media_type: String,
@@ -32,6 +33,10 @@ pub struct SpineItem {
 pub struct Package {
     pub metadata: Metadata,
     pub spine: Vec<SpineItem>,
+    /// Every manifest item with an id and a path inside the book, in the
+    /// order the package document lists them. A resource is named by its
+    /// position here.
+    pub manifest: Vec<ManifestItem>,
     /// Some linear reading-order entry names no manifest item, so it is
     /// missing from `spine`.
     pub unresolved_linear: bool,
@@ -95,7 +100,9 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
     let mut metadata = read_metadata(package);
     metadata.protected = protected;
 
-    let mut manifest: HashMap<&str, ManifestItem> = HashMap::new();
+    let mut items: Vec<ManifestItem> = Vec::new();
+    // Item id to its position in `items`; the first use of an id wins.
+    let mut manifest: HashMap<&str, usize> = HashMap::new();
     let mut cover_by_property = None;
     let mut nav = None;
     let mut ncx_by_type = None;
@@ -124,7 +131,8 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
             if ncx_by_type.is_none() && media_type == "application/x-dtbncx+xml" {
                 ncx_by_type = Some(local.path.clone());
             }
-            manifest.entry(id).or_insert(ManifestItem {
+            manifest.entry(id).or_insert(items.len());
+            items.push(ManifestItem {
                 path: local.path,
                 media_type,
                 properties,
@@ -139,14 +147,18 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
         ncx = s
             .attr("toc")
             .and_then(|id| manifest.get(id))
-            .map(|i| i.path.clone());
+            .map(|i| items[*i].path.clone());
         let refs: Vec<&Element> = s.elements().filter(|e| e.name == "itemref").collect();
         if refs.len() > limits.max_spine_items as usize {
             return Err(WireError::limit("number of chapters"));
         }
         for itemref in refs {
             let linear = itemref.attr("linear").is_none_or(|l| l.trim() != "no");
-            let Some(item) = itemref.attr("idref").and_then(|id| manifest.get(id)) else {
+            let Some(item) = itemref
+                .attr("idref")
+                .and_then(|id| manifest.get(id))
+                .map(|i| &items[*i])
+            else {
                 unresolved_linear |= linear;
                 continue;
             };
@@ -158,16 +170,19 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
         }
     }
     let cover_id = cover_by_property.or_else(|| epub2_cover(package));
-    let cover = cover_id.and_then(|id| manifest.remove(id)).or_else(|| {
-        // Some books name the cover's file rather than its manifest id.
-        let content = epub2_cover(package)?;
-        let local = paths::resolve(&opf_path, content)?;
-        let id = *manifest.iter().find(|(_, i)| i.path == local.path)?.0;
-        manifest.remove(id)
-    });
+    let cover = cover_id
+        .and_then(|id| manifest.get(id))
+        .map(|i| items[*i].clone())
+        .or_else(|| {
+            // Some books name the cover's file rather than its manifest id.
+            let content = epub2_cover(package)?;
+            let local = paths::resolve(&opf_path, content)?;
+            items.iter().find(|i| i.path == local.path).cloned()
+        });
     Ok(Package {
         metadata,
         spine,
+        manifest: items,
         unresolved_linear,
         cover,
         nav,

@@ -87,6 +87,17 @@ impl Cancel {
 pub struct Cancelled;
 #[derive(Debug)]
 pub struct StaleView;
+/// The catalogue file a reader was opened on has been replaced, as when it
+/// is rebuilt from the portable folder. The reader is of no more use: ask
+/// the library for a new one and open the query again.
+#[derive(Debug)]
+pub struct CatalogueReplaced;
+impl std::fmt::Display for CatalogueReplaced {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the catalogue file was replaced")
+    }
+}
+impl std::error::Error for CatalogueReplaced {}
 impl std::fmt::Display for Cancelled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("browse cancelled")
@@ -134,6 +145,8 @@ pub struct ShelfStrip {
 }
 struct View {
     token: ViewToken,
+    /// The catalogue file the view was read from.
+    catalogue: String,
     counter: i64,
     sort: SortOrder,
     order: Arc<Vec<u32>>,
@@ -141,20 +154,29 @@ struct View {
 }
 pub struct BrowseReader {
     db: Connection,
+    path: PathBuf,
+    /// The device and inode of the file the connection opened.
+    file: (u64, u64),
     keys: sortkey::Keys,
     view: Option<View>,
 }
 impl Library {
     pub fn browse_reader(&self) -> Result<BrowseReader> {
+        let path = self.portable.with_file_name("library.sqlite");
+        let db = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         Ok(BrowseReader {
-            db: Connection::open_with_flags(
-                self.portable.with_file_name("library.sqlite"),
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )?,
+            file: file_at(&path)?,
+            path,
+            db,
             keys: sortkey::Keys::new()?,
             view: None,
         })
     }
+}
+fn file_at(path: &Path) -> Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let found = fs::metadata(path)?;
+    Ok((found.dev(), found.ino()))
 }
 fn counter(db: &Connection) -> Result<i64> {
     Ok(
@@ -191,9 +213,19 @@ fn page(db: &Connection, ids: &[u32]) -> Result<Vec<BrowseRow>> {
         .collect()
 }
 impl BrowseReader {
+    /// Fails when the file at the catalogue's path is no longer the one
+    /// this reader opened. Its connection would go on reading the old file.
+    fn same_file(&self) -> Result<()> {
+        if file_at(&self.path).ok() != Some(self.file) {
+            return Err(CatalogueReplaced.into());
+        }
+        Ok(())
+    }
     pub fn open(&mut self, query: &BrowseQuery, cancel: &Cancel) -> Result<OpenView> {
         cancel.check()?;
+        self.same_file()?;
         let tx = self.db.transaction()?;
+        let catalogue = catalogue::identity(&tx).map_err(|_| CatalogueReplaced)?;
         let count = counter(&tx)?;
         let order = if let Some(v) = self
             .view
@@ -237,6 +269,7 @@ impl BrowseReader {
         let count_rows = visible.len().try_into()?;
         self.view = Some(View {
             token,
+            catalogue,
             counter: count,
             sort: query.sort.clone(),
             order,
@@ -253,16 +286,28 @@ impl BrowseReader {
         token: ViewToken,
         op: impl FnOnce(&Connection, &View) -> Result<T>,
     ) -> Result<T> {
-        let tx = self.db.unchecked_transaction()?;
-        let count = counter(&tx)?;
+        // A view stays readable after the catalogue changes: its rows are
+        // fetched by row number, which never moves to another book.
         let view = self
             .view
             .as_ref()
-            .filter(|v| v.token == token && v.counter == count)
+            .filter(|v| v.token == token)
             .ok_or(StaleView)?;
+        // That holds for one catalogue file. The identity is read in the
+        // same transaction as the rows, so a view is never answered from a
+        // file other than the one it was opened on.
+        self.same_file()?;
+        let tx = self
+            .db
+            .unchecked_transaction()
+            .map_err(|_| CatalogueReplaced)?;
+        if catalogue::identity(&tx).ok().as_ref() != Some(&view.catalogue) {
+            return Err(CatalogueReplaced.into());
+        }
         op(&tx, view)
     }
     pub fn changed(&mut self) -> Result<bool> {
+        self.same_file()?;
         let count = counter(&self.db)?;
         Ok(self.view.as_ref().is_none_or(|v| v.counter != count))
     }
@@ -319,6 +364,10 @@ fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfSt
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let n = r.get::<_, u32>(0)? as usize;
+        // A book added since the view opened is not in it.
+        if n > max {
+            break;
+        }
         if let Some(words) = r.get::<_, Option<u32>>(1)? {
             sizes[n] = (16 + ((u64::from(words) + 6000) / 12000)).min(48) as u8;
         }

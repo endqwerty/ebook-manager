@@ -22,7 +22,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   converted copy, an audiobook. Deleting one file leaves the book.
 - `LIB-3` (core) A book belongs to any number of series, each with a position. A
   position is text with a sort key, so `1.5`, `2.2.1`, `1-5` and `TPB1` all sort
-  correctly. No tool surveyed sorts non-numeric positions well.
+  correctly. No tool surveyed sorts non-numeric positions well. The catalogue sorts text positions this way, import reads the series a file declares, and the [Linux Edit window](../../specs/desktop-mvp.md#edit) sets a book's first series and its position. Editing a second series is open.
 - `LIB-4` (core) The user puts books in collections by hand. A book can be in many
   collections. A collection has a name, a description, a manual order and its own
   view and sort settings.
@@ -54,12 +54,12 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
 ## Finding and viewing
 
 - `LIB-20` (core) Cover grid, list and table views. The table has user-chosen
-  columns. Each view remembers its sort.
+  columns. Each view remembers its sort. Done on Linux: the [grid](../../specs/desktop-mvp.md#the-library-window), the [list and the table](../../specs/desktop-mvp.md#list-and-table) with chosen columns, and a remembered sort for each.
 - `LIB-21` (core) Sort by any field, with a second and third key. Sorting follows
   the locale: leading articles are skipped by a per-language rule, numbers sort as
-  numbers, and the user can edit any sort key by hand.
+  numbers, and the user can edit any sort key by hand. On Linux the [Sort menu, its editor and the table's headers](../../specs/desktop-mvp.md#sorting) sort by seven fields with up to three keys. The Edit window lets the reader change sort title, author sort names, series and series position. Date added, date published, last read and progress cannot yet be edited by hand as sort keys.
 - `LIB-22` (core) Typing in the search box filters at once across title, author,
-  series and tags.
+  series and tags. The Linux window [filters as the reader types](../../specs/desktop-mvp.md#search) across title, author and series. Tags wait until the catalogue holds them.
 - `LIB-23` (expected) A query language with `field:value`, AND, OR, NOT, ranges,
   "is empty" and comparison of dates and numbers. Custom fields and reading state
   are searchable.
@@ -78,7 +78,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   smooth at 100,000 books.
 - `LIB-27` (core) Bulk edit with a preview of every change and undo.
 - `LIB-28` (core) Every action is reachable from the keyboard. This is a common
-  complaint about existing tools.
+  complaint about existing tools. Done for the Linux library window, including column widths. Every command [has a key](../../specs/desktop-mvp.md#commands-and-keys), and the smoke check exercises keyboard commands. The desktop checks also resize the window and scroll with the wheel. The import report's buttons are reached with Tab.
 
 ## Importing
 
@@ -169,11 +169,11 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
 - `LIB-70` (core) The app starts and searches fast at 100,000 books and stays usable
   at 1,000,000. Proposed targets on an ordinary laptop: the window shows the library
   within 2 seconds of launch, and a quick search answers within 100 milliseconds. It never reads every file at start. Reports of existing tools slowing
-  or failing start at about 20,000 books. The catalogue meets its open and search targets at 100,000 books and stays within the benchmark's looser limits at 1,000,000, where a search takes about 150 ms. Desktop launch and interactive search remain open until the window uses the paged model. [Catalogue benchmark](../design/library-browsing.md#the-benchmark)
+  or failing start at about 20,000 books. The catalogue meets its open and search targets at 100,000 books and stays within the benchmark's looser limits at 1,000,000, where a search takes about 150 ms. The Linux window shows the first titles of 100,000 books about 0.26 seconds after launch and answers a search as the reader types. [Desktop behaviour](../../specs/desktop-mvp.md#large-libraries) [Catalogue benchmark](../design/library-browsing.md#the-benchmark)
 - `LIB-71` (core) The grid scrolls smoothly at any size, with covers drawn from
-  cached thumbnails.
+  cached thumbnails. The Linux grid creates rows only for what is on screen and draws covers from cached thumbnails. Its frame rate has not been measured.
 - `LIB-72` (core) No long job blocks the window: import, conversion, metadata fetch,
-  indexing, device transfer.
+  indexing, device transfer. On Linux, import, the survey of covers and sending to a device run off the window's thread, and during an import the list refreshes at most once a second and keeps its place. Conversion, metadata fetch and indexing do not exist yet.
 
 ## What the app must store
 
