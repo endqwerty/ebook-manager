@@ -514,9 +514,62 @@ def shelf_run(binary, root):
             stop(proc)
 
 
-def shelf_import_above(binary, fixture, root):
+def shelf_import_focus(binary, fixture, root):
     root.mkdir()
     env = environment(root)
+    subprocess.run([fixture, root / "data/ebook-manager", "3998"], check=True, env=env)
+    settings = root / "config/ebook-manager/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({
+        "view": "shelf", "sort": {"shelf": [{"field": "title", "descending": True}]},
+    }))
+    proc = smoke.launch_app(binary, env)
+    try:
+        body = find("Bookshelf")
+        wid = focus("Ebook Manager")
+
+        def add(folder, numbers):
+            folder.mkdir()
+            for n in numbers:
+                small_epub(folder / f"{n}.epub", n)
+            key("ctrl+shift+o")
+            smoke.picker(folder, "Choose a folder of EPUBs")
+            find("Import complete")
+            smoke.click("Done")
+
+        add(root / "Readable", [1000, 1001])
+        find("4,000 books")
+        spine = find("Imported 1001", "table cell", contains=True, parent=body)
+        box = spine.get_extents(Atspi.CoordType.WINDOW)
+        width = find("", "scroll pane").get_extents(Atspi.CoordType.WINDOW).width
+        inset = (smoke.size("Ebook Manager")[0] - width) // 2
+        smoke.xd("mousemove", "--window", wid, inset + box.x + box.width // 2,
+                 inset + box.y + box.height // 2, "click", 1)
+        spine.clear_cache()
+        assert spine.get_state_set().contains(Atspi.StateType.FOCUSED)
+        smoke.xd("click", "--repeat", 12, "--delay", 25, 5)
+        wait_for_wheel_stop(body.get_parent())
+        assert not any(n.get_name().startswith("Imported 1001") for n in walk(body))
+        add(root / "Incoming", range(2000, 2060))
+        find("4,060 books")
+        key("Right")
+        neighbour = find("Imported 1000", "table cell", contains=True, parent=body)
+        assert neighbour.get_state_set().contains(Atspi.StateType.FOCUSED)
+        key("Menu")
+        find("", "menu item")
+        key("Escape", "Return")
+        reader = find("Imported 1000", "frame")
+        find("Page 1 of", contains=True, parent=reader)
+        smoke.click("Back to library")
+        print("PASS Right, Menu and Return on the original neighbour after 60 imports with focus scrolled away", flush=True)
+    finally:
+        stop(proc)
+        smoke.check_diagnostics(root)
+
+
+def shelf_import_above(binary, fixture, root):
+    root.mkdir()
+    env = environment(root, EBOOK_SHELF_REFRESH_TRACE="1")
     subprocess.run([fixture, root / "data/ebook-manager", "5000"], check=True, env=env)
     settings = root / "config/ebook-manager/settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
@@ -526,7 +579,7 @@ def shelf_import_above(binary, fixture, root):
     }))
     incoming = root / "Incoming"
     incoming.mkdir()
-    for n in range(256):
+    for n in range(400):
         small_epub(incoming / f"{n}.epub", n)
     proc = smoke.launch_app(binary, env)
     try:
@@ -549,11 +602,13 @@ def shelf_import_above(binary, fixture, root):
 
         entries = row()
         y, _, book = entries[0]
+        log = root / "app-stderr.log"
+        start = log.stat().st_size
         count = find("5,000 books")
         key("ctrl+shift+o")
         smoke.picker(incoming, "Choose a folder of EPUBs")
         deadline = time.monotonic() + 180
-        while count.get_name() != "5,256 books":
+        while count.get_name() != "5,400 books":
             assert time.monotonic() < deadline, count.get_name()
             count.clear_cache()
             time.sleep(POLL)
@@ -564,7 +619,12 @@ def shelf_import_above(binary, fixture, root):
                 break
             assert time.monotonic() < deadline, (book, y, entries[:2])
             time.sleep(POLL)
-        print(f"PASS 256 imports above the shelf kept {book} at y={y}", flush=True)
+        trace = log.read_bytes()[start:].splitlines()
+        swaps = trace.count(b"shelf-refresh")
+        placeholders = trace.count(b"shelf-visible-placeholder")
+        assert swaps and not placeholders, (swaps, placeholders)
+        print(f"PASS {swaps} shelf refreshes drew {placeholders} visible placeholders", flush=True)
+        print(f"PASS 400 imports above the shelf kept {book} at y={y}", flush=True)
     finally:
         stop(proc)
         smoke.check_diagnostics(root)
@@ -576,6 +636,7 @@ def run(binary, fixture, root):
         [fixture, root / "data/ebook-manager", str(BOOKS)], check=True, env=env
     )
     shelf_import_above(binary, fixture, root / "shelf-refresh")
+    shelf_import_focus(binary, fixture, root / "shelf-import-focus")
     shelf_run(binary, root)
     incoming = root / "Incoming"
     incoming.mkdir()

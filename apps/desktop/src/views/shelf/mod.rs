@@ -4,7 +4,7 @@ mod back;
 mod layout;
 mod spine;
 use super::{BookCell, Shared};
-use crate::browse::{BookListModel, BookObject};
+use crate::browse::{BookListModel, BookObject, ShelfViewport};
 use ebook_library::ShelfStrip;
 use gtk::{gdk, glib, prelude::*};
 use gtk4 as gtk;
@@ -221,7 +221,6 @@ impl Shelf {
             if let Some(state) = model_state.upgrade() {
                 state.strip.take();
                 state.placed_top.set(None);
-                state.model.park_focus(None);
             }
             layout();
         });
@@ -272,7 +271,7 @@ impl Shelf {
     pub fn parked_book(&self) -> Option<BookObject> {
         self.state
             .canvas
-            .has_focus()
+            .is_focus()
             .then(|| self.state.model.parked_focus())
             .flatten()
     }
@@ -289,6 +288,21 @@ impl Shelf {
             && (s.scroll.upper() - f64::from(s.canvas.height_request()).max(s.scroll.page_size()))
                 .abs()
                 < 1.
+    }
+
+    pub fn viewport(&self) -> Option<ShelfViewport> {
+        let s = &self.state;
+        let rows = s.rows.borrow();
+        let y = s.scroll.value() as u64;
+        let i = rows.partition_point(|r| r.top <= y).saturating_sub(1);
+        // A spine is at least 16 units wide. Include partial rows and the
+        // extra boards that fill() binds just outside the viewport.
+        let columns = s.width.get().max(0) as u32 / 16 + 1;
+        let boards = (s.scroll.page_size() / s.stride() as f64).ceil() as u32 + 4;
+        Some(ShelfViewport {
+            first: rows.get(i)?.first,
+            capacity: columns.saturating_mul(boards),
+        })
     }
 
     pub fn top_book(&self) -> Option<(String, f32)> {
@@ -432,7 +446,7 @@ impl State {
         for board in &spare {
             for cell in &board.cells {
                 (self.shared.preview)(cell, false);
-                if cell.has_focus() {
+                if cell.is_focus() {
                     self.canvas.set_focusable(true);
                     self.canvas.grab_focus();
                 }
@@ -450,7 +464,7 @@ impl State {
                 });
             }
         }
-        if self.canvas.has_focus()
+        if self.canvas.is_focus()
             && let Some(book) = self.model.parked_focus()
         {
             for (index, board) in visible.iter() {

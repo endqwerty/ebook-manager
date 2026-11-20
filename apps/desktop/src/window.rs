@@ -151,7 +151,15 @@ impl Library {
                     .and_then(|(cell, offset)| Some((cell.book()?.row()?.id.clone(), offset))),
             })
             .flatten();
+        let shelf = self
+            .with_view(|view| match view {
+                View::Shelf(shelf) => shelf.viewport(),
+                _ => None,
+            })
+            .flatten();
         Anchors {
+            shelf,
+            shelf_focus: shelf.and_then(|_| self.model.parked_focus()?.row().map(|r| r.id.clone())),
             current: focused
                 .as_ref()
                 .and_then(|b| Some(b.row()?.id.clone()))
@@ -219,6 +227,18 @@ impl Library {
         let rebuilt = placed.reason == Placement::Layout;
         let keep_top = placed.reason != Placement::Command;
         let focused = placed.current.filter(|_| rebuilt && was.focused);
+        if placed.reason == Placement::Refresh
+            && let Some(rank) = placed.top
+            && self.with_view(|view| match view {
+                View::Shelf(shelf) => {
+                    shelf.place_row(rank, Some(was.top_offset), None);
+                    true
+                }
+                _ => false,
+            }) == Some(true)
+        {
+            return;
+        }
         if let Some(rank) = placed.current {
             if was.focused || !keep_top {
                 self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::FOCUS));
@@ -511,7 +531,10 @@ impl Library {
         let library = self.clone();
         glib::spawn_future_local(async move {
             match library.store.run(move |lib| lib.book(&id)).await {
-                Ok(book) => reader::open_in(&library.window, &library.store, &Rc::new(book)),
+                Ok(book) => {
+                    library.close_context_menu();
+                    reader::open_in(&library.window, &library.store, &Rc::new(book));
+                }
                 Err(e) => notice(
                     &library.window,
                     "Couldn’t open this book",
@@ -638,7 +661,8 @@ impl Library {
             }
             return;
         }
-        if self.context_popover.is_visible()
+        if !self.window.is_active()
+            || self.context_popover.is_visible()
             || (self.preview.is_visible() && current.as_ref() == Some(cell))
         {
             return;

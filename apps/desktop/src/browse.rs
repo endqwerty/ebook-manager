@@ -37,6 +37,13 @@ pub struct Query {
     pub sort: Vec<SortTerm>,
 }
 
+/// Rank at the viewport and an upper bound on the number of spines it can show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShelfViewport {
+    pub first: u32,
+    pub capacity: u32,
+}
+
 /// Where the reader is in the view on screen.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Anchors {
@@ -46,6 +53,9 @@ pub struct Anchors {
     pub top: Option<String>,
     /// Where that book starts, from the top of the view.
     pub top_offset: f32,
+    pub shelf: Option<ShelfViewport>,
+    /// The shelf remembers its book while another widget or window has focus.
+    pub shelf_focus: Option<String>,
     /// A book holds the keyboard focus.
     pub focused: bool,
 }
@@ -197,6 +207,10 @@ impl State {
     }
     /// Keeps a page, and returns whether any of its books is selected.
     fn store_page(&mut self, page: u32, rows: Vec<BrowseRow>) -> bool {
+        self.store_page_with_limit(page, rows, CACHED_PAGES)
+    }
+
+    fn store_page_with_limit(&mut self, page: u32, rows: Vec<BrowseRow>, limit: usize) -> bool {
         let mut any = false;
         for (n, row) in rows.iter().enumerate() {
             let rank = page * PAGE + n as u32;
@@ -208,7 +222,7 @@ impl State {
         self.pages
             .insert(page, rows.into_iter().map(Rc::new).collect());
         self.recent.push_back(page);
-        while self.recent.len() > CACHED_PAGES {
+        while self.recent.len() > limit {
             if let Some(old) = self.recent.pop_front() {
                 self.pages.remove(&old);
             }
@@ -546,7 +560,9 @@ impl BookListModel {
                     view,
                     strip,
                     background,
-                } => self.swap(view, strip, background),
+                    pages,
+                    shelf_focus,
+                } => self.swap(view, strip, background, pages, shelf_focus),
                 Effect::Fill { page, rows } => {
                     let (arrived, selected) = {
                         let mut state = self.imp().state.borrow_mut();
@@ -585,6 +601,7 @@ impl BookListModel {
                     self.changed(false);
                 }
                 Effect::Empty => {
+                    self.park_focus(None);
                     self.before_replace();
                     // With an error shown there are no books, so there is
                     // no selection either: a command must not reach a book
@@ -616,12 +633,17 @@ impl BookListModel {
         view: OpenView,
         strip: Option<std::sync::Arc<ebook_library::ShelfStrip>>,
         background: bool,
+        pages: worker::Pages,
+        shelf_focus: Option<u32>,
     ) {
         self.before_replace();
         let before = {
             let mut state = self.imp().state.borrow_mut();
             // The interval runs from when a refresh is shown.
             if background {
+                if strip.is_some() && std::env::var_os("EBOOK_SHELF_REFRESH_TRACE").is_some() {
+                    eprintln!("shelf-refresh");
+                }
                 state.last_refresh = Some(Instant::now());
             }
             state.clear()
@@ -635,9 +657,16 @@ impl BookListModel {
             let mut state = self.imp().state.borrow_mut();
             state.count = view.count;
             state.strip = strip;
-            state.store_page(0, view.first);
+            // Even a viewport larger than the normal cache must bind its
+            // first boards from the pages delivered with the swap.
+            let limit = CACHED_PAGES.max(1 + pages.len());
+            state.store_page_with_limit(0, view.first, limit);
+            for (page, rows) in pages {
+                state.store_page_with_limit(page, rows, limit);
+            }
             state.selected.iter().cloned().collect()
         };
+        self.park_focus(shelf_focus.and_then(|rank| self.item(rank)?.downcast().ok()));
         self.items_changed(0, 0, view.count);
         self.changed(true);
         self.run(Event::Swapped);

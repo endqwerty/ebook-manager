@@ -317,6 +317,14 @@ impl Spine {
         }
         let book = self.imp().book.borrow();
         let Some(b) = book.as_ref() else {
+            if std::env::var_os("EBOOK_SHELF_REFRESH_TRACE").is_some()
+                && let Some(viewport) = self.ancestor(gtk::Viewport::static_type())
+                && let Some(bounds) = self.compute_bounds(&viewport)
+                && bounds.y() < viewport.height() as f32
+                && bounds.y() + bounds.height() > 0.
+            {
+                eprintln!("shelf-visible-placeholder");
+            }
             target.append_color(&rgb(0x808080, 1.), &Rect::new(0., 14., w, h));
             return;
         };
