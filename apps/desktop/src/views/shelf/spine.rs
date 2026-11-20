@@ -142,6 +142,80 @@ pub(super) fn gradient(s: &gtk::Snapshot, r: Rect, horizontal: bool, stops: &[(f
         &stops,
     );
 }
+fn cloth_face(s: &gtk::Snapshot, rect: Rect, cloth: &gdk::RGBA) {
+    let w = rect.width();
+    let h = rect.height();
+    s.push_blend(gsk::BlendMode::Overlay);
+    s.append_color(cloth, &rect);
+    gradient(
+        s,
+        rect,
+        true,
+        &[
+            (0., -0.30),
+            (0.14, 0.14),
+            (0.38, -0.06),
+            (0.5, -0.10),
+            (0.62, -0.06),
+            (0.86, 0.14),
+            (1., -0.30),
+        ],
+    );
+    gradient(s, rect, false, &[(0., 0.06), (0.4, 0.), (1., -0.08)]);
+    gradient(
+        s,
+        Rect::new(0., 14., w, 6.),
+        false,
+        &[(0., -0.12), (1., 0.)],
+    );
+    gradient(
+        s,
+        Rect::new(0., 14. + h - 6., w, 6.),
+        false,
+        &[(0., 0.), (1., -0.12)],
+    );
+    s.pop();
+    Grain::Cloth.draw(s, &rect);
+    s.pop();
+}
+
+#[derive(PartialEq)]
+struct ClothKey {
+    rgb: u32,
+    width: i32,
+    height: i32,
+}
+
+// GTK keeps each widget's snapshot. Share just the cloth across titles and
+// bound the cache even when every book in the catalogue has a different colour.
+fn software_cloth(renderer: &gsk::Renderer, key: ClothKey, colour: &gdk::RGBA) -> gdk::Texture {
+    thread_local! {
+        static CLOTH: RefCell<std::collections::VecDeque<(ClothKey, gdk::Texture)>> = const { RefCell::new(std::collections::VecDeque::new()) };
+    }
+    CLOTH.with_borrow_mut(|cache| {
+        if let Some(entry) = cache
+            .iter()
+            .position(|(old, _)| old == &key)
+            .and_then(|i| cache.remove(i))
+        {
+            let texture = entry.1.clone();
+            cache.push_front(entry);
+            return texture;
+        }
+        let area = Rect::new(0., 14., key.width as f32, key.height as f32);
+        let snapshot = gtk::Snapshot::new();
+        cloth_face(&snapshot, area, colour);
+        // The caller supplies a non-empty rectangle with an opaque base.
+        let node = snapshot
+            .to_node()
+            .unwrap_or_else(|| gsk::ColorNode::new(colour, &area).upcast());
+        let texture = renderer.render_texture(&node, Some(&area));
+        cache.truncate(63);
+        cache.push_front((key, texture.clone()));
+        texture
+    })
+}
+
 impl Spine {
     pub fn new() -> Self {
         let spine: Self = glib::Object::new();
@@ -235,18 +309,31 @@ impl Spine {
             target.append_color(&rgb(0x808080, 1.), &Rect::new(0., 14., w, h));
             return;
         };
-        let (cloth, ink, pale) = colours(b.spine_rgb.unwrap_or_else(|| binding(&b.id).0));
+        let base = b.spine_rgb.unwrap_or_else(|| binding(&b.id).0);
+        let (cloth, ink, pale) = colours(base);
         let style = adw::StyleManager::default();
         let hc = style.is_high_contrast();
         let angle = self.imp().angle.get() as f32;
+        let software = self
+            .native()
+            .and_then(|n| n.renderer())
+            .filter(|r| r.is::<gsk::CairoRenderer>());
+        let lift = if software.is_some() { angle * 0.4 } else { 0. };
+        let h = h + lift;
         let rect = Rect::new(0., 14., w, h);
         let corner = gtk::graphene::Size::new(1., 1.);
         let square = gtk::graphene::Size::new(0., 0.);
         let frame = gsk::RoundedRect::new(rect, corner, corner, square, square);
         let drawing = gtk::Snapshot::new();
         let s = &drawing;
+        s.translate(&Point::new(0., -lift));
         if !hc {
-            s.append_outset_shadow(&frame, &rgb(0, 0.30), 5., 0., -2., 8.);
+            let trailing = if self.direction() == gtk::TextDirection::Rtl {
+                -5.
+            } else {
+                5.
+            };
+            s.append_outset_shadow(&frame, &rgb(0, 0.30), trailing, 0., -2., 8.);
             if angle > 0. {
                 s.append_outset_shadow(
                     &frame,
@@ -284,43 +371,17 @@ impl Spine {
         }
         s.pop();
         s.push_rounded_clip(&frame);
-        if !hc {
-            s.push_blend(gsk::BlendMode::Overlay);
-        }
-        s.append_color(&cloth, &rect);
-        if !hc {
-            gradient(
-                s,
-                rect,
-                true,
-                &[
-                    (0., -0.30),
-                    (0.14, 0.14),
-                    (0.38, -0.06),
-                    (0.5, -0.10),
-                    (0.62, -0.06),
-                    (0.86, 0.14),
-                    (1., -0.30),
-                ],
-            );
-            gradient(s, rect, false, &[(0., 0.06), (0.4, 0.), (1., -0.08)]);
-            gradient(
-                s,
-                Rect::new(0., 14., w, 6.),
-                false,
-                &[(0., -0.12), (1., 0.)],
-            );
-            gradient(
-                s,
-                Rect::new(0., 14. + h - 6., w, 6.),
-                false,
-                &[(0., 0.), (1., -0.12)],
-            );
-        }
-        if !hc {
-            s.pop();
-            Grain::Cloth.draw(s, &rect);
-            s.pop();
+        if hc {
+            s.append_color(&cloth, &rect);
+        } else if let Some(renderer) = software.as_ref() {
+            let key = ClothKey {
+                rgb: base,
+                width: self.width(),
+                height: self.height() - 14,
+            };
+            s.append_texture(&software_cloth(renderer, key, &cloth), &rect);
+        } else {
+            cloth_face(s, rect, &cloth);
         }
         let stamp = rgb(
             if pale { 0 } else { 0xffffff },
@@ -330,7 +391,7 @@ impl Spine {
         if variant == 1 {
             let mut rule = ink;
             rule.set_alpha(0.45);
-            for y in [8., 12., h - 12., h - 8.] {
+            for y in [8., 12., h - 13., h - 9.] {
                 s.append_color(&stamp, &Rect::new(0., 15. + y, w, 1.));
                 s.append_color(&rule, &Rect::new(0., 14. + y, w, 1.));
             }
@@ -368,6 +429,7 @@ impl Spine {
             l
         };
         let title = layout(&b.title, 12., true);
+        let labelled = variant == 2 && w >= 26. && w - 12. >= title.pixel_size().1 as f32;
         let name = b
             .author_sort
             .as_deref()
@@ -384,8 +446,14 @@ impl Spine {
         }
         let print = |l: &pango::Layout, y: f32, col: &gdk::RGBA| {
             s.save();
-            s.translate(&Point::new((w + l.pixel_size().1 as f32) / 2., y));
-            s.rotate(90.);
+            let (width, height) = l.pixel_size();
+            if l.direction(0) == pango::Direction::Rtl {
+                s.translate(&Point::new((w - height as f32) / 2., y + width as f32));
+                s.rotate(-90.);
+            } else {
+                s.translate(&Point::new((w + height as f32) / 2., y));
+                s.rotate(90.);
+            }
             s.save();
             s.translate(&Point::new(1., 0.));
             s.append_layout(l, &stamp);
@@ -393,7 +461,7 @@ impl Spine {
             s.append_layout(l, col);
             s.restore();
         };
-        if variant == 2 {
+        if labelled {
             let bounds = Rect::new(
                 6.,
                 18.,
@@ -406,7 +474,7 @@ impl Spine {
             s.append_color(&ink, &bounds);
             s.pop();
         }
-        print(&title, 24., if variant == 2 { &cloth } else { &ink });
+        print(&title, 24., if labelled { &cloth } else { &ink });
         if print_author {
             print(&author, 14. + h - 10. - author.pixel_size().0 as f32, &ink);
         }
@@ -430,36 +498,11 @@ impl Spine {
             return;
         };
         let foot = 14. + h;
-        if let Some(renderer) = self.native().and_then(|n| n.renderer())
-            && renderer.is::<gsk::CairoRenderer>()
-        {
+        if let Some(renderer) = software {
+            // Keep the composed title and decoration as one Cairo node while
+            // other rows scroll. Replaying their shadows every frame is costly.
             let bounds = node.bounds();
-            let texture = renderer.render_texture(&node, Some(&bounds));
-            if angle == 0. {
-                target.append_texture(&texture, &bounds);
-                return;
-            }
-            // Cairo accepts only affine transforms. Project each horizontal
-            // pixel band about the foot with the same pinhole camera.
-            let sin = angle.to_radians().sin();
-            let cos = angle.to_radians().cos();
-            let project = |y: f32| {
-                let scale = 800. / (800. - (foot - y) * sin);
-                (foot + (y - foot) * cos * scale, scale)
-            };
-            for y in bounds.y().floor() as i32..(bounds.y() + bounds.height()).ceil() as i32 {
-                let y = y as f32;
-                let (top, scale) = project(y);
-                let (bottom, _) = project(y + 1.);
-                target.save();
-                target.translate(&Point::new(w * (1. - scale) / 2., top));
-                target.scale(scale, bottom - top);
-                target.translate(&Point::new(0., -y));
-                target.push_clip(&Rect::new(bounds.x(), y, bounds.width(), 1.));
-                target.append_texture(&texture, &bounds);
-                target.pop();
-                target.restore();
-            }
+            target.append_texture(&renderer.render_texture(&node, Some(&bounds)), &bounds);
         } else if angle == 0. {
             target.append_node(&node);
         } else {

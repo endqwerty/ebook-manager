@@ -161,7 +161,7 @@ The Linux shell draws it.
 | Cloth | Spines are bound in a soft cloth with a nap, like velvet. Velvet is darkest where it faces the reader and catches light where it curves away. Across the thickness, from one long edge to the other: black at 30% at the edge, white at 14% at 14% of the way, black at 6% at 38%, black at 10% in the middle, and the same mirrored. Down the height: white at 6% at the top fading to nothing at 40%, then to black at 8% at the foot. |
 | Grain | Over the cloth, a fine even noise: a square tile 128 units across of monochrome noise with features about 1 unit wide, made once from a fixed seed, blended in overlay at 35%. It is the one texture in the app. It is made by the shell and is not a picture of any material. |
 | Head and tail | A shade of black at 12% over the top 6 units and the bottom 6, fading toward the middle, where a spine turns over at its ends. |
-| Bands | Each book has one of three spine styles, chosen by the same hash that picks a binding colour, taken modulo 3. Plain: nothing more. Banded: two rules 1 unit thick across the spine in the type colour at 45%, 8 and 12 from the top, and two more the same distances from the foot. Labelled: the title sits on a label, a block in the type colour with the spine colour as its type, 6 in from each long edge and 6 beyond the title at each end, with corners of 1. |
+| Bands | Each book has one of three spine styles, chosen by the same hash that picks a binding colour, taken modulo 3. Plain: nothing more. Banded: two rules 1 unit thick across the spine in the type colour at 45%, 8 and 12 from the top, and two more the same distances from the foot. Labelled: the title sits on a label, a block in the type colour with the spine colour as its type, 6 in from each long edge and 6 beyond the title at each end, with corners of 1. Use the plain style below 26 units or when the title line is taller than the label is wide, so the lettering stays readable. |
 | Corners | 1 unit at the top. Square at the foot, where the spine stands. |
 | Gap | 1 between spines, filled with black at 35%, the dark between two books that touch. |
 | Board | Each row stands on a board as wide as the content. Its top surface shows as a strip 7 units tall under the spines' feet, and its front face as a strip 12 tall under that. Top surface: `#f1ece3` in light appearance and `#3b3a3e` in dark. Front face: from `#e3ddd2` at its top to `#d1cabd` at its foot in light, and from `#2c2b2e` to `#222124` in dark, with a line 1 unit thick at its top edge, white at 45% in light and 12% in dark. Under the board a shadow 10 units deep fades from black at 18% to nothing in light and from 50% in dark. |
@@ -184,6 +184,9 @@ The Linux shell draws it.
   distance of 800 units, so the top looks a little wider and nearer while the
   foot stays on the board. Its top strip grows from 4 units to 9, because more
   of the top now faces the reader.
+- On the Linux software renderer the top lifts four units at full selection
+  and the page strip grows to nine. The face stays flat so the title remains
+  legible, and the foot stays on the board.
 - A tipped book casts the cover's ambient shadow onto its neighbours and keeps
   its place. Nothing in the row moves along, so the row holds its shape while
   the reader moves through it or selects a run of books, each of which tips.
