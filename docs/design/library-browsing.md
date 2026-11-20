@@ -786,15 +786,17 @@ same time.
    The canvas holds the visible rows and one extra at either end.
    Cairo projects horizontal pixel strips about the foot of the spine because
    it cannot render a GSK perspective transform. Other renderers use the
-   transform directly. The caption reserves 24 logical pixels. The desktop
+   transform directly. The back and the cloth use the same seeded grain at
+   their two specified strengths, baked into the tile so Cairo and OpenGL
+   draw the same contrast. The caption reserves 24 logical pixels. The desktop
    has no touch details page or details pane yet. The focused or hovered book
    uses the window's preview. GTK can put it below a spine when there is no
    room above. The focus ring follows the untipped cell, including the
    clearance for the top edge. The clamped libadwaita spring uses damping
    ratio 1, mass 1 and stiffness 450.
 
-   At 100,000 books the grouped shelf showed its first spines in 0.625 s
-   on the host and 0.592 s on Ubuntu 26.04. Both runs counted 186 spine
+   At 100,000 books the grouped shelf showed its first spines in 0.570 s
+   on the host and 0.564 s on Ubuntu 26.04. Both runs counted 186 spine
    widgets against a bound of 336 for that viewport. In each private X11
    session with the Cairo renderer, 21 frame-clock intervals during a wheel
    scroll had a median of 16.67 ms and a maximum of 33.33 ms. The
