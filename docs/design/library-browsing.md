@@ -795,13 +795,16 @@ same time.
    clearance for the top edge. The clamped libadwaita spring uses damping
    ratio 1, mass 1 and stiffness 450.
 
-   At 100,000 books the grouped shelf showed its first spines in 0.570 s
-   on the host and 0.564 s on Ubuntu 26.04. Both runs counted 186 spine
+   At 100,000 books the grouped shelf showed its first spines in 0.560 s
+   on the host and 0.545 s on Ubuntu 26.04. Both runs counted 186 spine
    widgets against a bound of 336 for that viewport. In each private X11
-   session with the Cairo renderer, 21 frame-clock intervals during a wheel
+   session with the Cairo renderer, 22 frame-clock intervals during a wheel
    scroll had a median of 16.67 ms and a maximum of 33.33 ms. The
    no-dropped-frame target remains open. These samples do not measure
-   compositor presentation times.
+   compositor presentation times. Over five release runs, packing one
+   million 24-unit spines into a width of 999 took a median of 0.846 ms on
+   the host and 1.060 ms on Ubuntu. This measures the arithmetic for 25,000
+   rows, excluding GTK and catalogue reads.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).
 
 ## Open questions
