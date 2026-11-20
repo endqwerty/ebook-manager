@@ -334,11 +334,11 @@ def shelf_run(binary, root):
         samples = [
             int(line.split()[-1]) / 1000
             for line in (root / "app-stderr.log").read_text().splitlines()
-            if line.startswith("shelf-paint-us ")
+            if line.startswith("shelf-frame-us ")
         ]
-        assert samples, "no scroll paint timings"
+        assert samples, "no moving frames were timed"
         print(
-            f"Shelf scroll paint under Xvfb and Cairo: {len(samples)} frames, maximum {max(samples):.2f} ms, {sum(ms > 16.7 for ms in samples)} over 16.7 ms",
+            f"Shelf whole frame (before update through after paint) under Xvfb and Cairo: {len(samples)} frames, maximum {max(samples):.2f} ms, {sum(ms > 16.7 for ms in samples)} over 16.7 ms",
             flush=True,
         )
 

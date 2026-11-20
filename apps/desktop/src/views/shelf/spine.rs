@@ -181,6 +181,7 @@ fn cloth_face(s: &gtk::Snapshot, rect: Rect, cloth: &gdk::RGBA) {
 
 #[derive(PartialEq)]
 struct ClothKey {
+    scale: f32,
     rgb: u32,
     width: i32,
     height: i32,
@@ -204,12 +205,22 @@ fn software_cloth(renderer: &gsk::Renderer, key: ClothKey, colour: &gdk::RGBA) -
         }
         let area = Rect::new(0., 14., key.width as f32, key.height as f32);
         let snapshot = gtk::Snapshot::new();
+        let scale = key.scale;
+        snapshot.scale(scale, scale);
         cloth_face(&snapshot, area, colour);
         // The caller supplies a non-empty rectangle with an opaque base.
         let node = snapshot
             .to_node()
             .unwrap_or_else(|| gsk::ColorNode::new(colour, &area).upcast());
-        let texture = renderer.render_texture(&node, Some(&area));
+        let texture = renderer.render_texture(
+            &node,
+            Some(&Rect::new(
+                0.,
+                14. * scale,
+                area.width() * scale,
+                area.height() * scale,
+            )),
+        );
         cache.truncate(63);
         cache.push_front((key, texture.clone()));
         texture
@@ -318,6 +329,10 @@ impl Spine {
             .native()
             .and_then(|n| n.renderer())
             .filter(|r| r.is::<gsk::CairoRenderer>());
+        let display_scale = self
+            .native()
+            .and_then(|n| n.surface())
+            .map_or(1., |surface| surface.scale() as f32);
         let lift = if software.is_some() { angle * 0.4 } else { 0. };
         let h = h + lift;
         let rect = Rect::new(0., 14., w, h);
@@ -377,9 +392,13 @@ impl Spine {
             let key = ClothKey {
                 rgb: base,
                 width: self.width(),
-                height: self.height() - 14,
+                height: h.ceil() as i32,
+                scale: display_scale,
             };
-            s.append_texture(&software_cloth(renderer, key, &cloth), &rect);
+            s.append_texture(
+                &software_cloth(renderer, key, &cloth),
+                &Rect::new(0., 14., w, h.ceil()),
+            );
         } else {
             cloth_face(s, rect, &cloth);
         }
@@ -502,7 +521,13 @@ impl Spine {
             // Keep the composed title and decoration as one Cairo node while
             // other rows scroll. Replaying their shadows every frame is costly.
             let bounds = node.bounds();
-            target.append_texture(&renderer.render_texture(&node, Some(&bounds)), &bounds);
+            let layer = gtk::Snapshot::new();
+            layer.scale(display_scale, display_scale);
+            layer.append_node(&node);
+            if let Some(scaled) = layer.to_node() {
+                let pixels = scaled.bounds();
+                target.append_texture(&renderer.render_texture(&scaled, Some(&pixels)), &bounds);
+            }
         } else if angle == 0. {
             target.append_node(&node);
         } else {

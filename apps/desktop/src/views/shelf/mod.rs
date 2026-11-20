@@ -226,33 +226,29 @@ impl Shelf {
         request_layout();
         if std::env::var_os("EBOOK_SHELF_FRAME_TIMES").is_some() {
             let scroll = state.scroll.clone();
-            let previous = Cell::new(scroll.value());
-            widget.add_tick_callback(move |_, clock| {
-                let y = scroll.value();
-                if previous.replace(y) != y {
-                    // A layout signal is optional. Request it so every sampled
-                    // frame has a timestamp after layout and immediately before paint.
-                    clock.request_phase(gdk::FrameClockPhase::LAYOUT | gdk::FrameClockPhase::PAINT);
-                    let start = Rc::new(Cell::new(None));
-                    let record = start.clone();
-                    let layout = clock.connect_local("layout", true, move |_| {
-                        record.set(Some(std::time::Instant::now()));
-                        None
-                    });
-                    let handlers = Rc::new(RefCell::new(None));
-                    let done = handlers.clone();
-                    let paint = clock.connect_after_paint(move |clock| {
-                        if let Some(start) = start.get() {
-                            eprintln!("shelf-paint-us {}", start.elapsed().as_micros());
-                        }
-                        if let Some((layout, paint)) = done.take() {
-                            clock.disconnect(layout);
-                            clock.disconnect(paint);
-                        }
-                    });
-                    handlers.replace(Some((layout, paint)));
-                }
-                glib::ControlFlow::Continue
+            widget.connect_realize(move |widget| {
+                let Some(clock) = widget.frame_clock() else {
+                    return;
+                };
+                let start = Rc::new(Cell::new(std::time::Instant::now()));
+                let begin = start.clone();
+                let before =
+                    clock.connect_before_paint(move |_| begin.set(std::time::Instant::now()));
+                let scroll = scroll.clone();
+                let previous = Cell::new(scroll.value());
+                let after = clock.connect_after_paint(move |_| {
+                    let y = scroll.value();
+                    if previous.replace(y) != y {
+                        eprintln!("shelf-frame-us {}", start.get().elapsed().as_micros());
+                    }
+                });
+                let handlers = Cell::new(Some((before, after)));
+                widget.connect_unrealize(move |_| {
+                    if let Some((before, after)) = handlers.take() {
+                        clock.disconnect(before);
+                        clock.disconnect(after);
+                    }
+                });
             });
         }
         let s = Rc::downgrade(&state);
