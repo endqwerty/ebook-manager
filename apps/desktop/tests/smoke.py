@@ -219,13 +219,13 @@ def xd(*args):
 
 
 def send_key(name):
-    # Some XKB maps make xdotool add Alt when looking up F2 or F11.
-    # Use the physical keycode from our private X server's keymap.
-    if name in ("F2", "F11"):
+    # Some XKB maps make xdotool add Alt when looking up function keys.
+    # Send the physical keycode for bare F1 through F12.
+    if function := re.fullmatch(r"F([1-9]|1[0-2])", name):
         keymap = subprocess.check_output(
             ["xkbcomp", "-xkb", os.environ["DISPLAY"], "-"], text=True
         )
-        match = re.search(rf"<FK{int(name[1:]):02d}>\s*=\s*([0-9]+);", keymap)
+        match = re.search(rf"<FK{int(function[1]):02d}>\s*=\s*([0-9]+);", keymap)
         assert match is not None, f"{name} is missing from the X server's keymap"
         name = match[1]
     xd("key", name)
@@ -926,8 +926,9 @@ def table_headers(by_three):
     print(f"PASS Author width from the keyboard: {width} → {width + 24} → {width} → {width + 24}", flush=True)
 
     # Large covers, from the main menu: the third of its items.
-    key("F10")
-    find("", "menu item")
+    send_key("F10")
+    menu = find("Main Menu", "menu")
+    find("", "menu item", parent=menu)
     key("Down", "Down", "Return")
     key("ctrl+1")
     scroll_to_top()
