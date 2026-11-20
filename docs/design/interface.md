@@ -553,8 +553,9 @@ Each was the default taken to finish this page. Any can change.
 4. **A faint spine shade stays.** It is the only drawn hint that a cover is a
    book. Remove it if it reads as decoration on real covers.
 5. **Bundle one serif on GNOME and Android.** Neither guarantees a serif. Literata
-   is the candidate. It needs the [LIC-1](../requirements/10-constraints.md#licences-of-parts)
-   check and an entry in the release manifest before it ships. Using it on every
+   is the candidate. Its licence, the SIL Open Font License 1.1, passes the
+   [LIC-1](../requirements/10-constraints.md#licences-of-parts) check. It
+   needs an entry in the release manifest before it ships. Using it on every
    platform would make titles identical everywhere, and was turned down because
    New York and Sitka are what those systems' own apps use.
 6. **No message when a job finishes.** The result on screen is the message. A
