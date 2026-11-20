@@ -76,7 +76,8 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   colour comes from the cover, and a selected book tips out from the top. It is
   drawn as [the shelf design](../design/interface-views.md#shelf) says and stays
   smooth at 100,000 books. The Linux shelf draws the spines and groups,
-  preserves the top row on resize and shares the library selection and commands.
+  keeps the first full book’s row at the top when narrowing or widening,
+  and shares the library selection and commands, including Select All.
   At 100,000 books the desktop driver checks the on-screen widget count,
   scrolls, resizes and extends a selection. The frame-time target remains open.
 - `LIB-27` (core) Bulk edit with a preview of every change and undo.
@@ -174,7 +175,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   within 2 seconds of launch, and a quick search answers within 100 milliseconds. It never reads every file at start. Reports of existing tools slowing
   or failing start at about 20,000 books. The catalogue meets its open and search targets at 100,000 books and stays within the benchmark's looser limits at 1,000,000, where a search takes about 150 ms. The Linux window shows the first titles of 100,000 books about 0.26 seconds after launch and answers a search as the reader types. [Desktop behaviour](../../specs/desktop-mvp.md#large-libraries) [Catalogue benchmark](../design/library-browsing.md#the-benchmark)
 - `LIB-71` (core) The grid scrolls smoothly at any size, with covers drawn from
-  cached thumbnails. The Linux grid creates rows only for what is on screen and draws covers from cached thumbnails. Its frame rate has not been measured. For the shelf, the scale driver measures GDK frame intervals while the scroll position moves in the private X11 session. A hardware presentation-time check remains open.
+  cached thumbnails. The Linux grid creates rows only for what is on screen and draws covers from cached thumbnails. Its frame rate has not been measured. For the shelf, the scale driver measures the paint time of each sampled frame while the scroll position moves in the private X11 session. A hardware presentation-time check remains open.
 - `LIB-72` (core) No long job blocks the window: import, conversion, metadata fetch,
   indexing, device transfer. On Linux, import, the survey of covers and sending to a device run off the window's thread, and during an import the list refreshes at most once a second and keeps its place. Conversion, metadata fetch and indexing do not exist yet.
 

@@ -1551,6 +1551,13 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
         choose(1)
         key("Escape")
         find("C", "label", parent=find("Bookshelf"))
+        grouped = find("Tide Tables", "table cell", contains=True, parent=find("Bookshelf"))
+        box = grouped.get_extents(Atspi.CoordType.WINDOW)
+        xd("mousemove", "--window", wid, left + box.x + box.width // 2,
+           top + box.y + box.height // 2, "click", 1)
+        xd("mousemove", 2, 2)
+        grouped.clear_cache()
+        assert grouped.get_state_set().contains(Atspi.StateType.SELECTED)
         capture("Ebook Manager", evidence / "shelf-author.png")
         if keep_author_sort:
             return

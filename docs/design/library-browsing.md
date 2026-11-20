@@ -705,10 +705,11 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 17. When the reader switches between Grid, List, Table and Shelf, sorts, types
     a search, and opens, edits and exports a book using only the keyboard,
     then each works, and the view and sort are as left after a restart.
-    `apps/desktop/tests/smoke.py`, for all but the shelf.
+    `apps/desktop/tests/smoke.py`.
 18. When the shelf is resized, then the first fully visible book stays at the
     top, and when a book is selected then only that spine changes.
-    `apps/desktop/tests/smoke.py`, and a unit test of the row packing.
+    `apps/desktop/tests/scale.py` narrows and widens deep in the shelf.
+    `apps/desktop/tests/smoke.py` checks selection leaves neighbouring spines in place.
 
 ## Alternatives
 
@@ -784,10 +785,12 @@ same time.
    returns the strip with the opened view so the model can place the reader
    as soon as the view has a size. GTK scrolls a viewport over a fixed canvas.
    The canvas holds the visible rows and one extra at either end.
-   Cairo projects horizontal pixel strips about the foot of the spine because
-   it cannot render a GSK perspective transform. Other renderers use the
-   transform directly. The back and the cloth use the same seeded grain at
-   their two specified strengths, baked into the tile so Cairo and OpenGL
+   Cairo lifts the head of the selected spine four units, leaves its foot on
+   the board and enlarges its top strip. Projecting the lettering in pixel
+   bands made it unreadable. Other renderers use the perspective transform.
+   A labelled spine uses the plain style when its label cannot contain
+   the title line, including all thicknesses under 26. The back and the cloth
+   use the same seeded grain at their two specified strengths so Cairo and OpenGL
    draw the same contrast. The caption reserves 24 logical pixels. The desktop
    has no touch details page or details pane yet. The focused or hovered book
    uses the window's preview. GTK can put it below a spine when there is no
@@ -795,13 +798,32 @@ same time.
    clearance for the top edge. The clamped libadwaita spring uses damping
    ratio 1, mass 1 and stiffness 450.
 
-   At 100,000 books the grouped shelf showed its first spines in 0.560 s
-   on the host and 0.545 s on Ubuntu 26.04. Both runs counted 186 spine
-   widgets against a bound of 336 for that viewport. In each private X11
-   session with the Cairo renderer, 22 frame-clock intervals during a wheel
-   scroll had a median of 16.67 ms and a maximum of 33.33 ms. The
-   no-dropped-frame target remains open. These samples do not measure
-   compositor presentation times. Over five release runs, packing one
+   At 100,000 books the grouped shelf appeared in 0.595 s on the host and
+   0.516 s on Ubuntu 26.04. Both runs counted 186 spine widgets against a
+   bound of 336. On a width change the window waits for the new scroll range
+   before placing the first full book. A later move by the reader cancels
+   that placement. While the focused spine is recycled, the viewport shows
+   focus and the model keeps the book.
+
+   The scale driver times each moving frame from the end of GDK layout to
+   after-paint under Xvfb and Cairo. The two original scale runs reached
+   25.72 and 25.21 ms on the host and Ubuntu. Both had six frames over
+   16.7 ms. Removing each spine's offscreen texture made shadows and grain
+   paint again while scrolling. The maximum rose to 51.72 and 38.13 ms.
+   The shelf now caches up to 64 cloth surfaces by colour and dimensions
+   and flattens the finished spine once per snapshot. The final scale runs
+   reached 20.72 ms on the host (4 of 24 frames over 16.7 ms) and 17.14 ms
+   on Ubuntu (1 of 24). The no-dropped-frame target remains open. These
+   samples exclude layout and compositor presentation.
+
+   Five alternating runs per build used the same 100,000-book fixture and
+   wheel gesture. On the host the median of the run maxima fell from 25.90
+   to 18.49 ms, and frames over budget fell from 30/112 to 13/119. The
+   worst host maximum rose from 26.65 to 29.59 ms. On Ubuntu the median
+   maximum fell from 34.75 to 21.51 ms, the worst from 62.16 to 29.73 ms,
+   and frames over budget from 29/98 to 21/111.
+
+   Over five release runs, packing one
    million 24-unit spines into a width of 999 took a median of 0.846 ms on
    the host and 1.060 ms on Ubuntu. This measures the arithmetic for 25,000
    rows, excluding GTK and catalogue reads.

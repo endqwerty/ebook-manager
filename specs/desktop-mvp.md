@@ -24,9 +24,9 @@ Use an empty XDG data directory and generated EPUBs. Start the app, add a folder
 
 ## Shelf
 
-The three sizes draw spines 144, 192 or 240 logical pixels tall. Thickness comes from the book's length. The first sort key can start rows by author letter, series or year. On a resize, the row containing the previous first fully visible book moves to the top, within the scroll range.
+The three sizes draw spines 144, 192 or 240 logical pixels tall. Thickness comes from the book's length. The first sort key can start rows by author letter, series or year. When the window narrows or widens, the row containing the previous first fully visible book moves to the top, within the scroll range.
 
-Click or use the arrow keys to select. Shift extends the range. Control-click toggles a book. Up and Down go to the nearest spine centre in the next row. Selection tips the book about its foot. Its neighbours stay in place. Focus and pointer rest show a cover preview. The book menu, Return, F2 and Ctrl+D act as in the other views. More contrast removes the texture and shading, and reduced motion puts the book straight into its tipped position.
+Click or use the arrow keys to select. Shift extends the range. Control-click toggles a book. Up and Down go to the nearest spine centre in the adjacent row. Page Up and Page Down move by a viewport of rows. Home and End reach the ends of the catalogue, and Shift extends the selection there. Ctrl+A selects all books and Ctrl+Shift+A clears the selection. When a focused spine scrolls away, its book regains focus when it comes back into view. Selection tips the book about its foot. The software renderer lifts the top and keeps the lettering flat. Its neighbours stay in place. Focus and pointer rest show a cover preview. The book menu, Return, F2 and Ctrl+D act as in the other views. More contrast removes the texture and shading, and reduced motion puts the book straight into its tipped position.
 
 ## Sorting
 
