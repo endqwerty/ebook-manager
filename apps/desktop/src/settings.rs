@@ -35,7 +35,7 @@ impl ViewKind {
         Self::ALL.iter().find(|v| v.1 == id).map(|v| v.0)
     }
     /// The view shown for a saved choice. The table needs a window at
-    /// least 640 wide, and at a text scale of 1.5 or more the grid gives
+    /// least 640 wide, and at a text scale of 1.5 or more the grid or shelf gives
     /// way to the list. The saved choice is not changed.
     pub fn shown(self, narrow: bool, text_scale: f64) -> Self {
         match self {
@@ -572,6 +572,8 @@ mod tests {
         assert_eq!(ViewKind::Table.shown(true, 1.0), ViewKind::List);
         assert_eq!(ViewKind::Grid.shown(true, 1.49), ViewKind::Grid);
         assert_eq!(ViewKind::Grid.shown(false, 1.5), ViewKind::List);
+        assert_eq!(ViewKind::Shelf.shown(true, 1.49), ViewKind::Shelf);
+        assert_eq!(ViewKind::Shelf.shown(false, 1.5), ViewKind::List);
         assert_eq!(ViewKind::List.shown(true, 2.0), ViewKind::List);
     }
 }

@@ -31,11 +31,84 @@ struct State {
     height: i32,
     strip: RefCell<Option<Arc<ShelfStrip>>>,
     rows: RefCell<Vec<layout::Row>>,
-    visible: RefCell<BTreeMap<usize, gtk::Box>>,
-    pool: RefCell<Vec<BookCell>>,
+    visible: RefCell<BTreeMap<usize, Board>>,
     anchor: Cell<u32>,
 }
 
+/// A row keeps its children attached when it moves to a new set of ranks.
+struct Board {
+    widget: gtk::Box,
+    caption: gtk::Label,
+    books: back::Back,
+    shade: gtk::Box,
+    cells: Vec<BookCell>,
+}
+
+impl Board {
+    fn new(canvas: &gtk::Fixed) -> Self {
+        let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let caption = gtk::Label::builder()
+            .xalign(0.)
+            .height_request(24)
+            .css_classes(["caption", "dimmed"])
+            .build();
+        widget.append(&caption);
+        let books: back::Back = glib::Object::new();
+        books.set_spacing(1);
+        books.add_css_class("shelf-back");
+        widget.append(&books);
+        let shade = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        shade.add_css_class("standing-shade");
+        for (class, height) in [("shelf-top", 7), ("shelf-board", 12), ("shelf-shadow", 10)] {
+            let face = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            face.add_css_class(class);
+            face.set_height_request(height);
+            if class == "shelf-top" {
+                face.append(&shade);
+            }
+            widget.append(&face);
+        }
+        canvas.put(&widget, 0., 0.);
+        Self {
+            widget,
+            caption,
+            books,
+            shade,
+            cells: Vec::new(),
+        }
+    }
+
+    fn bind(&mut self, s: &Rc<State>, strip: &ShelfStrip, row: &layout::Row, end: u32) {
+        self.widget.set_width_request(s.width.get());
+        self.caption.set_visible(row.caption.is_some());
+        if let Some(group) = row.caption {
+            self.caption.set_label(&strip.groups[group].1);
+        }
+        let count = (end - row.first) as usize;
+        for old in self.cells.drain(count.min(self.cells.len())..) {
+            old.unbind();
+            self.books.remove(&old);
+        }
+        let mut occupied = 0;
+        for (index, rank) in (row.first..end).enumerate() {
+            if index == self.cells.len() {
+                let cell = s.cell();
+                self.books.append(&cell);
+                self.cells.push(cell);
+            }
+            let cell = &self.cells[index];
+            let width = i32::from(strip.thickness[rank as usize]);
+            occupied += width + 1;
+            cell.set_size_request(width, s.height + 14);
+            if let Some(book) = s.model.item(rank).and_downcast::<BookObject>() {
+                cell.bind(&book);
+            }
+            s.describe(cell);
+        }
+        self.shade.set_width_request(occupied - 1);
+        s.canvas.move_(&self.widget, 0., row.top as f64);
+    }
+}
 impl Shelf {
     pub fn new(model: &BookListModel, shared: &Shared, scrolled: &gtk::ScrolledWindow) -> Self {
         let scroll = scrolled.vadjustment();
@@ -82,7 +155,6 @@ impl Shelf {
             height: shared.cover_size.grid() * 3 / 2,
             rows: Default::default(),
             visible: Default::default(),
-            pool: Default::default(),
             strip: Default::default(),
             anchor: Default::default(),
         });
@@ -117,7 +189,15 @@ impl Shelf {
         let handler = state.scroll.connect_value_changed(move |_| layout());
         connections.push((state.scroll.clone().upcast(), handler));
         let layout = request_layout.clone();
-        let handler = model.connect_items_changed(move |_, _, _, _| layout());
+        let model_state = Rc::downgrade(&state);
+        let handler = model.connect_items_changed(move |_, _, _, _| {
+            // A repeated token can reuse its strip, but every replacement
+            // hands out new page objects, including for unloaded spines.
+            if let Some(state) = model_state.upgrade() {
+                state.strip.take();
+            }
+            layout();
+        });
         connections.push((model.clone().upcast(), handler));
         request_layout();
         if std::env::var_os("EBOOK_SHELF_FRAME_TIMES").is_some() {
@@ -179,17 +259,24 @@ impl State {
             (None, None) => false,
             _ => true,
         };
-        if changed || self.width.get() != width {
+        let repack = changed || self.width.get() != width;
+        let mut focus = None;
+        if repack {
+            if !changed {
+                focus = self
+                    .canvas
+                    .root()
+                    .and_then(|r| r.focus())
+                    .and_downcast::<BookCell>()
+                    .and_then(|c| c.book())
+                    .map(|b| b.rank());
+            }
             let old_y = self.scroll.value().ceil() as u64;
             let old_rank = {
                 let rows = self.rows.borrow();
                 rows.get(rows.partition_point(|r| r.top < old_y))
                     .map(|r| r.first)
             };
-            let existing = std::mem::take(&mut *self.visible.borrow_mut());
-            for (_, row) in existing {
-                self.recycle(row);
-            }
             let rows = current
                 .as_ref()
                 .map(|s| {
@@ -217,90 +304,50 @@ impl State {
             self.strip.replace(current);
             self.width.set(width);
         }
-        self.fill(height);
-    }
-    fn recycle(&self, row: gtk::Box) {
-        for cell in super::cells(row.upcast_ref()) {
-            (self.shared.preview)(&cell, false);
-            cell.unbind();
-            if let Some(parent) = cell.parent().and_downcast::<gtk::Box>() {
-                parent.remove(&cell);
-            }
-            self.pool.borrow_mut().push(cell);
+        self.fill(height, repack);
+        if let Some(focus) = focus
+            && let Some(cell) = super::cells(self.canvas.upcast_ref())
+                .into_iter()
+                .find(|c| c.book().is_some_and(|b| b.rank() == focus))
+        {
+            cell.grab_focus();
         }
-        self.canvas.remove(&row);
     }
-    fn fill(self: &Rc<Self>, height: i32) {
+    fn fill(self: &Rc<Self>, height: i32, repack: bool) {
         let rows = self.rows.borrow();
         let y = self.scroll.value() as u64;
         let start = rows.partition_point(|r| r.top <= y).saturating_sub(2);
         let end = (rows.partition_point(|r| r.top < y + height as u64) + 1).min(rows.len());
         let mut visible = self.visible.borrow_mut();
-        visible.retain(|i, row| {
-            if (start..end).contains(i) {
-                true
-            } else {
-                self.recycle(row.clone());
-                false
-            }
-        });
-        let strip = self.strip.borrow();
-        let Some(strip) = strip.as_ref() else { return };
-        for i in start..end {
-            visible.entry(i).or_insert_with(|| {
-                let row = &rows[i];
-                let board = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                board.set_width_request(self.width.get());
-                if let Some(group) = row.caption {
-                    let caption = gtk::Label::new(Some(&strip.groups[group].1));
-                    caption.set_xalign(0.0);
-                    caption.add_css_class("caption");
-                    caption.add_css_class("dimmed");
-                    caption.set_height_request(24);
-                    board.append(&caption);
-                }
-                let back: back::Back = glib::Object::new();
-                back.set_spacing(1);
-                back.add_css_class("shelf-back");
-                let next = rows
-                    .get(i + 1)
-                    .map_or(strip.thickness.len() as u32, |r| r.first);
-                for rank in row.first..next {
-                    let cell = self.pool.borrow_mut().pop().unwrap_or_else(|| self.cell());
-                    cell.set_size_request(
-                        i32::from(strip.thickness[rank as usize]),
-                        self.height + 14,
-                    );
-                    if let Some(book) = self.model.item(rank).and_downcast::<BookObject>() {
-                        cell.bind(&book);
-                    }
-                    self.describe(&cell);
-                    back.append(&cell);
-                }
-                board.append(&back);
-                for (class, height) in [("shelf-top", 7), ("shelf-board", 12), ("shelf-shadow", 10)]
+        let mut spare: Vec<_> = visible
+            .extract_if(.., |i, _| repack || !(start..end).contains(i))
+            .map(|(_, b)| b)
+            .collect();
+        for board in &spare {
+            for cell in &board.cells {
+                (self.shared.preview)(cell, false);
+                if cell.has_focus()
+                    && let Some(root) = cell.root()
                 {
-                    let face = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                    face.add_css_class(class);
-                    face.set_height_request(height);
-                    if class == "shelf-top" {
-                        let shade = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                        shade.add_css_class("standing-shade");
-                        let occupied = strip.thickness[row.first as usize..next as usize]
-                            .iter()
-                            .map(|&w| i32::from(w) + 1)
-                            .sum::<i32>()
-                            - 1;
-                        shade.set_width_request(occupied);
-                        face.append(&shade);
-                    }
-                    board.append(&face);
+                    root.set_focus(gtk::Widget::NONE);
                 }
-                self.canvas.put(&board, 0., row.top as f64);
-                board
-            });
+            }
         }
-        self.pool.borrow_mut().clear();
+        if let Some(strip) = self.strip.borrow().as_ref() {
+            for index in start..end {
+                visible.entry(index).or_insert_with(|| {
+                    let mut board = spare.pop().unwrap_or_else(|| Board::new(&self.canvas));
+                    let next = rows
+                        .get(index + 1)
+                        .map_or(strip.thickness.len() as u32, |r| r.first);
+                    board.bind(self, strip, &rows[index], next);
+                    board
+                });
+            }
+        }
+        for board in spare {
+            self.canvas.remove(&board.widget);
+        }
     }
     fn describe(&self, cell: &BookCell) {
         let Some(book) = cell.book() else { return };
@@ -317,7 +364,7 @@ impl State {
         self.scroll
             .clamp_page(r.top as f64, (r.top + self.stride() - 28) as f64);
         drop(rows);
-        self.fill(self.scroll.page_size() as i32);
+        self.fill(self.scroll.page_size() as i32, false);
         if focus
             && let Some(cell) = super::cells(self.canvas.upcast_ref())
                 .into_iter()

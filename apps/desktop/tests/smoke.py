@@ -1420,9 +1420,15 @@ def shelf_only(binary, evidence, root):
         picker(destination, "Choose an export folder")
         find("Book exported", contains=True)
         click("Close", find("", "dialog"))
-        files=list(destination.glob("*.epub"))
-        assert len(files)==1 and files[0].read_bytes()==(root / "Gallery/01.epub").read_bytes()
-        print("PASS shelf and author sort on restart, keyboard read and export", flush=True)
+        files = list(destination.glob("*.epub"))
+        assert (
+            len(files) == 1
+            and files[0].read_bytes() == (root / "Gallery/01.epub").read_bytes()
+        )
+        print(
+            "PASS shelf and author sort on restart, keyboard read and export",
+            flush=True,
+        )
     finally:
         if proc.poll() is None:
             stop(proc)

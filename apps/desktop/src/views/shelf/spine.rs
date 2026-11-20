@@ -358,8 +358,10 @@ impl Spine {
         let author = layout(name, 10., false);
         let print_author =
             w >= 24. && title.pixel_size().0 + author.pixel_size().0 + 44 <= h as i32;
-        title.set_width((h - 20.) as i32 * pango::SCALE);
-        title.set_ellipsize(pango::EllipsizeMode::End);
+        if title.pixel_size().0 > (h - 20.) as i32 {
+            title.set_width((h - 20.) as i32 * pango::SCALE);
+            title.set_ellipsize(pango::EllipsizeMode::End);
+        }
         let print = |l: &pango::Layout, y: f32, col: &gdk::RGBA| {
             s.save();
             s.translate(&Point::new((w + l.pixel_size().1 as f32) / 2., y));
@@ -372,15 +374,17 @@ impl Spine {
             s.restore();
         };
         if variant == 2 {
-            s.append_color(
-                &ink,
-                &Rect::new(
-                    6.,
-                    18.,
-                    w - 12.,
-                    title.pixel_extents().1.width() as f32 + 12.,
-                ),
+            let bounds = Rect::new(
+                6.,
+                18.,
+                w - 12.,
+                title.pixel_extents().1.width() as f32 + 12.,
             );
+            let label = gsk::RoundedRect::from_rect(bounds, 1.);
+            s.append_outset_shadow(&label, &stamp, 0., 1., 0., 0.);
+            s.push_rounded_clip(&label);
+            s.append_color(&ink, &bounds);
+            s.pop();
         }
         print(&title, 24., if variant == 2 { &cloth } else { &ink });
         if print_author {
@@ -392,12 +396,10 @@ impl Spine {
             style.accent_color_rgba()
         } else if hc {
             self.color()
+        } else if style.is_dark() {
+            rgb(0xffffff, 0.18)
         } else {
-            if style.is_dark() {
-                rgb(0xffffff, 0.18)
-            } else {
-                rgb(0, 0.12)
-            }
+            rgb(0, 0.12)
         };
         s.append_border(
             &frame,

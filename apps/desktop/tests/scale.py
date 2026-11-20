@@ -262,6 +262,7 @@ def view_switches():
         wait_for_focus(expect_view(target), target, book)
         print(f"PASS view {source} → {target} keeps focus visible on {book!r}", flush=True)
     key("ctrl+1")
+    expect_view(1)
 
 
 def small_epub(path, n):
@@ -361,7 +362,12 @@ def shelf_run(binary, root):
                     break
             except (GLib.Error, ValueError):
                 pass
-            assert time.monotonic() < deadline, (anchor,old_width,pane.get_extents(Atspi.CoordType.WINDOW).width,[n.get_name() for n in first_full_row()][:3])
+            assert time.monotonic() < deadline, (
+                anchor,
+                old_width,
+                pane.get_extents(Atspi.CoordType.WINDOW).width,
+                [n.get_name() for n in first_full_row()][:3],
+            )
             time.sleep(POLL)
         book = first_full_row()[0]
         r = book.get_extents(Atspi.CoordType.WINDOW)
@@ -391,6 +397,33 @@ def shelf_run(binary, root):
             f"PASS grouped shelf launch {launch_time:.3f}s, {count} spines (bound {limit}), resize kept {anchor}, selection reaches {end.get_name()}",
             flush=True,
         )
+        key("End", "ctrl+2")
+        wait_for_focus(expect_view(2), 2, last)
+        key("ctrl+4")
+        shelf = find("Bookshelf")
+        deadline = time.monotonic() + 10
+        while True:
+            cell = find(", ".join(last), "table cell", contains=True, parent=shelf)
+            cell.clear_cache()
+            frame = pane.get_extents(Atspi.CoordType.WINDOW)
+            location = cell.get_extents(Atspi.CoordType.WINDOW)
+            if (
+                cell.get_state_set().contains(Atspi.StateType.FOCUSED)
+                and location.y < frame.y + frame.height
+                and location.y + location.height > frame.y
+            ):
+                break
+            assert time.monotonic() < deadline, (
+                last,
+                location.y,
+                frame.y,
+                frame.height,
+            )
+            time.sleep(POLL)
+        print(
+            "PASS the focused book stays visible through Shelf to List and back",
+            flush=True,
+        )
         key("ctrl+1")
         find("Books", "table")
         key("ctrl+w")
@@ -398,7 +431,6 @@ def shelf_run(binary, root):
     finally:
         if proc.poll() is None:
             stop(proc)
-
 
 
 def run(binary, fixture, root):
