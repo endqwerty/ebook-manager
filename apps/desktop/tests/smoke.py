@@ -950,6 +950,8 @@ def table_headers(by_three):
     find("", "menu item")
     xd("windowsize", "--sync", wid, 639 + decoration, 680)
     find("View", "button")
+    find("Books", "list")
+    scroll_to_top()
     find("Orchard · 1", "label")
     assert not headers(), headers()
     xd("windowsize", "--sync", wid, 640 + decoration, 680)
@@ -960,6 +962,8 @@ def table_headers(by_three):
     find("View", "button")
     key("ctrl+2", "ctrl+3")
     xd("windowsize", "--sync", wid, 900, 680)
+    find("Books", "list")
+    scroll_to_top()
     find("Orchard · 1", "label")
     assert not headers(), headers()
     key("ctrl+1")
@@ -1008,8 +1012,9 @@ def remembered(author_width):
     expect_titles(["Tide Tables", CARTOGRAPHER], "the table's sort after a restart")
     assert find("Author", "filler").get_extents(Atspi.CoordType.WINDOW).width == author_width
     key("ctrl+2")
-    find("Orchard · 1", "label")
+    find("Books", "list")
     scroll_to_top()
+    find("Orchard · 1", "label")
     expect_titles([CARTOGRAPHER], "the list's sort after a restart")
     print("PASS the view, sorts, cover size and columns after a restart", flush=True)
 
@@ -1017,6 +1022,8 @@ def remembered(author_width):
 def gallery_view_switches():
     # All six directions, with books already loaded and the default title
     # sort in each view. Wait for a visible book inside the new view.
+    gone("Import complete")
+    focus("Ebook Manager")
     roles = {1: "table", 2: "list", 3: "tree table"}
     for target in (2, 3, 1, 3, 2, 1):
         send_key(f"ctrl+{target}")
