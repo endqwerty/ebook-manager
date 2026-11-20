@@ -270,6 +270,7 @@ mod imp {
         /// The protocol with the read thread. `None` until the first query.
         pub(super) core: RefCell<Option<Core>>,
         pub(super) state: RefCell<State>,
+        pub(super) parked: RefCell<Option<BookObject>>,
         pub(super) hooks: RefCell<Option<Rc<Hooks>>>,
     }
     #[glib::object_subclass]
@@ -714,6 +715,15 @@ impl BookListModel {
     pub fn selected_count(&self) -> u64 {
         let state = self.imp().state.borrow();
         (state.selected.len() + state.pending.len()) as u64
+    }
+
+    /// Retain the book (including a pending page read) when its cell is reused.
+    pub fn park_focus(&self, book: Option<BookObject>) {
+        self.imp().parked.replace(book);
+    }
+
+    pub fn parked_focus(&self) -> Option<BookObject> {
+        self.imp().parked.borrow().clone()
     }
 
     /// The selected book, when there is one and only one.

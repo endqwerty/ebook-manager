@@ -334,11 +334,11 @@ def shelf_run(binary, root):
         samples = [
             int(line.split()[-1]) / 1000
             for line in (root / "app-stderr.log").read_text().splitlines()
-            if line.startswith("shelf-scroll-frame-us ")
+            if line.startswith("shelf-paint-us ")
         ]
-        assert samples, "no scroll frame timings"
+        assert samples, "no scroll paint timings"
         print(
-            f"Shelf scroll frame intervals under Xvfb and Cairo, {len(samples)} samples: median {statistics.median(samples):.2f} ms, max {max(samples):.2f} ms",
+            f"Shelf scroll paint under Xvfb and Cairo: {len(samples)} frames, maximum {max(samples):.2f} ms, {sum(ms > 16.7 for ms in samples)} over 16.7 ms",
             flush=True,
         )
 
@@ -348,27 +348,31 @@ def shelf_run(binary, root):
             y = min(r.y for r, n in places if r.y >= top and r.height > 0)
             return [n for r, n in places if r.y == y]
 
-        anchor = first_full_row()[0].get_name()
-        old_width = pane.get_extents(Atspi.CoordType.WINDOW).width
-        smoke.xd("windowsize", wid, 1020, 720)
-        deadline = time.monotonic() + 5
-        while True:
-            try:
-                if pane.get_extents(
-                    Atspi.CoordType.WINDOW
-                ).width != old_width and anchor in [
-                    n.get_name() for n in first_full_row()
-                ]:
-                    break
-            except (GLib.Error, ValueError):
-                pass
-            assert time.monotonic() < deadline, (
-                anchor,
-                old_width,
-                pane.get_extents(Atspi.CoordType.WINDOW).width,
-                [n.get_name() for n in first_full_row()][:3],
-            )
-            time.sleep(POLL)
+        def resize_keeping_top(width):
+            anchor = first_full_row()[0].get_name()
+            old_width = pane.get_extents(Atspi.CoordType.WINDOW).width
+            smoke.xd("windowsize", wid, width, 720)
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    if pane.get_extents(
+                        Atspi.CoordType.WINDOW
+                    ).width != old_width and anchor in [
+                        n.get_name() for n in first_full_row()
+                    ]:
+                        break
+                except (GLib.Error, ValueError):
+                    pass
+                assert time.monotonic() < deadline, (
+                    anchor,
+                    old_width,
+                    pane.get_extents(Atspi.CoordType.WINDOW).width,
+                    [n.get_name() for n in first_full_row()][:3],
+                )
+                time.sleep(POLL)
+            return anchor
+
+        anchor = resize_keeping_top(1020)
         book = first_full_row()[0]
         r = book.get_extents(Atspi.CoordType.WINDOW)
         smoke.xd(
@@ -397,6 +401,39 @@ def shelf_run(binary, root):
             f"PASS grouped shelf launch {launch_time:.3f}s, {count} spines (bound {limit}), resize kept {anchor}, selection reaches {end.get_name()}",
             flush=True,
         )
+        key("End")
+        def focused_name():
+            for n in spines():
+                n.clear_cache()
+                if n.get_state_set().contains(Atspi.StateType.FOCUSED):
+                    return n.get_name()
+            return None
+
+        key(*(["Up"] * 35))
+        time.sleep(0.4)
+        narrow = resize_keeping_top(540)
+        wide = resize_keeping_top(1020)
+        print(f"PASS deep resize kept {narrow} at 540 and {wide} at 1020", flush=True)
+        # Move the pointer over the books. Keyboard focus may stay on an
+        # offscreen book even though its row of widgets has been recycled.
+        key("End", "ctrl+Left")
+        focus_before_wheel = focused_name()
+        assert focus_before_wheel and focus_before_wheel != end.get_name()
+        smoke.xd("mousemove", "--window", wid, 400, 350, "click", "--repeat", 45, "--delay", 12, 4)
+        time.sleep(0.3)
+        assert focus_before_wheel not in [n.get_name() for n in spines()]
+        smoke.xd("click", "--repeat", 65, "--delay", 12, 5)
+        deadline = time.monotonic() + 8
+        while focused_name() != focus_before_wheel:
+            assert time.monotonic() < deadline, (focus_before_wheel, focused_name())
+            time.sleep(POLL)
+        print("PASS wheel away and back restored focus to the same unselected book", flush=True)
+        key("Page_Up")
+        above = focused_name()
+        assert above not in (None, focus_before_wheel)
+        key("Page_Down")
+        assert focused_name() not in (None, above)
+        print("PASS Page Up and Page Down move shelf focus", flush=True)
         key("End", "ctrl+2")
         wait_for_focus(expect_view(2), 2, last)
         key("ctrl+4")

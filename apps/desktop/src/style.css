@@ -37,7 +37,7 @@ gridview.books > child {
 .shelf-dark .shelf-board { background: linear-gradient(to bottom, #2c2b2e, #222124); border-color: alpha(white,.12); }
 .shelf-dark .shelf-shadow { background: linear-gradient(to bottom, alpha(black,.50), transparent); }
 .standing-shade { background: linear-gradient(to bottom, alpha(black,.28), transparent); }
-.shelf-cell:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+.offscreen-book-focus, .shelf-cell:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .shelf-contrast .shelf-back, .shelf-contrast .shelf-top,
 .shelf-contrast .shelf-board, .shelf-contrast .shelf-shadow { background: var(--window-bg-color); }
 .shelf-contrast .shelf-board { border: 1px solid currentColor; }

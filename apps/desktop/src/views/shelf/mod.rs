@@ -33,6 +33,7 @@ struct State {
     rows: RefCell<Vec<layout::Row>>,
     visible: RefCell<BTreeMap<usize, Board>>,
     anchor: Cell<u32>,
+    resized: Rc<dyn Fn(u32)>,
 }
 
 /// A row keeps its children attached when it moves to a new set of ranks.
@@ -110,7 +111,12 @@ impl Board {
     }
 }
 impl Shelf {
-    pub fn new(model: &BookListModel, shared: &Shared, scrolled: &gtk::ScrolledWindow) -> Self {
+    pub fn new(
+        model: &BookListModel,
+        shared: &Shared,
+        scrolled: &gtk::ScrolledWindow,
+        resized: Rc<dyn Fn(u32)>,
+    ) -> Self {
         let scroll = scrolled.vadjustment();
         let widget = gtk::Viewport::new(None::<&gtk::Adjustment>, Some(&scroll));
         widget.set_scroll_to_focus(false);
@@ -143,6 +149,18 @@ impl Shelf {
         }
 
         let canvas = gtk::Fixed::new();
+
+        canvas.connect_has_focus_notify(glib::clone!(
+            #[weak]
+            widget,
+            move |canvas| {
+                if canvas.has_focus() {
+                    widget.add_css_class("offscreen-book-focus");
+                } else {
+                    widget.remove_css_class("offscreen-book-focus");
+                }
+            }
+        ));
         canvas.set_accessible_role(gtk::AccessibleRole::Grid);
         canvas.update_property(&[gtk::accessible::Property::Label("Bookshelf")]);
         widget.set_child(Some(&canvas));
@@ -157,7 +175,9 @@ impl Shelf {
             visible: Default::default(),
             strip: Default::default(),
             anchor: Default::default(),
+            resized,
         });
+        state.install_keys();
         // GTK adjustments report scrolling and changes to either page size.
         // Coalesce them with model replacements before the next paint.
         let request_layout = Rc::new({
@@ -171,6 +191,9 @@ impl Shelf {
                     let state = state.clone();
                     let pending = pending.clone();
                     widget.add_tick_callback(move |widget, _| {
+                        if widget.width() <= 0 || widget.height() <= 0 {
+                            return glib::ControlFlow::Continue;
+                        }
                         pending.set(false);
                         if let Some(s) = state.upgrade() {
                             s.update(widget.width(), widget.height());
@@ -195,6 +218,7 @@ impl Shelf {
             // hands out new page objects, including for unloaded spines.
             if let Some(state) = model_state.upgrade() {
                 state.strip.take();
+                state.model.park_focus(None);
             }
             layout();
         });
@@ -202,14 +226,31 @@ impl Shelf {
         request_layout();
         if std::env::var_os("EBOOK_SHELF_FRAME_TIMES").is_some() {
             let scroll = state.scroll.clone();
-            let previous = Cell::new(None);
+            let previous = Cell::new(scroll.value());
             widget.add_tick_callback(move |_, clock| {
                 let y = scroll.value();
-                let time = clock.frame_time();
-                if let Some((last_y, last_time)) = previous.replace(Some((y, time)))
-                    && last_y != y
-                {
-                    eprintln!("shelf-scroll-frame-us {}", time - last_time);
+                if previous.replace(y) != y {
+                    // A layout signal is optional. Request it so every sampled
+                    // frame has a timestamp after layout and immediately before paint.
+                    clock.request_phase(gdk::FrameClockPhase::LAYOUT | gdk::FrameClockPhase::PAINT);
+                    let start = Rc::new(Cell::new(None));
+                    let record = start.clone();
+                    let layout = clock.connect_local("layout", true, move |_| {
+                        record.set(Some(std::time::Instant::now()));
+                        None
+                    });
+                    let handlers = Rc::new(RefCell::new(None));
+                    let done = handlers.clone();
+                    let paint = clock.connect_after_paint(move |clock| {
+                        if let Some(start) = start.get() {
+                            eprintln!("shelf-paint-us {}", start.elapsed().as_micros());
+                        }
+                        if let Some((layout, paint)) = done.take() {
+                            clock.disconnect(layout);
+                            clock.disconnect(paint);
+                        }
+                    });
+                    handlers.replace(Some((layout, paint)));
                 }
                 glib::ControlFlow::Continue
             });
@@ -229,6 +270,31 @@ impl Shelf {
             connections,
         }
     }
+    pub fn parked_book(&self) -> Option<BookObject> {
+        self.state
+            .canvas
+            .has_focus()
+            .then(|| self.state.model.parked_focus())
+            .flatten()
+    }
+
+    pub fn range_ready(&self) -> bool {
+        let s = &self.state;
+        s.width.get() == self.widget.width()
+            && s.width.get() > 0
+            && (s.scroll.upper() - f64::from(s.canvas.height_request()).max(s.scroll.page_size()))
+                .abs()
+                < 1.
+    }
+
+    pub fn align_row(&self, rank: u32) {
+        let rows = self.state.rows.borrow();
+        let index = layout::row_of(&rows, rank);
+        if let Some(row) = rows.get(index) {
+            self.state.scroll.set_value(row.top as f64);
+        }
+    }
+
     pub fn scroll_to(&self, rank: u32, flags: gtk::ListScrollFlags) {
         self.state.update(self.widget.width(), self.widget.height());
         if flags.contains(gtk::ListScrollFlags::SELECT) {
@@ -260,23 +326,10 @@ impl State {
             _ => true,
         };
         let repack = changed || self.width.get() != width;
-        let mut focus = None;
+        let mut resize_anchor = None;
         if repack {
-            if !changed {
-                focus = self
-                    .canvas
-                    .root()
-                    .and_then(|r| r.focus())
-                    .and_downcast::<BookCell>()
-                    .and_then(|c| c.book())
-                    .map(|b| b.rank());
-            }
             let old_y = self.scroll.value().ceil() as u64;
-            let old_rank = {
-                let rows = self.rows.borrow();
-                rows.get(rows.partition_point(|r| r.top < old_y))
-                    .map(|r| r.first)
-            };
+            let old_rank = layout::first_full_book(&self.rows.borrow(), old_y, 24);
             let rows = current
                 .as_ref()
                 .map(|s| {
@@ -294,23 +347,16 @@ impl State {
             });
             self.canvas
                 .set_height_request(total.min(i32::MAX as u64) as i32);
-            if !changed && let Some(rank) = old_rank {
-                let index = rows.partition_point(|r| r.first <= rank).saturating_sub(1);
-                if let Some(row) = rows.get(index) {
-                    self.scroll.set_value(row.top as f64);
-                }
+            if !changed {
+                resize_anchor = old_rank;
             }
             self.rows.replace(rows);
             self.strip.replace(current);
             self.width.set(width);
         }
         self.fill(height, repack);
-        if let Some(focus) = focus
-            && let Some(cell) = super::cells(self.canvas.upcast_ref())
-                .into_iter()
-                .find(|c| c.book().is_some_and(|b| b.rank() == focus))
-        {
-            cell.grab_focus();
+        if let Some(rank) = resize_anchor {
+            (self.resized)(rank);
         }
     }
     fn fill(self: &Rc<Self>, height: i32, repack: bool) {
@@ -326,10 +372,9 @@ impl State {
         for board in &spare {
             for cell in &board.cells {
                 (self.shared.preview)(cell, false);
-                if cell.has_focus()
-                    && let Some(root) = cell.root()
-                {
-                    root.set_focus(gtk::Widget::NONE);
+                if cell.has_focus() {
+                    self.canvas.set_focusable(true);
+                    self.canvas.grab_focus();
                 }
             }
         }
@@ -343,6 +388,27 @@ impl State {
                     board.bind(self, strip, &rows[index], next);
                     board
                 });
+            }
+        }
+        if self.canvas.has_focus()
+            && let Some(book) = self.model.parked_focus()
+        {
+            for (index, board) in visible.iter() {
+                if rows[*index].top + self.stride() <= y || rows[*index].top >= y + height as u64 {
+                    continue;
+                }
+                if let Some(cell) = board.cells.iter().find(|c| {
+                    c.book().is_some_and(|b| {
+                        b.rank() == book.rank()
+                            && match (b.row(), book.row()) {
+                                (Some(a), Some(b)) => a.id == b.id,
+                                _ => true, // Same open view, before its page arrives.
+                            }
+                    })
+                }) {
+                    cell.grab_focus();
+                    break;
+                }
             }
         }
         for board in spare {
@@ -359,7 +425,7 @@ impl State {
     }
     fn reveal(self: &Rc<Self>, rank: u32, focus: bool) {
         let rows = self.rows.borrow();
-        let i = rows.partition_point(|r| r.first <= rank).saturating_sub(1);
+        let i = layout::row_of(&rows, rank);
         let Some(r) = rows.get(i) else { return };
         self.scroll
             .clamp_page(r.top as f64, (r.top + self.stride() - 28) as f64);
@@ -391,14 +457,16 @@ impl State {
             }
         }
     }
-    fn adjacent(&self, rank: u32, down: bool) -> u32 {
+    fn adjacent(&self, rank: u32, delta: isize) -> u32 {
         let rows = self.rows.borrow();
         let strip = self.strip.borrow();
         let Some(strip) = strip.as_ref() else {
             return rank;
         };
-        let i = rows.partition_point(|r| r.first <= rank).saturating_sub(1);
-        let j = if down { i + 1 } else { i.saturating_sub(1) };
+        let i = layout::row_of(&rows, rank);
+        let j = i
+            .saturating_add_signed(delta)
+            .min(rows.len().saturating_sub(1));
         let Some(row) = rows.get(j) else { return rank };
         let widths = &strip.thickness;
         let x = widths[rows[i].first as usize..rank as usize]
@@ -427,8 +495,11 @@ impl State {
         let focus = gtk::EventControllerFocus::new();
         let preview = self.shared.preview.clone();
         let c = cell.downgrade();
+        let weak = Rc::downgrade(self);
         focus.connect_enter(move |_| {
-            if let Some(cell) = c.upgrade() {
+            if let (Some(s), Some(cell)) = (weak.upgrade(), c.upgrade()) {
+                s.canvas.set_focusable(false);
+                s.model.park_focus(cell.book());
                 preview(&cell, true);
             }
         });
@@ -480,28 +551,48 @@ impl State {
             }
         });
         cell.add_controller(click);
+        cell
+    }
+    fn install_keys(self: &Rc<Self>) {
         let keys = gtk::EventControllerKey::new();
         let weak = Rc::downgrade(self);
-        let c = cell.downgrade();
         keys.connect_key_pressed(move |_, key, _, mods| {
-            let (Some(s), Some(cell)) = (weak.upgrade(), c.upgrade()) else {
+            let Some(s) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            let Some(book) = cell.book() else {
+            let Some(book) = s
+                .canvas
+                .root()
+                .and_then(|r| r.focus())
+                .and_downcast::<BookCell>()
+                .and_then(|c| c.book())
+                .or_else(|| s.model.parked_focus().filter(|_| s.canvas.has_focus()))
+            else {
                 return glib::Propagation::Proceed;
             };
+            if mods.contains(gdk::ModifierType::CONTROL_MASK) && key.to_lower() == gdk::Key::a {
+                if mods.contains(gdk::ModifierType::SHIFT_MASK) {
+                    s.model.unselect_all();
+                } else {
+                    s.model.select_all();
+                }
+                return glib::Propagation::Stop;
+            }
+            let page = (s.scroll.page_size() as isize / s.stride() as isize).max(1);
             let rank = book.rank();
             let last = s.model.n_items().saturating_sub(1);
             let target = match key {
                 gdk::Key::Right => rank.saturating_add(1).min(last),
                 gdk::Key::Left => rank.saturating_sub(1),
-                gdk::Key::Down => s.adjacent(rank, true),
-                gdk::Key::Up => s.adjacent(rank, false),
+                gdk::Key::Down => s.adjacent(rank, 1),
+                gdk::Key::Up => s.adjacent(rank, -1),
+                gdk::Key::Page_Up => s.adjacent(rank, -page),
+                gdk::Key::Page_Down => s.adjacent(rank, page),
                 gdk::Key::Home => 0,
                 gdk::Key::End => last,
                 gdk::Key::space => rank,
                 gdk::Key::Return | gdk::Key::KP_Enter => {
-                    let _ = WidgetExt::activate_action(&cell, "win.read", None);
+                    let _ = WidgetExt::activate_action(&s.canvas, "win.read", None);
                     return glib::Propagation::Stop;
                 }
                 _ => return glib::Propagation::Proceed,
@@ -515,7 +606,6 @@ impl State {
             s.reveal(target, true);
             glib::Propagation::Stop
         });
-        cell.add_controller(keys);
-        cell
+        self.canvas.add_controller(keys);
     }
 }

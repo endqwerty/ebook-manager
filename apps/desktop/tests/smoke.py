@@ -1501,7 +1501,22 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
     ]
     assert len(selected) == 2, [n.get_name() for n in selected]
     if look == "light":
-        key("Left", "Menu")
+        def selected_count():
+            items = [n for n in walk(shelf) if n.get_role_name() == "table cell"]
+            for n in items:
+                n.clear_cache()
+            return sum(n.get_state_set().contains(Atspi.StateType.SELECTED) for n in items)
+
+        for shortcut, expected in [("ctrl+a", len(before)), ("ctrl+shift+a", 0),
+                                   ("Home", 1), ("shift+End", len(before)),
+                                   ("End", 1), ("shift+Home", len(before))]:
+            key(shortcut)
+            assert selected_count() == expected, (shortcut, expected, selected_count())
+        print("PASS Ctrl+A, Ctrl+Shift+A, Shift+End and Shift+Home share the library selection", flush=True)
+        xd("mousemove", "--window", wid, left + bounds.x + bounds.width // 2,
+           top + bounds.y + bounds.height // 2, "click", 1)
+        xd("mousemove", 2, 2)
+        key("Menu")
         find("", "menu item")
         key("Down", "Return")
         find("Edit book", "frame")

@@ -135,7 +135,15 @@ impl Library {
 
     /// Where the reader is in the books on screen.
     fn anchors(&self) -> Anchors {
-        let focused = views::focused_cell(&self.scrolled);
+        let focused = views::focused_cell(&self.scrolled)
+            .and_then(|c| c.book())
+            .or_else(|| {
+                self.with_view(|view| match view {
+                    View::Shelf(shelf) => shelf.parked_book(),
+                    _ => None,
+                })
+                .flatten()
+            });
         let top = self
             .with_view(|view| views::top_cell(&view.body()))
             .flatten();
@@ -143,7 +151,7 @@ impl Library {
         Anchors {
             current: focused
                 .as_ref()
-                .and_then(id)
+                .and_then(|b| Some(b.row()?.id.clone()))
                 .or_else(|| self.model.selected_one()),
             top: top.as_ref().and_then(|(cell, _)| id(cell)),
             top_offset: top.as_ref().map_or(0.0, |(_, offset)| *offset),
@@ -154,7 +162,10 @@ impl Library {
     fn viewport_ready(&self) -> bool {
         self.with_view(|view| {
             let body = view.body();
-            body.is_mapped() && body.width() > 0 && body.height() > 0
+            body.is_mapped()
+                && body.width() > 0
+                && body.height() > 0
+                && !matches!(view, View::Shelf(shelf) if !shelf.range_ready())
         }) == Some(true)
             && self.scrolled.hadjustment().page_size() > 0.0
             && self.scrolled.vadjustment().page_size() > 0.0
@@ -167,8 +178,12 @@ impl Library {
         if placed.current.is_none() && placed.top.is_none() {
             return;
         }
+        self.when_view_sized(serial, move |lib| lib.place_books(&placed, serial));
+    }
+
+    fn when_view_sized(self: &Rc<Self>, serial: u64, place: impl Fn(&Rc<Self>) + 'static) {
         if self.viewport_ready() {
-            self.place_books(&placed, serial);
+            place(self);
             return;
         }
         // Older GTK computes a scroll alignment by dividing by the viewport
@@ -185,7 +200,7 @@ impl Library {
             if !library.viewport_ready() {
                 return glib::ControlFlow::Continue;
             }
-            library.place_books(&placed, serial);
+            place(&library);
             glib::ControlFlow::Break
         });
     }
@@ -330,6 +345,22 @@ impl Library {
                 &self.model,
                 &shared,
                 &self.scrolled,
+                {
+                    let weak = Rc::downgrade(self);
+                    Rc::new(move |rank| {
+                        if let Some(lib) = weak.upgrade() {
+                            let serial = lib.placed.get() + 1;
+                            lib.placed.set(serial);
+                            lib.when_view_sized(serial, move |lib| {
+                                lib.with_view(|view| {
+                                    if let View::Shelf(shelf) = view {
+                                        shelf.align_row(rank);
+                                    }
+                                });
+                            });
+                        }
+                    })
+                },
             )),
             ViewKind::Grid => View::Grid(grid::build(&self.model, &shared)),
             ViewKind::List => View::List(list::build(&self.model, &shared)),

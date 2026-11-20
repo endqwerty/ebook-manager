@@ -6,6 +6,23 @@ pub struct Row {
     pub caption: Option<usize>,
 }
 
+pub fn first_full_book(rows: &[Row], scroll: u64, caption_height: u64) -> Option<u32> {
+    let index = rows.partition_point(|row| {
+        row.top
+            + if row.caption.is_some() {
+                caption_height
+            } else {
+                0
+            }
+            < scroll
+    });
+    rows.get(index).map(|row| row.first)
+}
+
+pub fn row_of(rows: &[Row], rank: u32) -> usize {
+    rows.partition_point(|r| r.first <= rank).saturating_sub(1)
+}
+
 pub fn pack(
     thickness: &[u8],
     groups: &[(u32, String)],
@@ -45,6 +62,22 @@ pub fn pack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_resize_tracks_the_first_complete_spine_through_both_widths() {
+        let widths = vec![24; 5000];
+        let groups = [(4000, String::from("Q"))];
+        let wide = pack(&widths, &groups, 999, 192, 24);
+        let narrow = pack(&widths, &groups, 499, 192, 24);
+        let caption = wide[row_of(&wide, 4000)].top;
+        assert_eq!(first_full_book(&wide, caption + 8, 24), Some(4000));
+        let rank = first_full_book(&wide, caption + 25, 24).unwrap();
+        assert_eq!(rank, 4040);
+        let top = narrow[row_of(&narrow, rank)].top;
+        assert!(top > wide.last().unwrap().top);
+        let rank = first_full_book(&narrow, top, 24).unwrap();
+        assert_eq!(wide[row_of(&wide, rank)].first, 4040);
+    }
 
     #[test]
     fn exact_fit_group_break_and_wide_book() {

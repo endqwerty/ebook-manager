@@ -351,7 +351,7 @@ pub fn top_cell(body: &gtk::Widget) -> Option<(BookCell, f32)> {
 /// The cell that holds the keyboard focus, when a book does.
 pub fn focused_cell(scrolled: &gtk::ScrolledWindow) -> Option<BookCell> {
     let focus = scrolled.root()?.focus()?;
-    if !focus.is_ancestor(scrolled) {
+    if !focus.is_ancestor(scrolled) || focus.is::<gtk::Fixed>() {
         return None;
     }
     cells(&focus).into_iter().next().or_else(|| {
