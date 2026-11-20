@@ -1644,6 +1644,10 @@ fn widgets(root: &gtk::Widget) -> Vec<gtk::Widget> {
     all
 }
 
+/// The faces the panel tests offer, as if the system had them. Nothing
+/// needs to be installed: the list is the panel's input.
+const OFFERED: [&str; 3] = ["Face One", "Face Two", "Face Three"];
+
 /// A text settings panel in a window, opened, on its own settings.
 struct Panel {
     window: gtk::Window,
@@ -1665,7 +1669,11 @@ impl Panel {
                 }
             })
         };
-        let popover = text_panel::build(settings.clone(), Vec::new(), changed);
+        let popover = text_panel::build(
+            settings.clone(),
+            OFFERED.map(String::from).to_vec(),
+            changed,
+        );
         let button = gtk::MenuButton::builder().label("Aa").build();
         button.set_popover(Some(&popover));
         let window = gtk::Window::builder()
@@ -1756,8 +1764,31 @@ impl Panel {
             }
         }
         let selected = |label: &str| self.control::<gtk::DropDown>(label).selected();
-        if selected("Font") != 0 || s.face.is_some() {
+        let face_at = s
+            .face
+            .as_ref()
+            .and_then(|f| OFFERED.iter().position(|o| o == f))
+            .map_or(0, |i| i as u32 + 1);
+        if selected("Font") != face_at
+            || s.face
+                .as_ref()
+                .is_some_and(|f| !OFFERED.contains(&f.as_str()))
+        {
             wrong.push("font".to_owned());
+        }
+        // The face the page is given is the one shown.
+        let sent = s
+            .properties(false, false, "serif")
+            .into_iter()
+            .find(|(n, _)| *n == "--font")
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        let expected = s
+            .face
+            .as_ref()
+            .map_or("serif".to_owned(), |f| format!("'{f}', serif"));
+        if sent != expected {
+            wrong.push(format!("font sent {sent}"));
         }
         if selected("Weight") as usize != s.weight {
             wrong.push("weight".to_owned());
@@ -1974,6 +2005,11 @@ fn actions() -> Vec<Action> {
             |s| s.size -= 1,
         ),
         (
+            "Font",
+            |p| p.control::<gtk::DropDown>("Font").set_selected(2),
+            |s| s.face = Some("Face Two".into()),
+        ),
+        (
             "Weight",
             |p| p.control::<gtk::DropDown>("Weight").set_selected(3),
             |s| s.weight = 3,
@@ -2062,6 +2098,19 @@ fn each_control_changes_only_its_setting() -> Outcome {
         panel
             .consistent()
             .map_err(|e| format!("after {name}: {e}"))?;
+        // Default, chosen after a face, clears it again.
+        if name == "Font" {
+            panel.control::<gtk::DropDown>("Font").set_selected(0);
+            pause(Duration::from_millis(50));
+            check!(
+                *panel.settings.borrow() == settings::Settings::default(),
+                "Default after a face left {:?}",
+                panel.settings.borrow()
+            );
+            panel
+                .consistent()
+                .map_err(|e| format!("after Default: {e}"))?;
+        }
     }
     Ok(())
 }
@@ -2097,6 +2146,11 @@ fn reset_from_every_change_restores_the_defaults() -> Outcome {
         check!(
             *panel.settings.borrow() != settings::Settings::default(),
             "nothing changed"
+        );
+        check!(
+            panel.settings.borrow().face.as_deref() == Some("Face Two"),
+            "follow {follow}: the face chosen before Reset is {:?}",
+            panel.settings.borrow().face
         );
         panel
             .consistent()

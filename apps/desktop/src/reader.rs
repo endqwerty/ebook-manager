@@ -210,9 +210,9 @@ fn position_error(w: &gtk::Window, e: &anyhow::Error) {
     }
 }
 
-/// GTK's setting for less motion. It arrived in GTK 4.22, and the app runs
-/// on 4.12, so it is looked up by name, and on a GTK without it nothing is
-/// asked of it.
+/// GTK's setting for less motion, added in GTK 4.22, the app's minimum. It
+/// is looked up by name, as it was when the app also ran on older GTK; on
+/// 4.22 and later the lookup always finds it, and it costs nothing.
 const REDUCED_MOTION: &str = "gtk-interface-reduced-motion";
 
 /// Whether the system asks for less motion: animations are off, or the

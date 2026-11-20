@@ -560,8 +560,8 @@ over anything the book's sheets say for the same property.
   and the window fits them. A turn sets the scroll offset. The slide is
   `scroll-behavior: smooth` and the cross-fade takes the page out and back
   in over 120 ms each way. When the system asks for less motion, by GTK's
-  animation setting or, from GTK 4.22, its reduced motion setting, a turn
-  moves at once. WebKitGTK 2.54 does not answer `prefers-reduced-motion`
+  animation setting or its reduced motion setting (GTK 4.22, the app's
+  minimum), a turn moves at once. WebKitGTK 2.54 does not answer `prefers-reduced-motion`
   from either, so the shell passes it as `--motion: none` and the script
   checks that. `less_motion_turns_at_once` checks the script's side; the
   shell's reading of the two GTK settings has no test.
@@ -676,10 +676,14 @@ the page. UTF-16 is the unit because the DOM measures text that way.
   ends an unfinished animation, and a turn made after the change and
   before the held place is shown in the new layout first shows it there
   and counts from it (`a_turn_after_a_reflow_counts_from_the_held_place`).
-  That is the only way an animation ends early, since the reader cannot
-  move the page by hand, and the reflow then shows and tells the place the
-  turn led to
-  (`an_animation_ended_by_a_reflow_leaves_the_page_at_its_place`). The
+  The reader cannot move the page by hand, so an animation ends early in
+  two ways only: the layout changes, or another turn is made. Either way
+  the page goes on to a place already told. The reflow's restore shows the
+  held place, which is where the turn led, and reports it
+  (`an_animation_ended_by_a_reflow_leaves_the_page_at_its_place`); a
+  second turn counts from where the first was going and has answered with
+  its own destination (`two_quick_turns_land_two_pages_on`, for a slide
+  and for a fade). The
   view test `an_animated_turn_answers_with_the_place_it_leads_to` checks
   each animation.
 - **A move's place is taken for the chapter it was made in**, whatever is
