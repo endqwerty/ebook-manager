@@ -1410,7 +1410,9 @@ def shelf_only(binary, evidence, root):
         find("C", "label", parent=find("Bookshelf"))
         select_book("glass")
         key("Return")
-        find("The Glass Orchard", "frame")
+        reader = find("The Glass Orchard", "frame")
+        find("Page 1 of", contains=True, parent=reader)
+        assert web_processes(proc.pid), "the shelf opened a reader without a web page"
         click("Back to library")
         gone("Back to library")
         focus("Ebook Manager")
