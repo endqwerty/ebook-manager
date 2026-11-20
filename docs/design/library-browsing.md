@@ -780,7 +780,26 @@ same time.
      pull request's contract did not allow and an import needs.
    - Second: List and Table, the view switch, the Sort menu and its
      editor, the cover sizes and the remembered choices.
-4. **The shelf** (open). After 3. Behaviour 18.
+4. **The shelf** (implemented on Linux). Behaviour 18. The read thread
+   returns the strip with the opened view so the model can place the reader
+   as soon as the view has a size. GTK scrolls a viewport over a fixed canvas.
+   The canvas holds the visible rows and one extra at either end.
+   Cairo projects horizontal pixel strips about the foot of the spine because
+   it cannot render a GSK perspective transform. Other renderers use the
+   transform directly. The caption reserves 24 logical pixels. The desktop
+   has no touch details page or details pane yet. The focused or hovered book
+   uses the window's preview. GTK can put it below a spine when there is no
+   room above. The focus ring follows the untipped cell, including the
+   clearance for the top edge. The clamped libadwaita spring uses damping
+   ratio 1, mass 1 and stiffness 450.
+
+   At 100,000 books the grouped shelf showed its first spines in 0.625 s
+   on the host and 0.592 s on Ubuntu 26.04. Both runs counted 186 spine
+   widgets against a bound of 336 for that viewport. In each private X11
+   session with the Cairo renderer, 21 frame-clock intervals during a wheel
+   scroll had a median of 16.67 ms and a maximum of 33.33 ms. The
+   no-dropped-frame target remains open. These samples do not measure
+   compositor presentation times.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).
 
 ## Open questions

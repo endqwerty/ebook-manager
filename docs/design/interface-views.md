@@ -144,7 +144,7 @@ The picture at the top of this page shows it in light and dark. The file
 [`interface-views-sample.html`](interface-views-sample.html) draws it with CSS
 gradients, one transform and one generated noise tile, and a shell can read the
 exact values there. Where the sample and this table differ, the table is right.
-No shell draws it yet.
+The Linux shell draws it.
 
 | Part | Value |
 |---|---|
