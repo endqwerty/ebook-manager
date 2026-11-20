@@ -54,10 +54,10 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
 ## Finding and viewing
 
 - `LIB-20` (core) Cover grid, list and table views. The table has user-chosen
-  columns. Each view remembers its sort. The Linux window shows the [cover grid](../../specs/desktop-mvp.md#the-library-window). The list, the table and the remembered sort are open.
+  columns. Each view remembers its sort. Done on Linux: the [grid](../../specs/desktop-mvp.md#the-library-window), the [list and the table](../../specs/desktop-mvp.md#list-and-table) with chosen columns, and a remembered sort for each.
 - `LIB-21` (core) Sort by any field, with a second and third key. Sorting follows
   the locale: leading articles are skipped by a per-language rule, numbers sort as
-  numbers, and the user can edit any sort key by hand.
+  numbers, and the user can edit any sort key by hand. On Linux the [Sort menu, its editor and the table's headers](../../specs/desktop-mvp.md#sorting) sort by seven fields with up to three keys. The Edit window lets the reader change sort title, author sort names, series and series position. Date added, date published, last read and progress cannot yet be edited by hand as sort keys.
 - `LIB-22` (core) Typing in the search box filters at once across title, author,
   series and tags. The Linux window [filters as the reader types](../../specs/desktop-mvp.md#search) across title, author and series. Tags wait until the catalogue holds them.
 - `LIB-23` (expected) A query language with `field:value`, AND, OR, NOT, ranges,
@@ -78,7 +78,7 @@ LIB-40 and LIB-42. Source EPUBs remain unchanged (LIB-43).
   smooth at 100,000 books.
 - `LIB-27` (core) Bulk edit with a preview of every change and undo.
 - `LIB-28` (core) Every action is reachable from the keyboard. This is a common
-  complaint about existing tools. In the Linux library window every command [has a key](../../specs/desktop-mvp.md#commands-and-keys), and the smoke check drives it with the keyboard alone. The import report's buttons are reached with Tab.
+  complaint about existing tools. Done for the Linux library window, including column widths. Every command [has a key](../../specs/desktop-mvp.md#commands-and-keys), and the smoke check exercises keyboard commands. The desktop checks also resize the window and scroll with the wheel. The import report's buttons are reached with Tab.
 
 ## Importing
 

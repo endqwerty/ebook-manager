@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi, GLib
 
 SCREEN = (1100, 800)
+REGISTRY = "org.a11y.atspi.Registry"
 
 BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -218,13 +220,13 @@ def xd(*args):
 
 
 def send_key(name):
-    # Some XKB maps make xdotool add Alt when looking up F2 or F11.
-    # Use the physical keycode from our private X server's keymap.
-    if name in ("F2", "F11"):
+    # Some XKB maps make xdotool add Alt when looking up function keys.
+    # Send the physical keycode for bare F1 through F12.
+    if function := re.fullmatch(r"F([1-9]|1[0-2])", name):
         keymap = subprocess.check_output(
             ["xkbcomp", "-xkb", os.environ["DISPLAY"], "-"], text=True
         )
-        match = re.search(rf"<FK{int(name[1:]):02d}>\s*=\s*([0-9]+);", keymap)
+        match = re.search(rf"<FK{int(function[1]):02d}>\s*=\s*([0-9]+);", keymap)
         assert match is not None, f"{name} is missing from the X server's keymap"
         name = match[1]
     xd("key", name)
@@ -369,13 +371,14 @@ def replace_text(text):
     type_text(text)
 
 
-def gone(name):
-    """Waits until nothing visible has this name."""
+def gone(name, *, role=None):
+    """Waits until the current accessibility tree shows no match."""
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
             if not any(
                 (n.get_name() or "") == name
+                and (role is None or n.get_role_name() == role)
                 and n.get_state_set().contains(Atspi.StateType.SHOWING)
                 for n in walk(Atspi.get_desktop(0))
             ):
@@ -457,6 +460,48 @@ def environment(root, **extra):
     )
 
 
+def launch_app(binary, env):
+    subprocess.run(
+        ["gdbus", "wait", "--session", "--timeout=10", REGISTRY],
+        env=env,
+        check=True,
+    )
+    # The registry claims its name before setting up X11 and exporting its root.
+    subprocess.run(
+        [
+            "gdbus", "call", "--session", "--timeout=10", "--dest", REGISTRY,
+            "--object-path", "/org/a11y/atspi/accessible/root",
+            "--method", "org.a11y.atspi.Accessible.GetChildren",
+        ],
+        env=env,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    with (Path(env["HOME"]) / "app-stderr.log").open("a") as log:
+        return subprocess.Popen([binary], env=env, stderr=log)
+
+
+def check_diagnostics(root):
+    log = root / "app-stderr.log"
+    if not log.exists():
+        return
+    diagnostic = re.compile(
+        r"(?:^|\s)(?:[\w.-]+-)?(?:WARNING|CRITICAL|ERROR) \*\*:"
+    )
+    # GTK 4.24 on X11 also reports this on main when a reader drop-down
+    # and its window repaint together. It is a duplicate frame timing report.
+    allowed = re.compile(
+        r"\bGdk-WARNING \*\*: \d{2}:\d{2}:\d{2}\.\d+: "
+        r"gdk_frame_timings_submitted\(\) called on submitted frame\.$"
+    )
+    unexpected = [
+        line for line in log.read_text(errors="replace").splitlines()
+        if diagnostic.search(line) and not allowed.search(line)
+    ]
+    assert not unexpected, "\n".join(unexpected)
+    print("PASS no unexpected GTK warnings or criticals from any app process", flush=True)
+
+
 def stop(proc):
     proc.terminate()
     assert proc.wait(timeout=10) in (0, -signal.SIGTERM), proc.returncode
@@ -480,7 +525,7 @@ def run(binary, evidence, root):
     originals = {p: hashlib.sha256(p.read_bytes()).digest() for p in books.iterdir()}
     proc = None
     try:
-        proc = subprocess.Popen([binary], env=env)
+        proc = launch_app(binary, env)
         find("No books yet")
         capture("Ebook Manager", evidence / "empty.png")
         focus("Ebook Manager")
@@ -613,7 +658,7 @@ def run(binary, evidence, root):
                 focus("Ebook Manager")
                 key("ctrl+w")
                 assert proc.wait(timeout=10) == 0
-            proc = subprocess.Popen([binary], env=env)
+            proc = launch_app(binary, env)
             find("Mira Vale")
             select_book("lantern")
             key("Return")
@@ -657,6 +702,349 @@ def run(binary, evidence, root):
             proc.wait(timeout=10)
 
 
+LANTERN = "The Lantern Atlas · Revised"
+CARTOGRAPHER = GALLERY[4][0]
+FIELDS = ["Title", "Author", "Series", "Date Added", "Date Published", "Last Read", "Progress"]
+
+
+def titles_shown(parent=None):
+    """The titles of the books on screen, in the order they are shown."""
+    known = {book[0] for book in GALLERY} | {LANTERN}
+    return [
+        node.get_name()
+        for node in walk(parent or Atspi.get_desktop(0))
+        if node.get_role_name() == "label"
+        and node.get_name() in known
+        and node.get_state_set().contains(Atspi.StateType.SHOWING)
+    ]
+
+
+def expect_titles(expected, what, *, parent=None):
+    """Waits for the first books on screen to be these, in this order."""
+    deadline = time.monotonic() + 15
+    seen = None
+    while time.monotonic() < deadline:
+        try:
+            seen = titles_shown(parent)[: len(expected)]
+        except GLib.Error:
+            seen = None
+        if seen == expected:
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"{what}: expected {expected}, the window shows {seen}")
+
+
+def headers():
+    """The table's column headers, in order."""
+    return [
+        node.get_name()
+        for node in walk(Atspi.get_desktop(0))
+        if node.get_role_name() == "filler"
+        and node.get_name()
+        and node.get_state_set().contains(Atspi.StateType.SHOWING)
+    ]
+
+
+def expect_headers(expected):
+    deadline = time.monotonic() + 15
+    seen = None
+    while time.monotonic() < deadline:
+        try:
+            seen = headers()
+        except GLib.Error:
+            seen = None
+        if seen == expected:
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"expected the headers {expected}, the table has {seen}")
+
+
+def choose(wanted):
+    """Sets the focused drop-down to its choice `wanted`, counting from
+    the top, with the keyboard."""
+    key("space")
+    time.sleep(0.3)
+    key("Home", *(["Down"] * wanted), "Return")
+    time.sleep(0.3)
+
+
+def capture_screen(title, out):
+    """A picture of a window with the menus and popovers over it, which
+    are windows of their own."""
+    wid = subprocess.check_output(
+        ["xdotool", "search", "--onlyvisible", "--name", "^" + title + "$"], text=True
+    ).splitlines()[-1]
+    geometry = dict(
+        line.split("=")
+        for line in subprocess.check_output(
+            ["xdotool", "getwindowgeometry", "--shell", wid], text=True
+        ).split()
+    )
+    time.sleep(0.3)
+    subprocess.run(
+        [
+            "import",
+            "-window",
+            "root",
+            "-crop",
+            f"{geometry['WIDTH']}x{geometry['HEIGHT']}+{geometry['X']}+{geometry['Y']}",
+            "+repage",
+            str(out),
+        ],
+        check=True,
+    )
+
+
+def first_row():
+    """How many books are in the first row of the grid."""
+    tops = [
+        node.get_extents(Atspi.CoordType.WINDOW).y
+        for node in walk(Atspi.get_desktop(0))
+        if node.get_role_name() == "table cell"
+        and node.get_state_set().contains(Atspi.StateType.SHOWING)
+    ]
+    return tops.count(min(tops))
+
+
+def sorting(evidence):
+    """Shows the books as a list and a table and sorts them by every field
+    and by three keys, with the keyboard alone."""
+    focus("Ebook Manager")
+    key("Escape", "ctrl+2")
+    # A list row gives the series and the book's place in it.
+    find("Orchard · 1", "label")
+    find("Tidewater · 1.5", "label")
+    key("ctrl+3")
+    expect_headers(["Title", "Author", "Series", "Date Added", "Progress"])
+    print("PASS the list and the table from the keyboard", flush=True)
+    # With a book selected each sort would scroll to it. With none, each
+    # starts at the top.
+    key("ctrl+shift+a")
+
+    # The sort editor: one field after another in its first row. The Lantern
+    # Atlas was added first and is the one being read. The gallery's books
+    # were published in the order they were written out.
+    key("ctrl+shift+s")
+    # A drop-down is named by its choice. The first row starts on Title.
+    find("Title", "combo box")
+    first = {
+        "Author": "Tide Tables",
+        "Series": "The Glass Orchard",
+        "Date Added": LANTERN,
+        "Date Published": "A Field Guide to Tides",
+        "Last Read": LANTERN,
+        "Progress": LANTERN,
+        "Title": CARTOGRAPHER,
+    }
+    for field, title in first.items():
+        choose(FIELDS.index(field))
+        expect_titles([title], f"sorted by {field}")
+    # Three keys: series, then author, then title from Z to A. Two books
+    # share an author twice over, and the third key orders them.
+    choose(FIELDS.index("Series"))
+    key("Tab", "Tab")
+    choose(1 + FIELDS.index("Author"))
+    key("Tab", "Tab")
+    choose(1 + FIELDS.index("Title"))
+    key("Tab")
+    choose(1)
+    by_three = [
+        "The Glass Orchard",
+        "Salt and Iron",
+        LANTERN,
+        "Tide Tables",
+        CARTOGRAPHER,
+        "Letters from the Harbor",
+        "Paper Boats",
+        "A Field Guide to Tides",
+        "Winter Count",
+        "Northern Lights at Noon",
+    ]
+    expect_titles(by_three, "sorted by series, author and title")
+    expect_headers(["Title ³", "Author ²", "Series", "Date Added", "Progress"])
+    capture_screen("Ebook Manager", evidence / "sort-editor.png")
+    key("Escape")
+    print("PASS every sort field and three sort keys through the sort editor", flush=True)
+    return by_three
+
+
+def scroll_to_top():
+    wid = focus("Ebook Manager")
+    xd("mousemove", "--window", wid, 100, 300, "click", "--repeat", 20, 4)
+    xd("mousemove", 2, 2)
+
+
+def table_headers(by_three):
+    """Sorts from the table's headers, hides and moves a column from a
+    header's menu, and changes the cover size, with the keyboard alone."""
+    focus("Ebook Manager")
+    # A menu opens with its first item focused unless the pointer is over
+    # another, so the pointer is put out of the way.
+    xd("mousemove", 2, 2)
+    key("ctrl+3")
+    expect_headers(["Title ³", "Author ²", "Series", "Date Added", "Progress"])
+    scroll_to_top()
+    expect_titles(by_three, "the table's own sort")
+    # Up from the first row is the first header. Return sorts by it alone.
+    # Finding a book puts the focus in the table. With nothing selected a
+    # sort starts at the top.
+    select_book("glass")
+    key("Escape", "ctrl+Home", "ctrl+shift+a", "Up", "Return")
+    expect_titles([CARTOGRAPHER, "A Field Guide to Tides"], "sorted by the Title header")
+    # Control adds a header as the next key, and again turns it round.
+    key("Right", "ctrl+Return")
+    expect_headers(["Title", "Author ²", "Series", "Date Added", "Progress"])
+    key("Return")
+    expect_titles(["Tide Tables", CARTOGRAPHER], "sorted by the Author header")
+    key("Return")
+    expect_headers(["Title", "Author", "Series", "Date Added", "Progress"])
+    assert titles_shown()[0] != "Tide Tables", titles_shown()
+    key("Return")
+    expect_titles(["Tide Tables", CARTOGRAPHER], "sorted by the Author header again")
+    # The header's menu: hide Series, the second of its columns.
+    key("Menu")
+    find("", "menu item")
+    key("Down", "Return")
+    expect_headers(["Title", "Author", "Date Added", "Progress"])
+    # Move Author toward the start. The moves follow the six columns.
+    select_book("glass")
+    key("Escape", "ctrl+Home", "ctrl+shift+a", "Up", "Right", "Menu")
+    find("", "menu item")
+    key(*["Down"] * 6, "Return")
+    expect_headers(["Author", "Title", "Date Added", "Progress"])
+    wid = focus("Ebook Manager")
+    bounds = find("Author", "filler").get_extents(Atspi.CoordType.WINDOW)
+    xd("mousemove", "--window", wid, bounds.x + bounds.width // 2,
+       bounds.y + bounds.height // 2, "click", 3)
+    find("", "menu item")
+    key("Escape")
+    xd("mousemove", 2, 2)
+    expect_headers(["Author", "Title", "Date Added", "Progress"])
+    print("PASS Table header menu opens by right-click", flush=True)
+    print("PASS sorting, hiding and moving columns from the table's headers", flush=True)
+
+    def author_width():
+        author = find("Author", "filler")
+        return author.get_extents(Atspi.CoordType.WINDOW).width
+
+    def resize_column(command, expected):
+        key("Menu")
+        find("", "menu item")
+        key(*["Down"] * (8 if command == "Make Wider" else 9), "Return")
+        deadline = time.monotonic() + 5
+        while author_width() != expected:
+            assert time.monotonic() < deadline, (command, expected, author_width())
+            time.sleep(0.05)
+
+    # Author moved with its focused header.
+    width = author_width()
+    resize_column("Make Wider", width + 24)
+    resize_column("Make Narrower", width)
+    resize_column("Make Wider", width + 24)
+    print(f"PASS Author width from the keyboard: {width} → {width + 24} → {width} → {width + 24}", flush=True)
+
+    # Large covers, from the main menu: the third of its items.
+    send_key("F10")
+    menu = find("Main Menu", "menu")
+    find("", "menu item", parent=menu)
+    key("Down", "Down", "Return")
+    key("ctrl+1")
+    scroll_to_top()
+    expect_titles([CARTOGRAPHER], "the grid's own sort")
+    # A row of 842 holds five covers of 128 and four of 160.
+    deadline = time.monotonic() + 10
+    while first_row() != 4:
+        assert time.monotonic() < deadline, first_row()
+        time.sleep(0.1)
+    # Under 640 wide the views are a menu, and the table gives way to the list.
+    wid = focus("Ebook Manager")
+    key("ctrl+3")
+    expect_headers(["Author", "Title", "Date Added", "Progress"])
+    pane = find("", "scroll pane")
+    decoration = size("Ebook Manager")[0] - pane.get_extents(Atspi.CoordType.WINDOW).width
+    assert decoration >= 0, decoration
+    select_book("glass")
+    key("Escape", "ctrl+Home", "ctrl+shift+a", "Up", "Menu")
+    find("", "menu item")
+    xd("windowsize", "--sync", wid, 639 + decoration, 680)
+    find("View", "button")
+    find("Books", "list")
+    scroll_to_top()
+    find("Orchard · 1", "label")
+    assert not headers(), headers()
+    xd("windowsize", "--sync", wid, 640 + decoration, 680)
+    expect_headers(["Author", "Title", "Date Added", "Progress"])
+    assert find("", "scroll pane").get_extents(Atspi.CoordType.WINDOW).width == 640
+
+    xd("windowsize", "--sync", wid, 639 + decoration, 680)
+    find("View", "button")
+    key("ctrl+2", "ctrl+3")
+    xd("windowsize", "--sync", wid, 900, 680)
+    find("Books", "list")
+    scroll_to_top()
+    find("Orchard · 1", "label")
+    assert not headers(), headers()
+    key("ctrl+1")
+    print("PASS Table at 640, List at 639, and Ctrl+3 at 639 leaves the saved view alone", flush=True)
+    return width + 24
+
+
+def book_menus_across_resize():
+    wid = focus("Ebook Manager")
+    for number, name in [(3, "Table"), (2, "List"), (1, "Grid")]:
+        key(f"ctrl+{number}")
+        select_book("glass")
+        key("Escape")
+        find(f"{len(GALLERY) + 1} books")
+        key("Menu")
+        menu = find("", "menu")
+        assert menu.get_state_set().contains(Atspi.StateType.SHOWING), name
+        find("", "menu item", parent=menu)
+        for width in (639, 900):
+            xd("windowsize", "--sync", wid, width, 680)
+            if width == 639:
+                find("View", "button")
+            role = {1: "table", 2: "list", 3: "tree table"}[number]
+            if number == 3 and width == 639:
+                role = "list"
+            find("Books", role)
+            gone("", role="menu")
+        print(f"PASS {name} book menu dismissed on resize and the library stayed usable", flush=True)
+
+
+def remembered(author_width):
+    """After a restart the view, each view's sort, the cover size and the
+    table's columns are as they were left."""
+    find(CARTOGRAPHER)
+    focus("Ebook Manager")
+    expect_titles([CARTOGRAPHER], "the grid's sort after a restart")
+    assert first_row() == 4, first_row()
+    key("ctrl+3")
+    expect_headers(["Author", "Title", "Date Added", "Progress"])
+    scroll_to_top()
+    expect_titles(["Tide Tables", CARTOGRAPHER], "the table's sort after a restart")
+    assert find("Author", "filler").get_extents(Atspi.CoordType.WINDOW).width == author_width
+    key("ctrl+2")
+    find("Books", "list")
+    scroll_to_top()
+    find("Orchard · 1", "label")
+    expect_titles([CARTOGRAPHER], "the list's sort after a restart")
+    print("PASS the view, sorts, cover size and columns after a restart", flush=True)
+
+
+def gallery_view_switches():
+    # All six directions, with books already loaded and the default title
+    # sort in each view. Wait for a visible book inside the new view.
+    gone("Import complete")
+    focus("Ebook Manager")
+    roles = {1: "table", 2: "list", 3: "tree table"}
+    for target in (2, 3, 1, 3, 2, 1):
+        send_key(f"ctrl+{target}")
+        view = find("Books", roles[target])
+        expect_titles([CARTOGRAPHER], f"books in view {target}", parent=view)
+    print("PASS all six view switches show books in the gallery", flush=True)
+
+
 def covers(binary, evidence, root, proc):
     """Imports the gallery and checks what is drawn for a book with a cover
     and for one without, in each appearance."""
@@ -669,6 +1057,7 @@ def covers(binary, evidence, root, proc):
     click("Done")
     find(f"{len(GALLERY) + 1} books")
     assert len(list(thumbs.glob("*.png"))) == with_cover, list(thumbs.iterdir())
+    gallery_view_switches()
     # Return reads the selected book, as every key acts on the selection,
     # when the focus has moved off it.
     select_book("glass")
@@ -687,25 +1076,28 @@ def covers(binary, evidence, root, proc):
     click("Back to library")
     gone("Back to library")
     print("PASS Return reads the selected book and not the focused one", flush=True)
+    by_three = sorting(evidence)
+    key("ctrl+1")
+    time.sleep(0.6)
     stop(proc)
-    for name, extra in (
-        ("grid-light", {"ADW_DEBUG_COLOR_SCHEME": "prefer-light"}),
-        ("grid-dark", {"ADW_DEBUG_COLOR_SCHEME": "prefer-dark"}),
-        ("grid-contrast", {"ADW_DEBUG_HIGH_CONTRAST": "1"}),
+    for look, extra in (
+        ("light", {"ADW_DEBUG_COLOR_SCHEME": "prefer-light"}),
+        ("dark", {"ADW_DEBUG_COLOR_SCHEME": "prefer-dark"}),
+        ("contrast", {"ADW_DEBUG_HIGH_CONTRAST": "1"}),
     ):
-        if name == "grid-dark":
+        if look == "dark":
             # The folder is a cache: without it the covers are made again.
             shutil.rmtree(thumbs)
-        proc = subprocess.Popen([binary], env=environment(root, **extra))
+        proc = launch_app(binary, environment(root, **extra))
         try:
             find("A Field Guide to Tides")
-            if name == "grid-dark":
+            if look == "dark":
                 deadline = time.monotonic() + 30
                 while len(list(thumbs.glob("*.png"))) < 8:
                     assert time.monotonic() < deadline, list(thumbs.glob("*.png"))
                     time.sleep(0.2)
             time.sleep(1.2)
-            image = evidence / f"{name}.png"
+            image = evidence / f"grid-{look}.png"
             capture("Ebook Manager", image)
             # The teal cover's artwork, and a binding in one of the eight
             # colours for the two books with no cover. Each cover is some
@@ -714,12 +1106,57 @@ def covers(binary, evidence, root, proc):
             assert teal > 20000, teal
             bound = sum(painted(image, colour, 0.5) for colour in BINDINGS)
             assert bound > 20000, bound
+            if look != "contrast":
+                focus("Ebook Manager")
+                key("ctrl+2")
+                find("Orchard · 1", "label")
+                time.sleep(1.0)
+                capture("Ebook Manager", evidence / f"list-{look}.png")
+                key("ctrl+3")
+                expect_headers(["Title ³", "Author ²", "Series", "Date Added", "Progress"])
+                scroll_to_top()
+                expect_titles(by_three, "the table's sort")
+                time.sleep(1.0)
+                capture("Ebook Manager", evidence / f"table-{look}.png")
+                key("ctrl+1")
+                time.sleep(0.6)
         finally:
             stop(proc)
     print(
         "PASS covers and bindings in light, dark and more contrast, thumbnails made again",
         flush=True,
     )
+    proc = launch_app(binary, environment(root))
+    try:
+        find("A Field Guide to Tides")
+        author_width = table_headers(by_three)
+        book_menus_across_resize()
+        # Closing the window saves the choices.
+        focus("Ebook Manager")
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+        proc = launch_app(binary, environment(root))
+        remembered(author_width)
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+
+        settings = root / "config/ebook-manager/settings.json"
+        data = json.loads(settings.read_text())
+        data["future"] = "preserve this file on an unchanged close"
+        original = json.dumps(data).encode()
+        settings.write_bytes(original)
+        before = settings.stat()
+        proc = launch_app(binary, environment(root))
+        find(CARTOGRAPHER)
+        focus("Ebook Manager")
+        key("ctrl+w")
+        assert proc.wait(timeout=10) == 0
+        assert settings.read_bytes() == original
+        assert settings.stat().st_ino == before.st_ino
+        print("PASS closing with unchanged settings leaves the original file alone", flush=True)
+    finally:
+        if proc.poll() is None:
+            stop(proc)
 
 
 def desktop(body):
@@ -731,7 +1168,6 @@ def desktop(body):
         Path("/usr/libexec/at-spi2-registryd"),
     ]
     registry = next(p for p in registries if p.exists())
-    proc = subprocess.Popen([registry])
     # Full screen is a request to the window manager, so the session needs one.
     manager = subprocess.Popen(["openbox"])
     try:
@@ -743,12 +1179,17 @@ def desktop(body):
         ).stdout.strip() in ("", "0"):
             assert time.monotonic() < deadline, "openbox did not start"
             time.sleep(0.1)
-        body(Path(os.environ["HOME"]))
+        proc = subprocess.Popen([registry])
+        try:
+            body(Path(os.environ["HOME"]))
+            assert proc.poll() is None, f"AT-SPI registry exited with {proc.returncode}"
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
     finally:
         manager.terminate()
         manager.wait(timeout=10)
-        proc.terminate()
-        proc.wait(timeout=10)
+        check_diagnostics(Path(os.environ["HOME"]))
 
 
 def private_session(script, arguments):
@@ -785,12 +1226,13 @@ def private_session(script, arguments):
         services.mkdir()
         config = Path(temp) / "bus.conf"
         config.write_text(BUS_CONFIG.format(services=escape(str(services))))
+        # Keep Xvfb from resetting the display when the last X client exits.
         subprocess.run(
             [
                 "xvfb-run",
                 "-a",
                 "-s",
-                f"-screen 0 {SCREEN[0]}x{SCREEN[1]}x24 -nolisten tcp",
+                f"-screen 0 {SCREEN[0]}x{SCREEN[1]}x24 -nolisten tcp -noreset",
                 "dbus-run-session",
                 f"--config-file={config}",
                 "--",

@@ -3,6 +3,7 @@ mod cover;
 mod edit;
 mod imports;
 mod reader;
+mod settings;
 mod store;
 mod thumbs;
 mod views;

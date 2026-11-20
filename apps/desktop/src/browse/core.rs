@@ -16,7 +16,7 @@
 //! A view on screen is always one the model was given by the read thread
 //! for a query. The model never shows a view and an error together.
 use super::worker::{Reply, Request, Why};
-use super::{Anchors, Placed, Query};
+use super::{Anchors, Placed, Placement, Query};
 use ebook_library::{BrowseRow, Cancel, OpenView, ViewToken};
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +24,8 @@ use std::collections::{HashMap, HashSet};
 pub enum Event {
     /// The reader asked for another search or sort.
     Query(Query),
+    /// Open the query for a view built anew.
+    Layout(Query),
     /// The catalogue may have changed.
     Refresh,
     /// Try Again, from the error state.
@@ -68,7 +70,7 @@ pub struct Opening {
     serial: u64,
     cancel: Cancel,
     query: Query,
-    background: bool,
+    reason: Placement,
     /// The view it made, waiting for the reader's place to be found in it.
     arrived: Option<(OpenView, Anchors)>,
 }
@@ -111,7 +113,7 @@ enum Locating {
         anchors: Anchors,
         /// Unknown until the new view is on screen.
         since: Option<Anchors>,
-        background: bool,
+        reason: Placement,
     },
     /// Which of the selected books the view holds at all.
     Prune { token: ViewToken, ids: Vec<String> },
@@ -146,7 +148,7 @@ impl Core {
             dirty: false,
         };
         let mut effects = vec![];
-        core.open(false, &mut effects);
+        core.open(Placement::Command, &mut effects);
         (core, effects)
     }
 
@@ -170,7 +172,7 @@ impl Core {
     /// Asks the read thread for the current query, in place of any open in
     /// flight. A refresh of a view that can be read may be answered
     /// `Unchanged`. Anything else is an open that must give a view.
-    fn open(&mut self, background: bool, effects: &mut Vec<Effect>) {
+    fn open(&mut self, reason: Placement, effects: &mut Vec<Effect>) {
         if let Some(earlier) = self.opening() {
             earlier.cancel.cancel();
         }
@@ -181,7 +183,7 @@ impl Core {
             serial: self.serial,
             cancel: cancel.clone(),
             query: self.query.clone(),
-            background,
+            reason,
             arrived: None,
         };
         let phase = std::mem::replace(
@@ -191,7 +193,7 @@ impl Core {
             },
         );
         let (showing, refresh) = match &phase {
-            Phase::Showing { view, .. } => (Some(view.token), background),
+            Phase::Showing { view, .. } => (Some(view.token), reason == Placement::Refresh),
             Phase::Lost { view, .. } => (Some(view.token), false),
             _ => (None, false),
         };
@@ -259,7 +261,7 @@ impl Core {
         if std::mem::take(&mut self.dirty)
             && matches!(self.phase, Phase::Showing { opening: None, .. })
         {
-            self.open(true, effects);
+            self.open(Placement::Refresh, effects);
         }
     }
 
@@ -272,23 +274,27 @@ impl Core {
                 let same = query == self.query && !matches!(self.phase, Phase::Error { .. });
                 if !same {
                     self.query = query;
-                    self.open(false, &mut effects);
+                    self.open(Placement::Command, &mut effects);
                 }
+            }
+            Event::Layout(query) => {
+                self.query = query;
+                self.open(Placement::Layout, &mut effects);
             }
             Event::Retry => {
                 if matches!(self.phase, Phase::Error { .. }) {
-                    self.open(false, &mut effects);
+                    self.open(Placement::Command, &mut effects);
                 }
             }
             Event::Refresh => match &self.phase {
-                Phase::Showing { opening: None, .. } => self.open(true, &mut effects),
+                Phase::Showing { opening: None, .. } => self.open(Placement::Refresh, &mut effects),
                 // The open in flight may have read the catalogue before
                 // the change. A refresh follows it.
                 Phase::Showing { .. } | Phase::Loading { .. } | Phase::Lost { .. } => {
                     self.dirty = true
                 }
                 // The change may be what was wrong.
-                Phase::Error { .. } => self.open(false, &mut effects),
+                Phase::Error { .. } => self.open(Placement::Command, &mut effects),
             },
             Event::Want(rank) => match &self.phase {
                 Phase::Showing { view, .. } => {
@@ -358,7 +364,7 @@ impl Core {
                     }
                     // It was lost after the refresh was asked for. A
                     // refresh cannot bring it back.
-                    Phase::Lost { .. } => self.open(false, effects),
+                    Phase::Lost { .. } => self.open(Placement::Command, effects),
                     Phase::Loading { .. } | Phase::Error { .. } => {}
                 }
             }
@@ -412,7 +418,7 @@ impl Core {
                             view,
                             opening: None,
                         };
-                        self.open(false, effects);
+                        self.open(Placement::Command, effects);
                         self.lose();
                     }
                     other => self.phase = other,
@@ -453,8 +459,8 @@ impl Core {
                 // The reader's view is another already, so this one could
                 // not be read once shown. The query is opened again.
                 if matches!(ranks, Err(Why::NotCurrent)) {
-                    let background = self.opening().is_some_and(|o| o.background);
-                    self.open(background, effects);
+                    let reason = self.opening().map_or(Placement::Command, |o| o.reason);
+                    self.open(reason, effects);
                     return;
                 }
                 // The view could not be read between opening and placing,
@@ -501,14 +507,14 @@ impl Core {
                 effects.push(Effect::Gone);
                 effects.push(Effect::Swap {
                     view,
-                    background: opening.background,
+                    background: opening.reason == Placement::Refresh,
                 });
                 match ranks {
                     Ok(ranks) if now == asked => effects.push(Effect::Place(Placed {
                         anchors: asked,
                         current: ranks.first().copied().flatten(),
                         top: ranks.get(1).copied().flatten(),
-                        background: opening.background,
+                        reason: opening.reason,
                     })),
                     // The reader moved while their place was being found,
                     // so that place is stale and is not applied. Where
@@ -519,7 +525,7 @@ impl Core {
                             token,
                             anchors: now.clone(),
                             since: None,
-                            background: opening.background,
+                            reason: opening.reason,
                         };
                         self.locate(token, Self::place_ids(&now), follow, effects);
                     }
@@ -530,7 +536,7 @@ impl Core {
                 token,
                 anchors: was,
                 since,
-                background,
+                reason,
             }) => {
                 if let Ok(ranks) = ranks
                     && self.showing(token)
@@ -540,7 +546,7 @@ impl Core {
                         anchors: was,
                         current: ranks.first().copied().flatten(),
                         top: ranks.get(1).copied().flatten(),
-                        background,
+                        reason,
                     }));
                 }
             }
@@ -1024,14 +1030,14 @@ mod tests {
             top_offset: to,
             ..Default::default()
         };
-        let another = |core: &mut Core, here: &dyn Fn() -> Anchors| {
+        let another = |core: &mut Core, event, here: &dyn Fn() -> Anchors| {
             let library = ebook_library::Library::open(&folder.path().join("app")).unwrap();
             let view = library
                 .browse_reader()
                 .unwrap()
                 .open(&Default::default(), &Cancel::default())
                 .unwrap();
-            let serial = asked(&core.step(Event::Refresh, here)).unwrap().0;
+            let serial = asked(&core.step(event, here)).unwrap().0;
             let located = core.step(Event::Reply(Reply::Opened { serial, view }), here);
             match located[..] {
                 [Effect::Send(Request::Locate { tag, .. })] => tag,
@@ -1045,12 +1051,12 @@ mod tests {
             })
         };
         // The reader does not move: they are placed with the swap.
-        let tag = another(&mut core, &here);
+        let tag = another(&mut core, Event::Refresh, &here);
         let effects = core.step(found(tag), &here);
         assert!(effects.iter().any(|e| matches!(e, Effect::Place(_))));
         // They scroll while their place is being found: the stale place
         // is not applied, and where they are now is asked for.
-        let tag = another(&mut core, &here);
+        let tag = another(&mut core, Event::Refresh, &here);
         *at.borrow_mut() = moved(-10.0);
         let effects = core.step(found(tag), &here);
         assert!(!effects.iter().any(|e| matches!(e, Effect::Place(_))));
@@ -1068,7 +1074,7 @@ mod tests {
         assert!(matches!(&effects[..], [Effect::Place(placed)] if placed.anchors == moved(-10.0)));
         // The same, but they move again before the answer: nothing is
         // applied and nothing more is asked.
-        let tag = another(&mut core, &here);
+        let tag = another(&mut core, Event::Layout(Query::default()), &here);
         *at.borrow_mut() = moved(-10.0);
         let effects = core.step(found(tag), &here);
         let follow = effects
@@ -1082,6 +1088,21 @@ mod tests {
         core.step(Event::Swapped, &here);
         *at.borrow_mut() = moved(-25.0);
         assert!(core.step(found(follow), &here).is_empty());
+        let tag = another(
+            &mut core,
+            Event::Query(Query {
+                sort: vec![ebook_library::SortTerm {
+                    field: ebook_library::Field::Author,
+                    descending: false,
+                }],
+                ..Default::default()
+            }),
+            &here,
+        );
+        assert!(core.step(found(tag), &here).iter().any(|effect| matches!(
+            effect,
+            Effect::Place(placed) if placed.reason == Placement::Command
+        )));
     }
 
     #[test]

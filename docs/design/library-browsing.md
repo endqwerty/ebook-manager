@@ -424,8 +424,11 @@ handling until the field is on screen with the focus, so the keys go
 through its input method and none typed while the bar opens is lost. The
 bar opens when there is text, so a dead key waits for its letter, and
 while it waits Escape and Backspace cancel it and Space completes it.
-The Sort menu's More opens the sort editor as a popover of three rows. Every
-menu, popover and the table's column menu opens and works from the keyboard.
+The Sort menu's More opens the sort editor, a dialog of three rows. It is a
+dialog and not a popover because each row holds drop-downs, whose own lists
+are popovers, and GTK closes a popover when a choice is made in one nested in
+it. Every menu, the editor and the table's column menu opens and works from
+the keyboard.
 
 ```mermaid
 flowchart LR
@@ -472,6 +475,8 @@ flowchart LR
   once, and if they have moved again by then the view stays where they
   put it. The scroll correction that follows a placement a frame or two
   later gives way the same way, to any wheel, pointer or key in the books.
+  A new GTK view can be mapped before it has an allocated viewport. The
+  window waits for that allocation before asking it to scroll.
 - **A command acts on the books selected when it is given.** It takes
   their IDs then, and the places whose rows have not arrived, and acts on
   those whatever is selected by the time the rows come.
@@ -513,7 +518,36 @@ flowchart LR
 - **List** is a `GtkListView` and **Table** a `GtkColumnView`, as
   [their sections](interface-views.md#list) describe. A click on a table
   header changes the model's sort. The table never sorts rows itself. The
-  table is offered only when the window is at least 640 wide.
+  table is offered only when the window content is at least 640 wide. One view is
+  built at a time over the model, and a view built anew goes on screen when
+  the model has its books, so the old one can still say where the reader is.
+  GTK's column headers take no keyboard focus, so the table gives it to
+  them: Up from the first row reaches a header, the arrows move along them,
+  Return and Control+Return sort, and the Menu key opens the header's menu.
+  Show, hide, move and width commands update the live columns. Book and
+  column context menus are owned by an overlay around the window content.
+  A cell or header supplies the pointing rectangle. The overlay reuses the
+  popover so its native surface stays available to pending tooltip queries.
+  The window dismisses
+  menus before a model swap or layout replacement and when the width changes. Width commands step by 24 within
+  the same saved-width limits as a drag.
+  A list row's separator is the app's own line in the platform's border
+  colour, because the platform's runs under the cover. The view switch uses
+  `view-dual-symbolic` for the table until an icon is drawn for it.
+  Bindings set in type use a flat colour in List and Table because the type
+  would be unreadable at those cover sizes.
+  The three cover sizes are in the main menu because the GNOME view switch
+  is a row of toggle buttons with no menu of its own.
+  List rows omit the trailing Send to device and Remove swipe actions
+  because this shell has no touch target yet.
+- **A sort the reader asks for** starts at the book they were on, if one is
+  selected or focused, and otherwise at the top. Switching layouts keeps
+  selection and keeps the previous top book in the first visible row. If
+  that position would hide the focused book, the view scrolls to show it.
+  In the grid that row can also contain earlier books. The scroll position
+  stays within the end of the catalogue. The reason for placement belongs
+  to the pending open and its follow-up, so skipping a placement cannot
+  affect the next sort.
 - **Shelf** is a custom scrollable widget. It asks for the `ShelfStrip` once
   per view, packs rows for its width (a new row when the next spine does not
   fit, and at each group start), and stores each row's first rank and y
@@ -538,7 +572,8 @@ flowchart LR
   Edit window gains sort title, author sort names, series and position.
 - **Remembered choices**: the view, the sort for each view, the cover size and
   the table's columns, order and widths are saved in `settings.json` in the
-  app's config folder.
+  app's config folder. Each view's sort and each column are read
+  independently. The file is written only when the choices change.
 - A text scale of 1.5 or more shows List in place of Grid or Shelf without
   changing the saved choice.
 
@@ -599,8 +634,9 @@ driver's own look takes, which was up to 0.07 seconds. Locally the median is
 0.26 seconds, with a range of 0.25 to 0.30, so the limit is about eight times
 the measurement. A launch is bounded by GTK starting, 0.1 seconds, and by the
 catalogue putting the books in order on one thread, 0.06 seconds. The rest
-builds and draws the first rows. The check then searches, jumps to the last
-row, and imports 400 generated EPUBs. During that import the count on screen
+builds and draws the first rows. The check switches between each pair of
+views after scrolling, searches, jumps to the last row, and imports 400
+generated EPUBs. During that import the count on screen
 must change no more often than once a second, and the books on screen and the
 selected one must be the same after three refreshes.
 
@@ -669,10 +705,7 @@ Tests in `crates/ebook-library/tests/browse.rs` unless another file is named.
 17. When the reader switches between Grid, List, Table and Shelf, sorts, types
     a search, and opens, edits and exports a book using only the keyboard,
     then each works, and the view and sort are as left after a restart.
-    `apps/desktop/tests/smoke.py`. The first pull request of the window
-    proves the Grid half: typing a search, and opening, editing and
-    exporting a book from the keyboard. Switching views, sorting and what
-    is kept across a restart are proved with the second.
+    `apps/desktop/tests/smoke.py`, for all but the shelf.
 18. When the shelf is resized, then the first fully visible book stays at the
     top, and when a book is selected then only that spine changes.
     `apps/desktop/tests/smoke.py`, and a unit test of the row packing.
@@ -736,16 +769,16 @@ same time.
    Closes [#28](https://github.com/endqwerty/ebook-manager/issues/28).
 2. **Helper facts and covers** (done). Everything under `crates/ebook-reader`.
    Behaviour 15.
-3. **The window** (in two pull requests, the first done). After 1 and 2.
-   Behaviour 17 without the shelf.
+3. **The window** (done, in two pull requests). After 1 and 2. Behaviour 17
+   without the shelf.
    Closes [#25](https://github.com/endqwerty/ebook-manager/issues/25).
-   - First (done): import passes the helper's facts into `ParsedMetadata`,
-     the reader saves the fraction read, the thumbnail cache, the survey, the
+   - First: import passes the helper's facts into `ParsedMetadata`, the
+     reader saves the fraction read, the thumbnail cache, the survey, the
      model, Grid, search, the actions and their keys, the Edit window's
      filing fields, and the launch time check. `Library::search` is deleted.
      A view stays readable after the catalogue changes, which the first
      pull request's contract did not allow and an import needs.
-   - Second (open): List and Table, the view switch, the Sort menu and its
+   - Second: List and Table, the view switch, the Sort menu and its
      editor, the cover sizes and the remembered choices.
 4. **The shelf** (open). After 3. Behaviour 18.
    Closes [#93](https://github.com/endqwerty/ebook-manager/issues/93).

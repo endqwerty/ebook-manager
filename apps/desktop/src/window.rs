@@ -1,18 +1,18 @@
 //! The library window: the header bar, the search bar, the screen title and
 //! the books, with every command as an action on the window.
+mod controls;
+
 use super::*;
 use crate::{
-    browse::{Anchors, BookListModel, Hooks, Placed, Query, Status},
+    browse::{Anchors, BookListModel, Hooks, Placed, Placement, Query, Status},
+    settings::{Settings, SortField, ViewKind},
     thumbs::Thumbs,
-    views::{self, BookCell, Shared, grid},
+    views::{self, BookCell, Shared, View, grid, list, table},
 };
 use ebook_device::ExportOutcome;
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use std::cell::Cell;
-
-/// The medium cover width.
-const COVER: i32 = 128;
+use std::cell::{Cell, RefCell};
 
 type Command = Box<dyn Fn(&Rc<Library>)>;
 
@@ -22,10 +22,25 @@ struct Library {
     model: BookListModel,
     thumbs: Thumbs,
     scrolled: gtk::ScrolledWindow,
+    overlay: gtk::Overlay,
+    context_popover: gtk::PopoverMenu,
+    context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
+    menu_buttons: [gtk::MenuButton; 3],
     /// As wide as the books' area and no taller than nothing: it reports
     /// each change of width, which a scrolled window does not.
     width: gtk::DrawingArea,
-    grid: gtk::GridView,
+    /// The view on screen: the saved choice, or the list standing in for it.
+    view: RefCell<Option<(ViewKind, View)>>,
+    /// The window is under 640 wide, where the table is not offered.
+    narrow: Cell<bool>,
+    settings: RefCell<Settings>,
+    settings_file: PathBuf,
+    saving: Cell<bool>,
+    saved: RefCell<Settings>,
+    /// The view is to be built anew when the model next has its books.
+    rebuild: Cell<bool>,
+    sorted_by: Rc<Cell<SortField>>,
+    controls: controls::Controls,
     pages: gtk::Stack,
     count: gtk::Label,
     search_bar: gtk::SearchBar,
@@ -119,7 +134,9 @@ impl Library {
     /// Where the reader is in the books on screen.
     fn anchors(&self) -> Anchors {
         let focused = views::focused_cell(&self.scrolled);
-        let top = views::top_cell(&self.scrolled);
+        let top = self
+            .with_view(|view| views::top_cell(&view.body()))
+            .flatten();
         let id = |cell: &BookCell| Some(cell.book()?.row()?.id.clone());
         Anchors {
             current: focused
@@ -132,35 +149,71 @@ impl Library {
         }
     }
 
-    /// Puts the reader back where they were in the view that has just
-    /// replaced the last: on the book they were on if it is still there,
-    /// else at the first book that was on screen, else at the top.
-    fn restore(self: &Rc<Self>, placed: &Placed) {
-        let was = &placed.anchors;
+    fn viewport_ready(&self) -> bool {
+        self.with_view(|view| {
+            let body = view.body();
+            body.is_mapped() && body.width() > 0 && body.height() > 0
+        }) == Some(true)
+            && self.scrolled.hadjustment().page_size() > 0.0
+            && self.scrolled.vadjustment().page_size() > 0.0
+    }
+
+    /// Puts the reader back after GTK has allocated the new viewport.
+    fn restore(self: &Rc<Self>, placed: Placed) {
         let serial = self.placed.get() + 1;
         self.placed.set(serial);
+        if placed.current.is_none() && placed.top.is_none() {
+            return;
+        }
+        if self.viewport_ready() {
+            self.place_books(&placed, serial);
+            return;
+        }
+        // Older GTK computes a scroll alignment by dividing by the viewport
+        // size. A newly attached list can be mapped before it has any size.
+        let weak = Rc::downgrade(self);
+        let moved = self.moved.get();
+        self.scrolled.add_tick_callback(move |_, _| {
+            let Some(library) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if library.placed.get() != serial || library.moved.get() != moved {
+                return glib::ControlFlow::Break;
+            }
+            if !library.viewport_ready() {
+                return glib::ControlFlow::Continue;
+            }
+            library.place_books(&placed, serial);
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn place_books(self: &Rc<Self>, placed: &Placed, serial: u64) {
+        let was = &placed.anchors;
+        let rebuilt = placed.reason == Placement::Layout;
+        let keep_top = placed.reason != Placement::Command;
+        let focused = placed.current.filter(|_| rebuilt && was.focused);
         if let Some(rank) = placed.current {
-            if was.focused || !placed.background {
-                self.grid.scroll_to(rank, gtk::ListScrollFlags::FOCUS, None);
+            if was.focused || !keep_top {
+                self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::FOCUS));
             }
-            // The book that held the keyboard focus went with the old view.
             if was.focused {
-                self.grid.grab_focus();
-            }
-            // A change the reader did not ask for leaves the page where it was.
-            if !placed.background {
-                return;
+                self.with_view(|view| view.body().grab_focus());
             }
         }
+        if !keep_top {
+            return;
+        }
         let Some(rank) = placed.top else { return };
-        self.grid.scroll_to(rank, gtk::ListScrollFlags::NONE, None);
-        // `scroll_to` only brings the book on screen. Once the grid has laid
-        // itself out, move it to where it was.
+        self.with_view(|view| view.scroll_to(rank, gtk::ListScrollFlags::NONE));
+        // `scroll_to` only brings the book on screen. Once the view has laid
+        // itself out, move it to where it was. An offset measured in one
+        // kind of view means nothing in another.
         let weak = Rc::downgrade(self);
         let frames = Cell::new(0);
-        let top_offset = was.top_offset;
+        let top_offset = if rebuilt { 0.0 } else { was.top_offset };
         let moved = self.moved.get();
-        self.grid.add_tick_callback(move |_, _| {
+        self.scrolled.add_tick_callback(move |_, _| {
             let Some(library) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
@@ -168,36 +221,188 @@ impl Library {
             // The correction gives way to a later placement and to the
             // reader: if they have scrolled, clicked or pressed a key in
             // the books since, the view stays where they put it.
-            if library.placed.get() != serial || library.moved.get() != moved || frames.get() > 10 {
+            if library.placed.get() != serial || library.moved.get() != moved {
                 return glib::ControlFlow::Break;
             }
             if frames.get() < 2 {
                 return glib::ControlFlow::Continue;
             }
-            let found = views::cells(library.scrolled.upcast_ref())
-                .into_iter()
-                .find(|cell| cell.book().is_some_and(|book| book.rank() == rank))
-                .and_then(|cell| cell.compute_bounds(&library.scrolled));
-            let Some(bounds) = found else {
-                return glib::ControlFlow::Continue;
-            };
-            let adjustment = library.scrolled.vadjustment();
-            adjustment.set_value(adjustment.value() + f64::from(bounds.y() - top_offset));
-            glib::ControlFlow::Break
+            library
+                .with_view(|view| {
+                    let body = view.body();
+                    let cells = views::cells(&body);
+                    let bounds_of = |rank| {
+                        cells
+                            .iter()
+                            .find(|cell| cell.book().is_some_and(|book| book.rank() == rank))
+                            .and_then(|cell| views::row_bounds(cell, &body))
+                    };
+                    let focus_book = |rank| {
+                        view.scroll_to(rank, gtk::ListScrollFlags::FOCUS);
+                        body.grab_focus();
+                    };
+                    let Some(top) = bounds_of(rank) else {
+                        if frames.get() <= 10 {
+                            return glib::ControlFlow::Continue;
+                        }
+                        if let Some(focused) = focused {
+                            focus_book(focused);
+                        }
+                        return glib::ControlFlow::Break;
+                    };
+                    let adjustment = library.scrolled.vadjustment();
+                    let mut offset = f64::from(top.y() - top_offset);
+                    if rebuilt {
+                        offset = offset.ceil();
+                    }
+                    if let Some(focused) = focused {
+                        let Some(bounds) = bounds_of(focused) else {
+                            // The top row and focus are too far apart for GTK
+                            // to have both rows allocated at once.
+                            focus_book(focused);
+                            return glib::ControlFlow::Break;
+                        };
+                        let start = f64::from(bounds.y());
+                        let end = f64::from(bounds.y() + bounds.height());
+                        offset = offset.clamp((end - adjustment.page_size()).min(start), start);
+                    }
+                    adjustment.set_value(adjustment.value() + offset);
+                    if let Some(focused) = focused {
+                        focus_book(focused);
+                    }
+                    glib::ControlFlow::Break
+                })
+                .unwrap_or(glib::ControlFlow::Break)
         });
     }
 
+    fn with_view<T>(&self, act: impl FnOnce(&View) -> T) -> Option<T> {
+        self.view.borrow().as_ref().map(|(_, view)| act(view))
+    }
+
+    /// The view to show for the saved choice in this window.
+    fn shown(&self) -> ViewKind {
+        self.settings
+            .borrow()
+            .view
+            .shown(self.narrow.get(), text_scale())
+    }
+
+    /// Gives the grid the columns its width has room for.
     fn fit(&self) {
         let width = self.width.width();
-        if width > 0 {
-            grid::fit(&self.grid, width, COVER, text_scale());
+        if width > 0
+            && let Some((_, View::Grid(grid))) = &*self.view.borrow()
+        {
+            let cover = self.settings.borrow().cover_size.grid();
+            grid::fit(grid, width, cover, text_scale());
         }
+    }
+
+    /// Builds the view for the saved choices and puts it on screen.
+    fn build_view(self: &Rc<Self>) {
+        self.close_menus();
+        let kind = self.shown();
+        let settings = self.settings.borrow().clone();
+        let menu = Rc::downgrade(self);
+        let shared = Shared {
+            thumbs: self.thumbs.clone(),
+            menu: Rc::new(move |cell| {
+                if let Some(library) = menu.upgrade() {
+                    library.context_menu(cell);
+                }
+            }),
+            cover_size: settings.cover_size,
+            sorted_by: self.sorted_by.clone(),
+        };
+        let view = match kind {
+            ViewKind::Grid => View::Grid(grid::build(&self.model, &shared)),
+            ViewKind::List => View::List(list::build(&self.model, &shared)),
+            ViewKind::Table => {
+                let (sorts, layouts, menus) = (
+                    Rc::downgrade(self),
+                    Rc::downgrade(self),
+                    Rc::downgrade(self),
+                );
+                View::Table(table::build(
+                    &self.model,
+                    &shared,
+                    &settings.columns,
+                    settings.sort(kind),
+                    table::Events {
+                        menu: Box::new(move |header, menu| {
+                            if let Some(library) = menus.upgrade() {
+                                library.show_context_menu(header, menu);
+                            }
+                        }),
+                        sort: Box::new(move |field, add| {
+                            if let Some(library) = sorts.upgrade() {
+                                let sort = library.sort();
+                                library.set_sort(if add {
+                                    sort.then_by(field)
+                                } else {
+                                    sort.by(field)
+                                });
+                            }
+                        }),
+                        layout: Box::new(move |columns| {
+                            if let Some(library) = layouts.upgrade() {
+                                library.settings.borrow_mut().columns = columns;
+                                library.show_choices();
+                                library.save_soon();
+                            }
+                        }),
+                    },
+                ))
+            }
+        };
+        // Return and a double click read the selected book, as every
+        // command from the keyboard acts on the selection. A click selects
+        // the book it lands on, so for a pointer the two are the same book.
+        let weak = self.window.downgrade();
+        view.connect_activate(move |_| {
+            if let Some(window) = weak.upgrade() {
+                gio::prelude::ActionGroupExt::activate_action(&window, "read", None);
+            }
+        });
+        self.scrolled
+            .set_hscrollbar_policy(if kind == ViewKind::Table {
+                gtk::PolicyType::Automatic
+            } else {
+                gtk::PolicyType::Never
+            });
+        self.scrolled.set_child(Some(view.widget()));
+        self.view.replace(Some((kind, view)));
+        self.fit();
     }
 
     fn search_for(&self, text: &str) {
         let mut query = self.model.query();
         query.text = text.to_owned();
         self.model.set_query(query);
+    }
+
+    /// Writes the remembered choices shortly, once for a run of changes
+    /// such as a column being dragged wider.
+    fn save_soon(self: &Rc<Self>) {
+        if *self.settings.borrow() == *self.saved.borrow() || self.saving.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            if let Some(library) = weak.upgrade() {
+                library.save();
+            }
+        });
+    }
+
+    fn save(&self) {
+        self.saving.set(false);
+        // The choices are a convenience. Losing them is not worth a message.
+        let settings = self.settings.borrow();
+        if *settings != *self.saved.borrow() && settings.save(&self.settings_file).is_ok() {
+            self.saved.replace(settings.clone());
+        }
     }
 
     /// Runs `command` with the ID of each selected book.
@@ -307,7 +512,7 @@ impl Library {
         );
     }
 
-    fn context_menu(self: &Rc<Self>, cell: &BookCell, x: f64, y: f64) {
+    fn context_menu(self: &Rc<Self>, cell: &BookCell) {
         let Some(id) = cell.book().and_then(|book| Some(book.row()?.id.clone())) else {
             return;
         };
@@ -324,16 +529,50 @@ impl Library {
         rest.append_item(&item("_Edit…", "win.edit-book"));
         rest.append_item(&item("_Send to Device…", "win.send-book"));
         menu.append_section(None, &rest);
-        let popover = gtk::PopoverMenu::from_model(Some(&menu));
-        popover.set_parent(cell);
-        popover.set_has_arrow(false);
-        popover.set_halign(gtk::Align::Start);
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-        popover.connect_closed(|popover| {
-            // After the chosen item's action has run.
-            let popover = popover.clone();
-            glib::idle_add_local_once(move || popover.unparent());
-        });
+        self.show_context_menu(cell, &menu);
+    }
+
+    fn restore_context_focus(&self) {
+        if let Some(focus) = self.context_focus.take().and_then(|focus| focus.upgrade())
+            && focus.is_mapped()
+        {
+            focus.grab_focus();
+        }
+    }
+
+    fn close_context_menu(&self) {
+        if self.context_popover.is_visible() {
+            self.context_popover.popdown();
+        }
+        self.restore_context_focus();
+    }
+
+    fn close_menus(&self) {
+        self.close_context_menu();
+        for button in &self.menu_buttons {
+            button.popdown();
+        }
+        self.controls.close_menus();
+    }
+
+    /// The anchor supplies geometry only. The overlay owns transient menus
+    /// because GTK can recycle a book cell or replace its entire view.
+    fn show_context_menu(&self, anchor: &impl IsA<gtk::Widget>, menu: &gio::Menu) {
+        let Some(bounds) = anchor.compute_bounds(&self.overlay) else {
+            return;
+        };
+        self.close_menus();
+        let popover = &self.context_popover;
+        popover.set_menu_model(Some(menu));
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+            bounds.x() as i32,
+            bounds.y() as i32,
+            bounds.width() as i32,
+            bounds.height() as i32,
+        )));
+        let previous_focus =
+            gtk::prelude::RootExt::focus(&self.window).map(|focus| focus.downgrade());
+        self.context_focus.replace(previous_focus);
         popover.popup();
     }
 
@@ -462,6 +701,10 @@ pub fn accelerators(app: &adw::Application) {
         ("win.add-files", &["<Control>o"][..]),
         ("win.add-folder", &["<Control><Shift>o"]),
         ("win.search", &["<Control>f"]),
+        ("win.view('grid')", &["<Control>1"]),
+        ("win.view('list')", &["<Control>2"]),
+        ("win.view-table", &["<Control>3"]),
+        ("win.sort-more", &["<Control><Shift>s"]),
         ("win.refresh", &["F5", "<Control>r"]),
         ("win.edit", &["F2"]),
         ("win.send", &["<Control>d"]),
@@ -496,16 +739,14 @@ pub fn open(app: &adw::Application) {
         .tooltip_text("Add Books")
         .build();
     header.pack_start(&add);
-    let menu = gio::Menu::new();
-    menu.append(Some("_Refresh Library"), Some("win.refresh"));
-    header.pack_end(
-        &gtk::MenuButton::builder()
-            .icon_name("open-menu-symbolic")
-            .menu_model(&menu)
-            .primary(true)
-            .tooltip_text("Main Menu")
-            .build(),
-    );
+    let menu = controls::main_menu();
+    let main_menu = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .menu_model(&menu)
+        .primary(true)
+        .tooltip_text("Main Menu")
+        .build();
+    header.pack_end(&main_menu);
     let search_button = gtk::ToggleButton::builder()
         .icon_name("system-search-symbolic")
         .tooltip_text("Search")
@@ -552,32 +793,45 @@ pub fn open(app: &adw::Application) {
     heading.append(&title);
     heading.append(&count);
 
-    let library = Rc::<Library>::new_cyclic(|weak: &std::rc::Weak<Library>| {
-        let for_menu = weak.clone();
-        let shared = Shared {
-            thumbs: thumbs.clone(),
-            menu: Rc::new(move |cell, x, y| {
-                if let Some(library) = for_menu.upgrade() {
-                    library.context_menu(cell, x, y);
-                }
-            }),
-        };
-        let grid = grid::build(&model, &shared, COVER);
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&grid)
-            .vexpand(true)
-            .build();
+    let add_first = gtk::MenuButton::builder()
+        .label("_Add")
+        .use_underline(true)
+        .menu_model(&add_menu())
+        .halign(gtk::Align::Center)
+        .build();
+    add_first.add_css_class("pill");
+    add_first.add_css_class("suggested-action");
+
+    let settings_file = glib::user_config_dir().join("ebook-manager/settings.json");
+    let settings = Settings::load(&settings_file);
+    let library = Rc::new({
+        let scrolled = gtk::ScrolledWindow::builder().vexpand(true).build();
         let pages = gtk::Stack::new();
         pages.set_vexpand(true);
+        let context_popover = gtk::PopoverMenu::from_model(gio::MenuModel::NONE);
+        context_popover.set_visible(false);
+        context_popover.set_has_arrow(false);
+        context_popover.set_halign(gtk::Align::Start);
         Library {
             window: window.clone(),
             store: store.clone(),
             model: model.clone(),
             thumbs,
             scrolled,
+            overlay: gtk::Overlay::new(),
+            context_popover,
+            context_focus: RefCell::new(None),
+            menu_buttons: [add, main_menu, add_first.clone()],
             width: gtk::DrawingArea::builder().hexpand(true).build(),
-            grid,
+            view: RefCell::new(None),
+            narrow: Cell::new(false),
+            sorted_by: Rc::new(Cell::new(settings.sort(settings.view).first().field)),
+            saved: RefCell::new(settings.clone()),
+            settings: RefCell::new(settings),
+            settings_file,
+            saving: Cell::new(false),
+            rebuild: Cell::new(false),
+            controls: controls::Controls::new(&header),
             pages,
             count,
             search_bar: search_bar.clone(),
@@ -605,14 +859,6 @@ pub fn open(app: &adw::Application) {
     });
     let empty = status_page("No books yet");
     empty.set_description(Some("Add EPUB files or a folder to start your library."));
-    let add_first = gtk::MenuButton::builder()
-        .label("_Add")
-        .use_underline(true)
-        .menu_model(&add_menu())
-        .halign(gtk::Align::Center)
-        .build();
-    add_first.add_css_class("pill");
-    add_first.add_css_class("suggested-action");
     empty.set_child(Some(&add_first));
     let clear = gtk::Button::builder()
         .label("_Clear Search")
@@ -650,25 +896,58 @@ pub fn open(app: &adw::Application) {
     frame.add_top_bar(&header);
     frame.add_top_bar(&search_bar);
     frame.set_content(Some(&content));
-    window.set_content(Some(&frame));
+    library.overlay.set_child(Some(&frame));
+    // Reuse the native popup surface. Older GTK can still have a tooltip
+    // query pending when the menu closes.
+    library.overlay.add_overlay(&library.context_popover);
+    let weak = Rc::downgrade(&library);
+    library.context_popover.connect_closed(move |_| {
+        let weak = weak.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(library) = weak.upgrade()
+                && !library.context_popover.is_visible()
+            {
+                library.restore_context_focus();
+            }
+        });
+    });
+    window.set_content(Some(&library.overlay));
 
     library.install_actions();
+    library.install_controls();
+    library.build_view();
     let (for_anchors, for_changed, for_place) = (
         Rc::downgrade(&library),
         Rc::downgrade(&library),
         Rc::downgrade(&library),
     );
+    let for_replace = Rc::downgrade(&library);
     model.set_hooks(Hooks {
+        before_replace: Box::new(move || {
+            if let Some(library) = for_replace.upgrade() {
+                // Only a menu that points at a book or a column has to go
+                // when the books are replaced. The header's menus point at
+                // nothing in the view, and closing them here would shut
+                // them once a second for as long as an import runs.
+                library.close_context_menu();
+                library.placed.set(library.placed.get() + 1);
+            }
+        }),
         anchors: Box::new(move || {
             for_anchors
                 .upgrade()
                 .map(|library| library.anchors())
                 .unwrap_or_default()
         }),
-        changed: Box::new(move |_| {
+        changed: Box::new(move |replaced| {
             let Some(library) = for_changed.upgrade() else {
                 return;
             };
+            // A view to be built anew goes on screen with its books.
+            if replaced && library.rebuild.take() {
+                library.build_view();
+                library.show_sort();
+            }
             library.refresh_state();
             // Books imported before covers were read get theirs once the
             // window has shown what it has.
@@ -688,26 +967,24 @@ pub fn open(app: &adw::Application) {
             library.refresh_actions();
         }
     });
-    // Return and a double click read the selected book, as every command
-    // from the keyboard acts on the selection. A click selects the book it
-    // lands on, so for a pointer the two are the same book.
-    let weak = window.downgrade();
-    library.grid.connect_activate(move |_, _| {
-        if let Some(window) = weak.upgrade() {
-            gio::prelude::ActionGroupExt::activate_action(&window, "read", None);
-        }
-    });
     let weak = Rc::downgrade(&library);
     library.width.connect_resize(move |_, _, _| {
-        if let Some(library) = weak.upgrade() {
-            library.fit();
-        }
+        let weak = weak.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(library) = weak.upgrade() {
+                library.close_menus();
+                library.set_narrow(library.width.width() < 640);
+                library.fit();
+            }
+        });
     });
     if let Some(settings) = gtk::Settings::default() {
         let weak = Rc::downgrade(&library);
         settings.connect_gtk_xft_dpi_notify(move |_| {
             if let Some(library) = weak.upgrade() {
-                library.fit();
+                // Larger text takes columns from the grid and, from one
+                // and a half times, shows the list in its place.
+                library.show(false);
             }
         });
     }
@@ -747,11 +1024,7 @@ pub fn open(app: &adw::Application) {
             };
             match views::focused_cell(&library.scrolled) {
                 Some(cell) => {
-                    let (x, y) = (
-                        f64::from(cell.width()) / 2.0,
-                        f64::from(cell.height()) / 2.0,
-                    );
-                    library.context_menu(&cell, x, y);
+                    library.context_menu(&cell);
                     glib::Propagation::Stop
                 }
                 None => glib::Propagation::Proceed,
@@ -866,9 +1139,9 @@ pub fn open(app: &adw::Application) {
             // books with the arrow keys does.
             if library.model.selected_count() == 0 {
                 let to = gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT;
-                library.grid.scroll_to(0, to, None);
+                library.with_view(|view| view.scroll_to(0, to));
             }
-            library.grid.grab_focus();
+            library.with_view(|view| view.body().grab_focus());
             glib::Propagation::Stop
         }
         _ => glib::Propagation::Proceed,
@@ -884,7 +1157,12 @@ pub fn open(app: &adw::Application) {
     });
     // A window opened from this one closes first, through its own close, so
     // a reader saves its place before the process ends.
-    window.connect_close_request(|window| {
+    let weak = Rc::downgrade(&library);
+    window.connect_close_request(move |window| {
+        if let Some(library) = weak.upgrade() {
+            library.close_menus();
+            library.save();
+        }
         let open: Vec<_> = gtk::Window::list_toplevels()
             .into_iter()
             .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
@@ -914,10 +1192,14 @@ pub fn open(app: &adw::Application) {
         }
         glib::Propagation::Stop
     });
+    let query = Query {
+        text: String::new(),
+        sort: library.sort().terms(),
+    };
     // The window owns the library's state for as long as it is open.
     window.connect_destroy(move |_| {
         let _ = &library;
     });
-    model.set_query(Query::default());
+    model.set_query(query);
     window.present();
 }

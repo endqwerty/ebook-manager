@@ -7,8 +7,8 @@ mounted e-reader. Conversion, wireless sync and mobile apps are in the backlog.
 ## Run on Linux
 
 Use Linux 5.11 or later and Bubblewrap 0.8.0 or later. Building also needs a
-recent stable Rust toolchain, a C compiler, pkg-config, the GTK 4.12+ and
-libadwaita 1.5+ development files, Python 3 and Make. On Arch the system
+recent stable Rust toolchain, a C compiler, pkg-config, the GTK 4.22+ and
+libadwaita 1.9+ development files, Python 3 and Make. On Arch the system
 packages are `base-devel gtk4 libadwaita bubblewrap python`. CI on Ubuntu 26.04 uses
 `build-essential pkg-config libgtk-4-dev libadwaita-1-dev bubblewrap python3`.
 

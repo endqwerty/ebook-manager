@@ -20,6 +20,10 @@ pub enum Kind {
     /// pointer.
     #[default]
     Grid,
+    /// The list's thumbnail: the edge line and the contact shadow.
+    List,
+    /// The table's small cover: the edge line alone.
+    Table,
 }
 
 /// The gap between a grid cover and its caption, which holds the progress line.
@@ -123,14 +127,25 @@ mod imp {
 
     impl WidgetImpl for Cover {
         fn request_mode(&self) -> gtk::SizeRequestMode {
-            gtk::SizeRequestMode::HeightForWidth
+            match self.kind.get() {
+                Kind::Grid => gtk::SizeRequestMode::HeightForWidth,
+                Kind::List | Kind::Table => gtk::SizeRequestMode::ConstantSize,
+            }
         }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             let width = self.width.get();
+            // A grid cover is as wide as its column. A thumbnail is the
+            // width it was made with.
+            let stretches = self.kind.get() == Kind::Grid;
             if orientation == gtk::Orientation::Horizontal {
-                return (width.min(16), width, -1, -1);
+                let least = if stretches { width.min(16) } else { width };
+                return (least, width, -1, -1);
             }
-            let across = if for_size < 0 { width } else { for_size };
+            let across = if for_size < 0 || !stretches {
+                width
+            } else {
+                for_size
+            };
             let height = self.obj().frame_height(across as f32) as i32 + self.below();
             (height, height, -1, -1)
         }
@@ -144,6 +159,7 @@ mod imp {
         pub fn below(&self) -> i32 {
             match self.kind.get() {
                 Kind::Grid => CAPTION_GAP,
+                Kind::List | Kind::Table => 0,
             }
         }
     }
@@ -299,18 +315,24 @@ impl Cover {
         let (dark, contrast) = (style.is_dark(), style.is_high_contrast());
         let ink = self.color();
         let rise = imp.rise.get() as f32;
-        let frame = gsk::RoundedRect::from_rect(
-            graphene::Rect::new(0.0, 0.0, width, height),
-            if width >= 200.0 { 3.0 } else { 2.0 },
-        );
+        let kind = imp.kind.get();
+        let corner = match kind {
+            Kind::Table => 1.0,
+            _ if width >= 200.0 => 3.0,
+            _ => 2.0,
+        };
+        let frame =
+            gsk::RoundedRect::from_rect(graphene::Rect::new(0.0, 0.0, width, height), corner);
 
         self.draw_progress(snapshot, book.as_deref(), width, height, &ink);
 
         snapshot.save();
         snapshot.translate(&graphene::Point::new(0.0, -2.0 * rise));
-        if !contrast {
-            let shade = black(if dark { 0.28 } else { 0.16 });
+        let shade = black(if dark { 0.28 } else { 0.16 });
+        if !contrast && kind != Kind::Table {
             snapshot.append_outset_shadow(&frame, &shade, 0.0, 1.0 + rise, 0.0, 2.0 + rise);
+        }
+        if !contrast && kind == Kind::Grid {
             snapshot.append_outset_shadow(
                 &frame,
                 &shade,
@@ -361,7 +383,7 @@ impl Cover {
         if !contrast {
             // The shade on the side the book is bound, whatever the
             // interface's direction.
-            if spine && width >= 64.0 {
+            if spine && kind == Kind::Grid && width >= 64.0 {
                 let across = width * 0.05;
                 let right = book.as_deref().is_some_and(|book| book.right_to_left);
                 let (near, far) = if right {
@@ -391,7 +413,7 @@ impl Cover {
             // Outside the cover's edge, where artwork cannot hide it.
             let outline = gsk::RoundedRect::from_rect(
                 graphene::Rect::new(-1.0, -1.0, width + 2.0, height + 2.0),
-                3.0,
+                corner + 1.0,
             );
             snapshot.append_border(&outline, &[1.0; 4], &[ink; 4]);
         }
@@ -433,6 +455,10 @@ impl Cover {
             &rgb(cloth, 1.0),
             &graphene::Rect::new(0.0, 0.0, width, height),
         );
+        // On a thumbnail the type would be too small to make out.
+        if width < 64.0 {
+            return;
+        }
         let pad = (width * 0.12).round();
         let across = width - 2.0 * pad;
         let layout = |text: &str, family: Option<&str>, size: f32, weight, lines: i32| {
