@@ -370,13 +370,14 @@ def replace_text(text):
     type_text(text)
 
 
-def gone(name):
-    """Waits until nothing visible has this name."""
+def gone(name, *, role=None):
+    """Waits until the current accessibility tree shows no match."""
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
             if not any(
                 (n.get_name() or "") == name
+                and (role is None or n.get_role_name() == role)
                 and n.get_state_set().contains(Atspi.StateType.SHOWING)
                 for n in walk(Atspi.get_desktop(0))
             ):
@@ -981,6 +982,7 @@ def book_menus_across_resize():
         key("Menu")
         menu = find("", "menu")
         assert menu.get_state_set().contains(Atspi.StateType.SHOWING), name
+        find("", "menu item", parent=menu)
         for width in (639, 900):
             xd("windowsize", "--sync", wid, width, 680)
             if width == 639:
@@ -989,13 +991,7 @@ def book_menus_across_resize():
             if number == 3 and width == 639:
                 role = "list"
             find("Books", role)
-            deadline = time.monotonic() + 5
-            while True:
-                menu.clear_cache()
-                if not menu.get_state_set().contains(Atspi.StateType.SHOWING):
-                    break
-                assert time.monotonic() < deadline, f"{name} book menu stayed open at {width}"
-                time.sleep(0.05)
+            gone("", role="menu")
         print(f"PASS {name} book menu dismissed on resize and the library stayed usable", flush=True)
 
 
