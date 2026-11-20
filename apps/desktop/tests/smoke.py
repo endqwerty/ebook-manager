@@ -1494,6 +1494,22 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
     assert positions() == before, "selecting a spine moved its row"
     find("The Glass Orchard", "label")
     capture("Ebook Manager", evidence / f"shelf-{look}.png")
+    if keep_author_sort:
+        # A popup can remain mapped behind the modal even if AT-SPI hides it.
+        popup = ["xdotool", "search", "--onlyvisible", "--name", "^ebook-manager$"]
+        subprocess.run(popup, stdout=subprocess.DEVNULL, check=True)
+        xd("mousemove", "--window", wid, left + bounds.x + bounds.width // 2,
+           top + bounds.y + bounds.height // 2, "click", "--repeat", 2, "--delay", 80, 1)
+        reader = find("The Glass Orchard", "frame")
+        find("Page 1 of", contains=True, parent=reader)
+        time.sleep(0.7)  # Let the pointer-rest preview timer run behind the modal reader.
+        assert subprocess.run(popup, capture_output=True).returncode == 1, (
+            "shelf preview remained mapped behind the reader"
+        )
+        click("Back to library")
+        gone("Back to library")
+        focus("Ebook Manager")
+        print("PASS double-click opens the reader and dismisses the shelf preview", flush=True)
     key("shift+Right")
     selected = [
         n
