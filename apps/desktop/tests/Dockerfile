@@ -1,4 +1,4 @@
-ARG UBUNTU=24.04
+ARG UBUNTU=26.04
 FROM ubuntu:${UBUNTU}
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential curl ca-certificates pkg-config libgtk-4-dev libadwaita-1-dev \

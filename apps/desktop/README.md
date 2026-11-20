@@ -2,7 +2,7 @@
 
 Run `ebook-manager` to open your library. Choose **Add** to import DRM-free EPUBs from files or a folder. Type to search. Select a book and press Return to read it, F2 to edit how it is named and filed, or Ctrl+D to copy its EPUB to a folder. In the reader, Left and Right turn pages and F11 fills the screen. On an Xteink X4 Pro running the CrossPoint fork, switch to USB Drive mode and choose a folder on the mounted SD card. [Desktop behaviour](../../specs/desktop-mvp.md) lists every command and key.
 
-The GTK4 application uses GTK 4.12 or later and libadwaita 1.5 or later. Install the GTK and libadwaita development packages and bubblewrap. Imports and reading require a working bubblewrap sandbox. From the repository root, run `make install` to build the optimized desktop binary and helper together and install them in `~/.local/bin`, with the launcher in `~/.local/share/applications`. The helper must be discoverable by the reader crate, normally next to the desktop binary. The installer writes the absolute executable path into the application menu entry.
+The GTK4 application uses GTK 4.22 or later and libadwaita 1.9 or later. Install the GTK and libadwaita development packages and bubblewrap. Imports and reading require a working bubblewrap sandbox. From the repository root, run `make install` to build the optimized desktop binary and helper together and install them in `~/.local/bin`, with the launcher in `~/.local/share/applications`. The helper must be discoverable by the reader crate, normally next to the desktop binary. The installer writes the absolute executable path into the application menu entry.
 
 ## How it is put together
 

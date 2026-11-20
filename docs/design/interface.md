@@ -459,7 +459,8 @@ The current release is 26H2, with Windows App SDK 2.7.
 
 ### GNOME
 
-The current releases are GNOME 51 and libadwaita 1.10.
+The current releases are GNOME 51 and libadwaita 1.10. The Linux app requires
+GTK 4.22 and libadwaita 1.9 or later, as tested on Ubuntu 26.04.
 
 - The header bar of the content pane shows no title, because the screen title
   is the first line of the content. Add is a labelled button at its start,
