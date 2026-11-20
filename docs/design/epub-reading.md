@@ -122,8 +122,11 @@ library to import, so the test file includes `src/reader/view.rs` with a
 the app. GTK must stay on one thread, so the test target sets
 `harness = false` and uses `libtest-mimic` with one thread, which gives each
 check below its own named test. It runs with the workspace tests, which CI
-already runs under `dbus-run-session` and `xvfb-run`. Its private bus has an
-empty service directory, so it starts none of the desktop's own services.
+runs under `apps/desktop/tests/private-session.sh`: a private Xvfb display
+and a private D-Bus session. That bus has an empty service directory, so it
+starts none of the desktop's own services. A bus that may start them lets
+WebKit's sandboxed web process start the desktop portal, which it asks for
+its threads' priority.
 A failure sends the design back to C, A or the reader host process under
 [Alternatives](#alternatives).
 

@@ -1337,9 +1337,11 @@ fn two_columns_when_they_fit() -> Outcome {
     );
     // The page holds two columns: paragraphs at two left edges, both on
     // screen. Each column is at most the measure, 34 em, and the pair is
-    // centred, with the margins' width between them.
+    // centred, with the margins' width between them. A paragraph that runs
+    // on from one column to the next has a box in each, and its bounding
+    // box spans both and the gap, so each box is measured on its own.
     let columns = |stage: &Stage| -> Result<(Vec<f64>, f64, f64), Failed> {
-        let found = stage.app("const xs = new Set(); let widest = 0; for (const p of document.querySelectorAll('p')) { const r = p.getBoundingClientRect(); if (r.left >= 0 && r.right <= innerWidth) { xs.add(Math.round(r.left)); widest = Math.max(widest, r.width); } } return [...xs].sort((a, b) => a - b).join(',') + ' ' + widest + ' ' + parseFloat(getComputedStyle(document.body).fontSize)")?;
+        let found = stage.app("const xs = new Set(); let widest = 0; for (const p of document.querySelectorAll('p')) { for (const r of p.getClientRects()) { if (r.width > 0 && r.left >= 0 && r.right <= innerWidth) { xs.add(Math.round(r.left)); widest = Math.max(widest, r.width); } } } return [...xs].sort((a, b) => a - b).join(',') + ' ' + widest + ' ' + parseFloat(getComputedStyle(document.body).fontSize)")?;
         let mut parts = found.split(' ');
         let edges = parts
             .next()
@@ -2662,6 +2664,11 @@ fn main() {
             .collect();
         libtest_mimic::run(&arguments, names).exit();
     }
+    // GTK here never asks the session bus for a desktop portal, whatever bus
+    // it is run on. This is what GDK_DEBUG=no-portals does. WebKit's
+    // sandboxed web process can still ask for one, so the private bus, which
+    // starts no services, is what keeps every portal from starting.
+    gtk::disable_portals();
     gtk::init().expect("a display: run under apps/desktop/tests/private-session.sh");
     let dumps = core_dumps();
     let trials = TESTS
