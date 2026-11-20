@@ -85,7 +85,7 @@ pub struct Hooks {
     /// were replaced.
     pub changed: Box<dyn Fn(bool)>,
     /// Put the reader back where they were.
-    pub place: Box<dyn Fn(&Placed)>,
+    pub place: Box<dyn Fn(Placed)>,
 }
 
 mod object {
@@ -561,7 +561,7 @@ impl BookListModel {
                 }
                 Effect::Place(placed) => {
                     if let Some(hooks) = self.hooks() {
-                        (hooks.place)(&placed);
+                        (hooks.place)(placed);
                     }
                 }
                 Effect::Absent(ids) => {

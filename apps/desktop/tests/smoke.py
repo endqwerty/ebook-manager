@@ -689,25 +689,25 @@ CARTOGRAPHER = GALLERY[4][0]
 FIELDS = ["Title", "Author", "Series", "Date Added", "Date Published", "Last Read", "Progress"]
 
 
-def titles_shown():
+def titles_shown(parent=None):
     """The titles of the books on screen, in the order they are shown."""
     known = {book[0] for book in GALLERY} | {LANTERN}
     return [
         node.get_name()
-        for node in walk(Atspi.get_desktop(0))
+        for node in walk(parent or Atspi.get_desktop(0))
         if node.get_role_name() == "label"
         and node.get_name() in known
         and node.get_state_set().contains(Atspi.StateType.SHOWING)
     ]
 
 
-def expect_titles(expected, what):
+def expect_titles(expected, what, *, parent=None):
     """Waits for the first books on screen to be these, in this order."""
     deadline = time.monotonic() + 15
     seen = None
     while time.monotonic() < deadline:
         try:
-            seen = titles_shown()[: len(expected)]
+            seen = titles_shown(parent)[: len(expected)]
         except GLib.Error:
             seen = None
         if seen == expected:
@@ -1014,6 +1014,17 @@ def remembered(author_width):
     print("PASS the view, sorts, cover size and columns after a restart", flush=True)
 
 
+def gallery_view_switches():
+    # All six directions, with books already loaded and the default title
+    # sort in each view. Wait for a visible book inside the new view.
+    roles = {1: "table", 2: "list", 3: "tree table"}
+    for target in (2, 3, 1, 3, 2, 1):
+        send_key(f"ctrl+{target}")
+        view = find("Books", roles[target])
+        expect_titles([CARTOGRAPHER], f"books in view {target}", parent=view)
+    print("PASS all six view switches show books in the gallery", flush=True)
+
+
 def covers(binary, evidence, root, proc):
     """Imports the gallery and checks what is drawn for a book with a cover
     and for one without, in each appearance."""
@@ -1026,6 +1037,7 @@ def covers(binary, evidence, root, proc):
     click("Done")
     find(f"{len(GALLERY) + 1} books")
     assert len(list(thumbs.glob("*.png"))) == with_cover, list(thumbs.iterdir())
+    gallery_view_switches()
     # Return reads the selected book, as every key acts on the selection,
     # when the focus has moved off it.
     select_book("glass")

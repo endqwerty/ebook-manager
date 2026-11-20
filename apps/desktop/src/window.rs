@@ -153,14 +153,48 @@ impl Library {
         }
     }
 
-    /// Puts the reader back where they were in the view that has just
-    /// replaced the last: on the book they were on if it is still there,
-    /// else at the first book that was on screen, else at the top.
-    fn restore(self: &Rc<Self>, placed: &Placed) {
-        let was = &placed.anchors;
-        let rebuilt = placed.reason == Placement::Layout;
+    fn viewport_ready(&self) -> bool {
+        self.with_view(|view| {
+            let body = view.body();
+            body.is_mapped() && body.width() > 0 && body.height() > 0
+        }) == Some(true)
+            && self.scrolled.hadjustment().page_size() > 0.0
+            && self.scrolled.vadjustment().page_size() > 0.0
+    }
+
+    /// Puts the reader back after GTK has allocated the new viewport.
+    fn restore(self: &Rc<Self>, placed: Placed) {
         let serial = self.placed.get() + 1;
         self.placed.set(serial);
+        if placed.current.is_none() && placed.top.is_none() {
+            return;
+        }
+        if self.viewport_ready() {
+            self.place_books(&placed, serial);
+            return;
+        }
+        // Older GTK computes a scroll alignment by dividing by the viewport
+        // size. A newly attached list can be mapped before it has any size.
+        let weak = Rc::downgrade(self);
+        let moved = self.moved.get();
+        self.scrolled.add_tick_callback(move |_, _| {
+            let Some(library) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if library.placed.get() != serial || library.moved.get() != moved {
+                return glib::ControlFlow::Break;
+            }
+            if !library.viewport_ready() {
+                return glib::ControlFlow::Continue;
+            }
+            library.place_books(&placed, serial);
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn place_books(self: &Rc<Self>, placed: &Placed, serial: u64) {
+        let was = &placed.anchors;
+        let rebuilt = placed.reason == Placement::Layout;
         let keep_top = placed.reason != Placement::Command;
         let focused = placed.current.filter(|_| rebuilt && was.focused);
         if let Some(rank) = placed.current {
