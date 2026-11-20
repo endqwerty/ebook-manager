@@ -350,6 +350,8 @@ dependencies = [
  "libc",
  "libtest-mimic",
  "png",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "webkit6",

@@ -560,7 +560,7 @@ over anything the book's sheets say for the same property.
   and the window fits them. A turn sets the scroll offset. The slide and the
   cross-fade are CSS transitions inside `@media (prefers-reduced-motion: no-preference)`,
   which WebKitGTK answers from GTK's animation setting, so they work on GTK
-  4.12.
+  4.22.
 - **Scrolling** is the same document in normal flow.
 - **Settings** reach the page as CSS custom properties and a few classes on the
   root: font family, size step, weight, line height, letter and word spacing,

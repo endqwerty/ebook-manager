@@ -1,6 +1,7 @@
 """Run under a private Xvfb + DBus session. See apps/desktop/README.md."""
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -224,13 +225,13 @@ def xd(*args):
 
 
 def send_key(name):
-    # Some XKB maps make xdotool add Alt when looking up F2 or F11.
-    # Use the physical keycode from our private X server's keymap.
-    if name in ("F2", "F11"):
+    # Some XKB maps make xdotool add Alt when looking up function keys.
+    # Send the physical keycode for bare F1 through F12.
+    if function := re.fullmatch(r"F([1-9]|1[0-2])", name):
         keymap = subprocess.check_output(
             ["xkbcomp", "-xkb", os.environ["DISPLAY"], "-"], text=True
         )
-        match = re.search(rf"<FK{int(name[1:]):02d}>\s*=\s*([0-9]+);", keymap)
+        match = re.search(rf"<FK{int(function[1]):02d}>\s*=\s*([0-9]+);", keymap)
         assert match is not None, f"{name} is missing from the X server's keymap"
         name = match[1]
     xd("key", name)
@@ -458,13 +459,14 @@ def replace_text(text):
     type_text(text)
 
 
-def gone(name):
-    """Waits until nothing visible has this name."""
+def gone(name, *, role=None):
+    """Waits until the current accessibility tree shows no match."""
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
             if not any(
                 (n.get_name() or "") == name
+                and (role is None or n.get_role_name() == role)
                 and n.get_state_set().contains(Atspi.StateType.SHOWING)
                 for n in walk(Atspi.get_desktop(0))
             ):
@@ -567,6 +569,22 @@ def launch_app(binary, env):
         return subprocess.Popen([binary], env=env, stderr=log)
 
 
+# Parts of app-stderr.log in which one step expects one message, as
+# (first byte, end byte, pattern). Only `expected_output` adds to it.
+EXPECTED = []
+
+
+@contextlib.contextmanager
+def expected_output(env, pattern):
+    """Allows lines matching `pattern` in the app output written while the
+    `with` block runs, and nowhere else. The block must last until the
+    process that prints them has exited."""
+    log = Path(env["HOME"]) / "app-stderr.log"
+    start = log.stat().st_size
+    yield
+    EXPECTED.append((start, log.stat().st_size, re.compile(pattern)))
+
+
 def check_diagnostics(root):
     log = root / "app-stderr.log"
     if not log.exists():
@@ -580,10 +598,18 @@ def check_diagnostics(root):
         r"\bGdk-WARNING \*\*: \d{2}:\d{2}:\d{2}\.\d+: "
         r"gdk_frame_timings_submitted\(\) called on submitted frame\.$"
     )
-    unexpected = [
-        line for line in log.read_text(errors="replace").splitlines()
-        if diagnostic.search(line) and not allowed.search(line)
-    ]
+    unexpected = []
+    end = 0
+    for raw in log.read_bytes().splitlines(keepends=True):
+        start, end = end, end + len(raw)
+        unexpected += [
+            line for line in raw.decode(errors="replace").splitlines()
+            if diagnostic.search(line) and not allowed.search(line)
+            and not any(
+                first <= start and end <= last and pattern.search(line)
+                for first, last, pattern in EXPECTED
+            )
+        ]
     assert not unexpected, "\n".join(unexpected)
     print("PASS no unexpected GTK warnings or criticals from any app process", flush=True)
 
@@ -788,10 +814,11 @@ def run(binary, evidence, root):
         pages = web_processes(proc.pid)
         assert pages, "no web process to watch"
         # GDK itself warns when another program destroys a window. From
-        # the next line to the app's exit, DESTROYED_WINDOW_WARNING is
-        # expected in the app's output, and nowhere else in the run.
-        xd("windowclose", library)
-        proc.wait(timeout=10)
+        # the window's destruction to the app's exit, DESTROYED_WINDOW_WARNING
+        # is expected in the app's output, and nowhere else in the run.
+        with expected_output(env, DESTROYED_WINDOW_WARNING):
+            xd("windowclose", library)
+            proc.wait(timeout=10)
         assert proc.returncode == 0, proc.returncode
         # The page's process is looked for by its own number: once the app
         # has gone it is nobody's descendant.
@@ -799,7 +826,7 @@ def run(binary, evidence, root):
         while any(Path(f"/proc/{pid}").exists() for pid in pages):
             assert time.monotonic() < deadline, "a web process outlived the app"
             time.sleep(0.2)
-        proc = subprocess.Popen([binary], env=env)
+        proc = launch_app(binary, env)
         find("Mira Vale")
         select_book("lantern")
         key("Return")
@@ -845,7 +872,7 @@ def run(binary, evidence, root):
         ask_to_close(library)
         assert proc.wait(timeout=10) == 0
         print("PASS the library closes when asked with no reader open", flush=True)
-        proc = subprocess.Popen([binary], env=env)
+        proc = launch_app(binary, env)
         find("Mira Vale")
         covers(binary, evidence, root, proc)
         proc = None
@@ -1322,7 +1349,7 @@ def ending(binary, root, how):
     books = root / "Books"
     books.mkdir()
     epub(books / "01-Atlas.epub")
-    proc = subprocess.Popen([binary], env=env)
+    proc = launch_app(binary, env)
     find("No books yet")
     focus("Ebook Manager")
     key("ctrl+o")
@@ -1370,7 +1397,7 @@ def ending(binary, root, how):
         time.sleep(0.2)
     saved = "not checked"
     if how != "display":
-        proc = subprocess.Popen([binary], env=env)
+        proc = launch_app(binary, env)
         find("The Lantern Atlas")
         select_book("lantern")
         key("Return")
