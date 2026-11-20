@@ -1,5 +1,5 @@
 //! The recess behind a row of books. GTK draws its children over the back.
-use super::spine::{gradient, grain};
+use super::spine::{Grain, gradient};
 use crate::cover::rgb;
 use gtk::{gdk, glib, graphene::Rect, gsk};
 
@@ -12,9 +12,7 @@ fn draw_recess(s: &gtk::Snapshot, r: Rect, dark: bool) {
     s.push_blend(gsk::BlendMode::Overlay);
     s.append_color(&rgb(if dark { 0x2a292e } else { 0xd5cec2 }, 1.), &r);
     s.pop();
-    s.push_opacity(0.2);
-    grain(s, &r);
-    s.pop();
+    Grain::Back.draw(s, &r);
     s.pop();
     gradient(
         s,

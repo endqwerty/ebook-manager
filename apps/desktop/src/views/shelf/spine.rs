@@ -84,25 +84,47 @@ fn colours(base: u32) -> (gdk::RGBA, gdk::RGBA, bool) {
     }
     (cloth, ink, pale)
 }
-thread_local! {
-    static GRAIN: gdk::MemoryTexture = {
-        let mut seed = 71237u32;
-        let mut pixels = Vec::with_capacity(128 * 128 * 3);
-        for _ in 0..128*128 {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            pixels.extend_from_slice(&[seed as u8; 3]);
-        }
-        gdk::MemoryTexture::new(128,128,gdk::MemoryFormat::R8g8b8,&glib::Bytes::from_owned(pixels),384)
-    };
+pub(super) enum Grain {
+    Back,
+    Cloth,
 }
 
-pub(super) fn grain(s: &gtk::Snapshot, bounds: &Rect) {
-    let tile = Rect::new(0., 0., 128., 128.);
-    s.push_repeat(bounds, Some(&tile));
-    GRAIN.with(|texture| s.append_texture(texture, &tile));
-    s.pop();
+fn grain_texture(strength: f32) -> gdk::MemoryTexture {
+    let mut seed = 71237u32;
+    let mut pixels = Vec::with_capacity(128 * 128 * 3);
+    for _ in 0..128 * 128 {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        // Mid-grey is neutral in Overlay. Mixing the noise toward it gives
+        // the same opacity on Cairo and GL, including on repeated tiles.
+        let level = 127.5 + (f32::from(seed as u8) - 127.5) * strength;
+        pixels.extend_from_slice(&[level.round() as u8; 3]);
+    }
+    gdk::MemoryTexture::new(
+        128,
+        128,
+        gdk::MemoryFormat::R8g8b8,
+        &glib::Bytes::from_owned(pixels),
+        384,
+    )
+}
+
+impl Grain {
+    pub(super) fn draw(self, s: &gtk::Snapshot, bounds: &Rect) {
+        thread_local! {
+            static BACK: gdk::MemoryTexture = grain_texture(0.20);
+            static CLOTH: gdk::MemoryTexture = grain_texture(0.35);
+        }
+        let texture = match self {
+            Self::Back => &BACK,
+            Self::Cloth => &CLOTH,
+        };
+        let tile = Rect::new(0., 0., 128., 128.);
+        s.push_repeat(bounds, Some(&tile));
+        texture.with(|texture| s.append_texture(texture, &tile));
+        s.pop();
+    }
 }
 
 pub(super) fn gradient(s: &gtk::Snapshot, r: Rect, horizontal: bool, stops: &[(f32, f32)]) {
@@ -297,9 +319,7 @@ impl Spine {
         }
         if !hc {
             s.pop();
-            s.push_opacity(0.35);
-            grain(s, &rect);
-            s.pop();
+            Grain::Cloth.draw(s, &rect);
             s.pop();
         }
         let stamp = rgb(
