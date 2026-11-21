@@ -1002,6 +1002,43 @@ def run(binary, evidence, root):
             "PASS the library cannot be closed under the reader, and when its window is destroyed the app ends and the last turn is where the book reopens",
             flush=True,
         )
+        # Destroying the library window while a book is still opening (before
+        # the reader is ready) must also exit 0 with no leftover web process,
+        # both when opening would succeed and when opening fails (#108).
+        managed_dir = Path(env["XDG_DATA_HOME"]) / "ebook-manager/portable/books"
+        aside_dir = Path(env["XDG_DATA_HOME"]) / "books-aside"
+        for label_case, hide_books in [("opening", False), ("unopenable", True)]:
+            if hide_books:
+                managed_dir.rename(aside_dir)
+            try:
+                library = subprocess.check_output(
+                    ["xdotool", "search", "--onlyvisible", "--name", "^Ebook Manager$"],
+                    text=True,
+                ).splitlines()[-1]
+                select_book("lantern")
+                seen_pages = set(web_processes(proc.pid))
+                with expected_output(env, DESTROYED_WINDOW_WARNING):
+                    key("Return")
+                    xd("windowclose", library)
+                    deadline = time.monotonic() + 10
+                    while proc.poll() is None:
+                        seen_pages.update(web_processes(proc.pid))
+                        assert time.monotonic() < deadline, f"{label_case}: app did not exit"
+                        time.sleep(0.02)
+                assert proc.returncode == 0, (label_case, proc.returncode)
+                deadline = time.monotonic() + 10
+                while any(Path(f"/proc/{pid}").exists() for pid in seen_pages):
+                    assert time.monotonic() < deadline, f"web process outlived {label_case}"
+                    time.sleep(0.2)
+            finally:
+                if hide_books and aside_dir.exists():
+                    aside_dir.rename(managed_dir)
+            proc = launch_app(binary, env)
+            find("Mira Vale")
+        print(
+            "PASS destroying the library window while a book is opening (valid or unopenable) exits cleanly",
+            flush=True,
+        )
         # Closing the reader lets its view go, and the view's web process
         # with it.
         deadline = time.monotonic() + 10

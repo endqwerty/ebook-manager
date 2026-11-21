@@ -36,9 +36,14 @@ fn reading_font(w: &gtk::Window) -> String {
 }
 
 pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book>) {
+    let parent_win: gtk::Window = parent.clone().upcast();
+    if parent_win.surface().is_some_and(|s| s.is_destroyed()) {
+        orphaned(&parent_win);
+        return;
+    }
     let w = gtk::Window::builder()
         .title(&b.title)
-        .transient_for(parent)
+        .transient_for(&parent_win)
         // Closing the library closes the reader, and so lets its view go.
         .destroy_with_parent(true)
         .modal(true)
@@ -52,6 +57,49 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
     inset(&status, 16);
     layout.append(&status);
     w.present();
+    // Install the parent-destruction and close-request hooks immediately,
+    // before awaiting the helper or WebKit, so destroying the library window
+    // from outside during opening (on GTK before 4.24) still ends the app
+    // cleanly without leaving a window or web process behind (#108).
+    let hears: Rc<RefCell<std::rc::Weak<Reading>>> = Rc::default();
+    let parent_gone = Rc::new(Cell::new(false));
+    if let Some(surface) = parent_win.surface() {
+        let reading = hears.clone();
+        let gone = parent_gone.clone();
+        let parent_weak = parent_win.downgrade();
+        let reader_weak = w.downgrade();
+        surface.connect_mapped_notify(move |surface| {
+            if !surface.is_destroyed() {
+                return;
+            }
+            gone.set(true);
+            // Not from inside the surface's own destruction.
+            let (reading, parent_weak, reader_weak) =
+                (reading.clone(), parent_weak.clone(), reader_weak.clone());
+            glib::idle_add_local_once(move || {
+                if let Some(r) = reading.borrow().upgrade() {
+                    let _ = r.leave();
+                }
+                if let Some(reader) = reader_weak.upgrade()
+                    && reader.is_visible()
+                {
+                    reader.close();
+                }
+                if let Some(parent) = parent_weak.upgrade() {
+                    orphaned(&parent);
+                }
+            });
+        });
+    }
+    {
+        let parent_weak = parent_win.downgrade();
+        w.connect_close_request(move |_| {
+            if let Some(parent) = parent_weak.upgrade() {
+                glib::idle_add_local_once(move || orphaned(&parent));
+            }
+            glib::Propagation::Proceed
+        });
+    }
     let store = store.clone();
     let b = b.clone();
     glib::spawn_future_local(async move {
@@ -82,6 +130,13 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
             Ok::<_, anyhow::Error>((Arc::new(book), place))
         }
         .await;
+        if !w.is_visible()
+            || parent_gone.get()
+            || parent_win.surface().is_some_and(|s| s.is_destroyed())
+        {
+            orphaned(&parent_win);
+            return;
+        }
         let (book, (chapter, landing)) = match result {
             Ok(x) => x,
             Err(e) => {
@@ -103,7 +158,6 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
         // The view tells the reader what the page did in the same step the
         // page's message is handled, so the place the reader holds is never
         // behind a message that has arrived.
-        let hears: Rc<RefCell<std::rc::Weak<Reading>>> = Rc::default();
         let tells = hears.clone();
         view::View::open(
             config,
@@ -121,12 +175,21 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
         let view = match built.recv().await {
             Ok(Ok(view)) => view,
             Ok(Err(e)) => {
-                status.set_text(&format!("Couldn’t open book · {e}"));
+                if parent_gone.get() || parent_win.surface().is_some_and(|s| s.is_destroyed()) {
+                    orphaned(&parent_win);
+                } else {
+                    status.set_text(&format!("Couldn’t open book · {e}"));
+                }
                 return;
             }
             Err(_) => return,
         };
-        if !w.is_visible() {
+        if !w.is_visible()
+            || parent_gone.get()
+            || parent_win.surface().is_some_and(|s| s.is_destroyed())
+        {
+            drop(view);
+            orphaned(&parent_win);
             return;
         }
         layout.remove(&status);
@@ -456,34 +519,6 @@ impl Reading {
                 }
             });
         }
-        // That window can also be destroyed from outside, as when a window
-        // manager ends. GTK 4.24 then unrealizes it, which the hook above
-        // hears. Earlier GTK tells the window nothing while the reader is
-        // modal, and goes on drawing to a surface that is gone. Its surface
-        // does say it is no longer mapped, so the reader leaves then and
-        // the application quits, as it does on later GTK.
-        if let Some(parent) = w.transient_for()
-            && let Some(surface) = parent.surface()
-        {
-            let weak = Rc::downgrade(&reading);
-            let parent = parent.downgrade();
-            surface.connect_mapped_notify(move |surface| {
-                if !surface.is_destroyed() {
-                    return;
-                }
-                // Not from inside the surface's own destruction.
-                let (weak, parent) = (weak.clone(), parent.clone());
-                glib::idle_add_local_once(move || {
-                    let Some(parent) = parent.upgrade() else {
-                        return;
-                    };
-                    if let Some(r) = weak.upgrade() {
-                        let _ = r.leave();
-                    }
-                    orphaned(&parent);
-                });
-            });
-        }
         // The application can also quit with no window being closed, as it
         // does when the session ends.
         if let Some(app) = gio::Application::default() {
@@ -502,12 +537,6 @@ impl Reading {
                 && let Some(parent) = w.transient_for()
             {
                 position_error(&parent, &e);
-            }
-            // If the window the reader was opened from was destroyed from
-            // outside and nothing said so, the app would run on with no
-            // window. See `orphaned`.
-            if let Some(parent) = w.transient_for() {
-                glib::idle_add_local_once(move || orphaned(&parent));
             }
             glib::Propagation::Proceed
         });
