@@ -632,10 +632,23 @@ impl Library {
                 let stop = gtk::Button::with_label("Stop after current book");
                 content.append(&stop);
                 let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let done_flag = Rc::new(Cell::new(false));
                 let c = cancelled.clone();
                 stop.connect_clicked(move |b| {
                     c.store(true, std::sync::atomic::Ordering::Relaxed);
                     b.set_sensitive(false);
+                });
+                let c_close = cancelled.clone();
+                let d_close = done_flag.clone();
+                let stop_close = stop.clone();
+                d.connect_close_request(move |_| {
+                    if d_close.get() {
+                        glib::Propagation::Proceed
+                    } else {
+                        c_close.store(true, std::sync::atomic::Ordering::Relaxed);
+                        stop_close.set_sensitive(false);
+                        glib::Propagation::Stop
+                    }
                 });
                 d.set_deletable(false);
                 d.present();
@@ -736,6 +749,7 @@ impl Library {
                             w.close();
                         }
                     }));
+                    done_flag.set(true);
                     d.set_deletable(true);
                 });
             },

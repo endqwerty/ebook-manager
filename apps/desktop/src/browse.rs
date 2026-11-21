@@ -466,8 +466,8 @@ pub struct Targets {
 }
 
 impl Targets {
-    /// The IDs, once every selected rank has been resolved. `None` when the
-    /// view went first or the read thread stopped.
+    /// The unique IDs, once every selected rank has been resolved. `None` when
+    /// the view went first or the read thread stopped.
     pub async fn ids(mut self) -> Option<Vec<String>> {
         if self.failed {
             return None;
@@ -476,6 +476,8 @@ impl Targets {
             let resolved = rx.recv().await.ok()??;
             self.ids.extend(resolved);
         }
+        let mut seen = HashSet::with_capacity(self.ids.len());
+        self.ids.retain(|id| seen.insert(id.clone()));
         Some(self.ids)
     }
 }
@@ -963,5 +965,22 @@ mod tests {
         assert!(state.selection_in_range(500, 0).is_empty());
         let first = state.selection_in_range(0, 4);
         assert_eq!(first, vec![2, 3, 0]);
+    }
+
+    #[test]
+    fn targets_deduplicates_ids_present_in_both_selected_and_pending() {
+        let (tx, rx) = async_channel::bounded(1);
+        tx.try_send(Some(vec!["a".into(), "b".into(), "a".into()]))
+            .unwrap();
+        let targets = Targets {
+            ids: vec!["a".into(), "c".into()],
+            pending: Some(rx),
+            failed: false,
+        };
+        let ids = glib::MainContext::new().block_on(targets.ids());
+        assert_eq!(
+            ids,
+            Some(vec!["a".to_owned(), "c".to_owned(), "b".to_owned()])
+        );
     }
 }
