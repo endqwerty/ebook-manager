@@ -1016,13 +1016,18 @@ def run(binary, evidence, root):
                     text=True,
                 ).splitlines()[-1]
                 select_book("lantern")
+                seen_pages = set(web_processes(proc.pid))
                 with expected_output(env, DESTROYED_WINDOW_WARNING):
                     key("Return")
                     xd("windowclose", library)
-                    proc.wait(timeout=10)
+                    deadline = time.monotonic() + 10
+                    while proc.poll() is None:
+                        seen_pages.update(web_processes(proc.pid))
+                        assert time.monotonic() < deadline, f"{label_case}: app did not exit"
+                        time.sleep(0.02)
                 assert proc.returncode == 0, (label_case, proc.returncode)
                 deadline = time.monotonic() + 10
-                while web_processes(proc.pid):
+                while any(Path(f"/proc/{pid}").exists() for pid in seen_pages):
                     assert time.monotonic() < deadline, f"web process outlived {label_case}"
                     time.sleep(0.2)
             finally:
