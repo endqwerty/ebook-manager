@@ -1532,11 +1532,18 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
     find("The Glass Orchard", "label")
     capture("Ebook Manager", evidence / f"shelf-{look}.png")
     if keep_author_sort:
-        # A popup can remain mapped behind the modal even if AT-SPI hides it.
+        # Hover the pointer over the spine until the hover preview appears,
+        # then open the reader from the keyboard (Return) without clicking so
+        # the preview is dismissed by opening the reader rather than by a click,
+        # and stays dismissed while the pointer rests behind the modal reader.
         popup = ["xdotool", "search", "--onlyvisible", "--name", "^ebook-manager$"]
-        subprocess.run(popup, stdout=subprocess.DEVNULL, check=True)
         xd("mousemove", "--window", wid, left + bounds.x + bounds.width // 2,
-           top + bounds.y + bounds.height // 2, "click", "--repeat", 2, "--delay", 80, 1)
+           top + bounds.y + bounds.height // 2)
+        deadline = time.monotonic() + 5
+        while subprocess.run(popup, capture_output=True).returncode != 0:
+            assert time.monotonic() < deadline, "hover preview did not appear"
+            time.sleep(0.05)
+        key("Return")
         reader = find("The Glass Orchard", "frame")
         find("Page 1 of", contains=True, parent=reader)
         time.sleep(0.7)  # Let the pointer-rest preview timer run behind the modal reader.
@@ -1546,7 +1553,7 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
         click("Back to library")
         gone("Back to library")
         focus("Ebook Manager")
-        print("PASS double-click opens the reader and dismisses the shelf preview", flush=True)
+        print("PASS opening the reader dismisses the hover shelf preview and keeps it closed", flush=True)
     key("shift+Right")
     selected = [
         n

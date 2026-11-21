@@ -22,6 +22,8 @@ IMPORTS = 800
 STARTS = 5
 # LIB-70: the library is shown within this long of starting the process.
 LAUNCH_LIMIT = 2.0
+# LIB-71: whole GTK frame budget (60 Hz) for scrolling the 100,000-book shelf.
+SHELF_FRAME_LIMIT_MS = 16.7
 # The window promises to reopen its view for catalogue changes at most once
 # a second. The driver's own polling blurs each reading by a few hundredths.
 REFRESH_INTERVAL = 1.0
@@ -337,8 +339,20 @@ def shelf_run(binary, root):
             if line.startswith("shelf-frame-us ")
         ]
         assert samples, "no moving frames were timed"
+        worst = max(samples)
+        median = statistics.median(samples)
+        over = sum(ms > SHELF_FRAME_LIMIT_MS for ms in samples)
         print(
-            f"Shelf whole frame (before update through after paint) under Xvfb and Cairo: {len(samples)} frames, maximum {max(samples):.2f} ms, {sum(ms > 16.7 for ms in samples)} over 16.7 ms",
+            f"Shelf whole frame (before update through after paint) under Xvfb and Cairo: "
+            f"{len(samples)} frames, median {median:.2f} ms, maximum {worst:.2f} ms "
+            f"(limit {SHELF_FRAME_LIMIT_MS} ms, {over} over)",
+            flush=True,
+        )
+        assert worst <= SHELF_FRAME_LIMIT_MS, (
+            f"shelf frame maximum {worst:.2f} ms exceeded {SHELF_FRAME_LIMIT_MS} ms ({over}/{len(samples)} over)"
+        )
+        print(
+            f"PASS shelf whole frame maximum {worst:.2f} ms within {SHELF_FRAME_LIMIT_MS} ms",
             flush=True,
         )
 
