@@ -869,7 +869,12 @@ mod tests {
                 }
                 Reply::Located { tag, .. } => locate_key(*tag),
                 Reply::NotLocated { tag, why } => {
-                    if *why == Why::Unreadable {
+                    if *why == Why::Unreadable
+                        && matches!(
+                            self.core.locating.get(tag),
+                            Some(Locating::Place { serial }) if *serial == self.latest_open_serial
+                        )
+                    {
                         self.latest_open_outcome = Some(OpenOutcome::UnreadablePlace);
                     }
                     locate_key(*tag)
