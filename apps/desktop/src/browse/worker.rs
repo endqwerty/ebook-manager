@@ -36,6 +36,12 @@ pub enum Request {
         token: ViewToken,
         page: u32,
     },
+    /// Book IDs for these ranks in the named view.
+    Ids {
+        tag: u64,
+        token: ViewToken,
+        ranks: Vec<u32>,
+    },
 }
 
 /// Why the books asked for could not be found in a view.
@@ -88,6 +94,10 @@ pub enum Reply {
     NoPage {
         token: ViewToken,
         page: u32,
+    },
+    Ids {
+        tag: u64,
+        ids: Option<Vec<String>>,
     },
 }
 
@@ -278,6 +288,13 @@ pub fn serve(
                     Some(Ok(rows)) => Reply::Page { token, page, rows },
                     _ => Reply::NoPage { token, page },
                 }
+            }
+            Request::Ids { tag, token, ranks } => {
+                let ids = reader
+                    .reader
+                    .as_mut()
+                    .and_then(|reader| reader.ids(token, &ranks).ok());
+                Reply::Ids { tag, ids }
             }
         };
         if replies.send_blocking(reply).is_err() {
@@ -561,5 +578,47 @@ mod tests {
             // One reply to each request, and no more.
             assert!(thread.replies.is_empty(), "step {step}: a second reply");
         }
+    }
+
+    #[test]
+    fn ids_request_answers_for_current_view_and_returns_none_when_stale() {
+        let folder = tempfile::tempdir().unwrap();
+        let app = folder.path().join("app");
+        add(&app, "First");
+        add(&app, "Second");
+        let mut thread = Thread::start(&app);
+        let a = opened(thread.open());
+        thread
+            .requests
+            .send(Request::Ids {
+                tag: 1,
+                token: a.token,
+                ranks: vec![0, 1],
+            })
+            .unwrap();
+        assert!(matches!(
+            thread.replies.recv_blocking().unwrap(),
+            Reply::Ids { tag: 1, ids: Some(ref ids) } if ids.len() == 2
+        ));
+        let _b = opened(thread.ask(
+            Query {
+                shelf: false,
+                text: "First".into(),
+                sort: vec![],
+            },
+            Cancel::default(),
+        ));
+        thread
+            .requests
+            .send(Request::Ids {
+                tag: 2,
+                token: a.token,
+                ranks: vec![0],
+            })
+            .unwrap();
+        assert!(matches!(
+            thread.replies.recv_blocking().unwrap(),
+            Reply::Ids { tag: 2, ids: None }
+        ));
     }
 }

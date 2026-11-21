@@ -343,6 +343,42 @@ impl BrowseReader {
     pub fn shelf(&mut self, token: ViewToken) -> Result<ShelfStrip> {
         self.read(token, |db, v| shelf_rows(db, v, &self.keys))
     }
+    pub fn ids(&mut self, token: ViewToken, ranks: &[u32]) -> Result<Vec<String>> {
+        self.read(token, |db, v| {
+            let mut out = Vec::with_capacity(ranks.len());
+            if ranks.len() <= 256 {
+                let mut stmt = db.prepare("SELECT id FROM book WHERE n=?")?;
+                for &rank in ranks {
+                    if let Some(&n) = v.visible.get(rank as usize)
+                        && let Some(id) =
+                            stmt.query_row([n], |r| r.get::<_, String>(0)).optional()?
+                    {
+                        out.push(id);
+                    }
+                }
+            } else {
+                let max = v.order.iter().max().copied().unwrap_or_default() as usize;
+                let mut by_n: Vec<Option<String>> = vec![None; max + 1];
+                let mut stmt = db.prepare("SELECT n, id FROM book ORDER BY n")?;
+                let mut rows = stmt.query([])?;
+                while let Some(r) = rows.next()? {
+                    let n = r.get::<_, u32>(0)? as usize;
+                    if n > max {
+                        break;
+                    }
+                    by_n[n] = Some(r.get(1)?);
+                }
+                for &rank in ranks {
+                    if let Some(&n) = v.visible.get(rank as usize)
+                        && let Some(id) = by_n.get(n as usize).and_then(|id| id.as_ref())
+                    {
+                        out.push(id.clone());
+                    }
+                }
+            }
+            Ok(out)
+        })
+    }
 }
 fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfStrip> {
     let by_letter = v.sort.0[0].field == Field::Author;
@@ -408,4 +444,41 @@ fn shelf_rows(db: &Connection, v: &View, keys: &sortkey::Keys) -> Result<ShelfSt
         thickness: thickness.into(),
         groups: groups.into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_resolves_small_and_large_rank_sets_and_rejects_stale_views() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture::generate(dir.path(), 400).unwrap();
+        let lib = Library::open(dir.path()).unwrap();
+        let mut reader = lib.browse_reader().unwrap();
+        let view = reader
+            .open(&BrowseQuery::default(), &Cancel::default())
+            .unwrap();
+        let first_two = reader.ids(view.token, &[0, 1]).unwrap();
+        assert_eq!(
+            first_two,
+            vec![view.first[0].id.clone(), view.first[1].id.clone()]
+        );
+        let all_ranks: Vec<u32> = (0..view.count).collect();
+        let all_ids = reader.ids(view.token, &all_ranks).unwrap();
+        assert_eq!(all_ids.len(), 400);
+        assert_eq!(all_ids[0], view.first[0].id);
+        assert_eq!(all_ids[1], view.first[1].id);
+        let newer = reader
+            .open(
+                &BrowseQuery {
+                    text: "atlas".into(),
+                    ..Default::default()
+                },
+                &Cancel::default(),
+            )
+            .unwrap();
+        assert!(reader.ids(view.token, &[0]).is_err());
+        assert!(!reader.ids(newer.token, &[0]).unwrap().is_empty());
+    }
 }

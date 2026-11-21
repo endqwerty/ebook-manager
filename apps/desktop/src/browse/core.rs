@@ -450,6 +450,7 @@ impl Core {
                     other => self.phase = other,
                 }
             }
+            Reply::Ids { .. } => {}
         }
     }
 
@@ -721,6 +722,7 @@ mod tests {
                             Request::Open { serial, .. } => open_key(*serial),
                             Request::Locate { tag, .. } => locate_key(*tag),
                             Request::Page { token, page } => page_key(*token, *page),
+                            Request::Ids { tag, .. } => format!("ids {tag}"),
                         };
                         *self.owed.entry(sent).or_default() += 1;
                         self.requests.send(request).unwrap();
@@ -807,6 +809,7 @@ mod tests {
                     self.lost += 1;
                     page_key(*token, *page)
                 }
+                Reply::Ids { tag, .. } => format!("ids {tag}"),
             };
             match self.owed.get_mut(&answered) {
                 Some(count) if *count > 0 => *count -= 1,

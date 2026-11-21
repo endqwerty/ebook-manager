@@ -183,6 +183,7 @@ struct State {
     /// Loaded pages, oldest first.
     recent: VecDeque<u32>,
     live: HashMap<u32, glib::WeakRef<BookObject>>,
+    live_prune_at: usize,
     /// The selected books, by ID.
     selected: HashSet<String>,
     /// Places selected before their rows arrived. Each becomes an ID in
@@ -252,6 +253,29 @@ impl State {
         }
         places
     }
+    /// Selected places within `position..position + n_items`.
+    fn selection_in_range(&self, position: u32, n_items: u32) -> Vec<u32> {
+        if n_items == 0 {
+            return Vec::new();
+        }
+        let end = position.saturating_add(n_items);
+        let mut places: Vec<u32> = self.pending.range(position..end).copied().collect();
+        if !self.selected.is_empty() {
+            let first_page = position / PAGE;
+            let last_page = (end - 1) / PAGE;
+            for page in first_page..=last_page {
+                if let Some(rows) = self.pages.get(&page) {
+                    for (n, row) in rows.iter().enumerate() {
+                        let rank = page * PAGE + n as u32;
+                        if rank >= position && rank < end && self.selected.contains(&row.id) {
+                            places.push(rank);
+                        }
+                    }
+                }
+            }
+        }
+        places
+    }
     /// The places still waiting for a row.
     fn waiting(&self) -> Vec<BookObject> {
         self.live
@@ -286,6 +310,8 @@ mod imp {
         pub(super) state: RefCell<State>,
         pub(super) parked: RefCell<Option<BookObject>>,
         pub(super) hooks: RefCell<Option<Rc<Hooks>>>,
+        pub(super) id_tag: Cell<u64>,
+        pub(super) id_waiters: RefCell<HashMap<u64, async_channel::Sender<Option<Vec<String>>>>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for BookListModel {
@@ -313,8 +339,10 @@ mod imp {
                 let row = state.row(position);
                 let wanted = row.is_none();
                 let object = BookObject::new(position, row);
-                if state.live.len() > 4096 {
+                let prune_at = state.live_prune_at.max(4096);
+                if state.live.len() >= prune_at {
                     state.live.retain(|_, weak| weak.upgrade().is_some());
+                    state.live_prune_at = (state.live.len() * 2).max(4096);
                 }
                 state.live.insert(position, object.downgrade());
                 (object, wanted)
@@ -382,8 +410,8 @@ mod imp {
         fn is_selected(&self, position: u32) -> bool {
             self.state.borrow().is_selected(position)
         }
-        fn selection_in_range(&self, _position: u32, _n_items: u32) -> gtk::Bitset {
-            bits(&self.state.borrow().selection())
+        fn selection_in_range(&self, position: u32, n_items: u32) -> gtk::Bitset {
+            bits(&self.state.borrow().selection_in_range(position, n_items))
         }
         fn select_item(&self, position: u32, unselect_rest: bool) -> bool {
             self.select(
@@ -430,18 +458,23 @@ glib::wrapper! {
 }
 
 /// The books a command was invoked on: those whose IDs were known then,
-/// and the places whose rows had not arrived.
+/// and any unloaded ranks resolved off the GTK thread by the read thread.
 pub struct Targets {
     ids: Vec<String>,
-    waiting: Vec<BookObject>,
+    pending: Option<async_channel::Receiver<Option<Vec<String>>>>,
+    failed: bool,
 }
 
 impl Targets {
-    /// The IDs, once every row has arrived. `None` when the view went
-    /// first, and a place no longer stands for a book.
+    /// The IDs, once every selected rank has been resolved. `None` when the
+    /// view went first or the read thread stopped.
     pub async fn ids(mut self) -> Option<Vec<String>> {
-        for place in self.waiting {
-            self.ids.push(place.loaded_row().await?.id.clone());
+        if self.failed {
+            return None;
+        }
+        if let Some(rx) = self.pending {
+            let resolved = rx.recv().await.ok()??;
+            self.ids.extend(resolved);
         }
         Some(self.ids)
     }
@@ -473,7 +506,13 @@ impl BookListModel {
                 // A reply from a thread that has been replaced means
                 // nothing to the one that replaced it.
                 if model.imp().started.get() == started {
-                    model.run(Event::Reply(reply));
+                    if let worker::Reply::Ids { tag, ids } = reply {
+                        if let Some(tx) = model.imp().id_waiters.borrow_mut().remove(&tag) {
+                            let _ = tx.try_send(ids);
+                        }
+                    } else {
+                        model.run(Event::Reply(reply));
+                    }
                 }
             }
             // The thread ended, which it does not do while the model
@@ -482,6 +521,7 @@ impl BookListModel {
                 && model.imp().started.get() == started
             {
                 model.imp().requests.replace(None);
+                model.imp().id_waiters.borrow_mut().clear();
                 model.run(Event::Stopped);
             }
         });
@@ -764,7 +804,7 @@ impl BookListModel {
     }
 
     /// The books selected at this moment, for a command to act on whatever
-    /// is selected by the time their rows have all arrived.
+    /// is selected by the time their IDs have arrived.
     pub fn targets(&self) -> Targets {
         let (ids, pending): (Vec<String>, Vec<u32>) = {
             let state = self.imp().state.borrow();
@@ -773,12 +813,52 @@ impl BookListModel {
                 state.pending.iter().copied().collect(),
             )
         };
+        if pending.is_empty() {
+            return Targets {
+                ids,
+                pending: None,
+                failed: false,
+            };
+        }
+        let token = match self.imp().core.borrow().as_ref().map(|c| &c.phase) {
+            Some(Phase::Showing { view, .. }) => view.token,
+            _ => {
+                return Targets {
+                    ids,
+                    pending: None,
+                    failed: true,
+                };
+            }
+        };
+        let (tx, rx) = async_channel::bounded(1);
+        let tag = self.imp().id_tag.get() + 1;
+        self.imp().id_tag.set(tag);
+        let sent = self
+            .imp()
+            .requests
+            .borrow()
+            .as_ref()
+            .is_some_and(|requests| {
+                requests
+                    .send(Request::Ids {
+                        tag,
+                        token,
+                        ranks: pending,
+                    })
+                    .is_ok()
+            });
+        if !sent {
+            return Targets {
+                ids,
+                pending: None,
+                failed: true,
+            };
+        }
+        self.imp().id_waiters.borrow_mut().insert(tag, tx);
         Targets {
             ids,
-            waiting: pending
-                .into_iter()
-                .filter_map(|rank| self.item(rank).and_downcast())
-                .collect(),
+            pending: Some(rx),
+            failed: false,
         }
     }
 }
@@ -819,7 +899,8 @@ mod tests {
         // targets are taken when it is invoked.
         let targets = Targets {
             ids: vec!["first".into()],
-            waiting: vec![],
+            pending: None,
+            failed: false,
         };
         let ids = glib::MainContext::new().block_on(targets.ids());
         assert_eq!(ids, Some(vec!["first".to_owned()]));
@@ -867,5 +948,20 @@ mod tests {
         assert!(state.pending.is_empty());
         assert!(state.selected.contains(&format!("r{}", 700 % PAGE)));
         assert!(state.is_selected(700));
+    }
+
+    #[test]
+    fn selection_in_range_only_returns_ranks_inside_the_requested_window() {
+        let mut state = state(100_000);
+        state.store_page(0, vec![row("a"), row("b")]);
+        state.selected.insert("a".into());
+        for rank in 2..100_000 {
+            state.pending.insert(rank);
+        }
+        let window = state.selection_in_range(500, 10);
+        assert_eq!(window, (500..510).collect::<Vec<_>>());
+        assert!(state.selection_in_range(500, 0).is_empty());
+        let first = state.selection_in_range(0, 4);
+        assert_eq!(first, vec![2, 3, 0]);
     }
 }

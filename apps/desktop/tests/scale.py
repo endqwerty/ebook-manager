@@ -505,6 +505,19 @@ def shelf_run(binary, root):
             assert focused_name() and focused_name() != first
             print(f"PASS arrow navigation resumes after Escape from {result}", flush=True)
         smoke.xd("windowsize", wid, 1020, 720)
+        key("ctrl+a")
+        started = time.monotonic()
+        key("ctrl+d")
+        find("Choose an export folder")
+        picker_elapsed = time.monotonic() - started
+        assert picker_elapsed < 10.0, f"shelf export picker took {picker_elapsed:.2f}s"
+        key("Escape")
+        focus("Ebook Manager")
+        key("ctrl+shift+a")
+        print(
+            f"PASS shelf Ctrl+A + Ctrl+D at {BOOKS:,} books opened picker in {picker_elapsed:.2f}s",
+            flush=True,
+        )
         key("ctrl+1")
         find("Books", "table")
         key("ctrl+w")
@@ -706,6 +719,27 @@ def run(binary, fixture, root):
         key("ctrl+Home")
         find("Book 0 A distant atlas")
         print("PASS search, and the last rows of the search and of the library", flush=True)
+
+        # Ctrl+A then Ctrl+D at 100,000 books must open the folder picker
+        # promptly and let the reader stop the export without hanging (#114).
+        export_dir = root / "export-all"
+        export_dir.mkdir()
+        key("ctrl+a")
+        started = time.monotonic()
+        key("ctrl+d")
+        smoke.picker(export_dir, "Choose an export folder")
+        picker_elapsed = time.monotonic() - started
+        assert picker_elapsed < 10.0, f"export picker took {picker_elapsed:.2f}s"
+        sending = find("Sending to device", "frame")
+        smoke.click("Stop after current book", parent=sending)
+        find("Export stopped after", contains=True, parent=sending)
+        smoke.click("Done", parent=sending)
+        focus("Ebook Manager")
+        key("ctrl+shift+a")
+        print(
+            f"PASS Ctrl+A + Ctrl+D at {BOOKS:,} books opened picker in {picker_elapsed:.2f}s and stopped cleanly",
+            flush=True,
+        )
 
         # Move down a few screens, which selects a book on the way.
         key("Next", "Next", "Next")
