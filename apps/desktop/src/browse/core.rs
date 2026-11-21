@@ -647,13 +647,21 @@ mod tests {
         format!("page {page} of {token:?}")
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum OpenOutcome {
+        Succeeded,
+        Unchanged,
+        FailedOrCancelled,
+        UnreadablePlace,
+    }
+
     /// The model's core, the real read thread, and a stand-in for the
     /// window: places waiting for rows, and where the reader is.
     struct Harness {
         core: Core,
         store: Store,
-        requests: mpsc::Sender<Request>,
-        replies: async_channel::Receiver<Reply>,
+        requests: Option<mpsc::Sender<Request>>,
+        replies: Option<async_channel::Receiver<Reply>>,
         /// How many replies each request sent is still owed.
         owed: HashMap<String, u32>,
         /// Ranks a place is waiting for a row at.
@@ -662,41 +670,72 @@ mod tests {
         filled: Vec<u32>,
         /// Where the reader is, which the steps move about.
         anchors: RefCell<Anchors>,
-        /// The view the reader last gave, whoever it was for.
-        readers: Option<ViewToken>,
+        /// The view the reader last gave: token, count and first-page book IDs.
+        readers: Option<(ViewToken, u32, Vec<String>)>,
+        /// First-page book IDs currently shown by the window.
+        shown_first: Vec<String>,
+        latest_open_serial: u64,
+        latest_open_outcome: Option<OpenOutcome>,
+        thread_stopped: bool,
         steps: u64,
         replies_seen: u64,
         unchanged: u64,
         lost: u64,
+        stops: u64,
+        evictions: u64,
         seed: u64,
     }
 
     impl Harness {
         fn new(app: &std::path::Path, seed: u64) -> Self {
-            let (requests, received) = mpsc::channel();
-            let (send, replies) = async_channel::unbounded();
             let store = Store::open(app.to_owned(), || {});
-            let for_thread = store.clone();
-            std::thread::spawn(move || crate::browse::worker::serve(for_thread, received, send));
             let (core, effects) = Core::new(Query::default());
             let mut harness = Self {
                 core,
                 store,
-                requests,
-                replies,
+                requests: None,
+                replies: None,
                 owed: HashMap::new(),
                 waiting: vec![],
                 filled: vec![],
                 anchors: RefCell::new(Anchors::default()),
                 readers: None,
+                shown_first: vec![],
+                latest_open_serial: 0,
+                latest_open_outcome: None,
+                thread_stopped: false,
                 steps: 0,
                 replies_seen: 0,
                 unchanged: 0,
                 lost: 0,
+                stops: 0,
+                evictions: 0,
                 seed,
             };
+            harness.start_thread();
             harness.perform(effects);
             harness
+        }
+
+        fn start_thread(&mut self) {
+            let (requests, received) = mpsc::channel();
+            let (send, replies) = async_channel::unbounded();
+            let for_thread = self.store.clone();
+            std::thread::spawn(move || crate::browse::worker::serve(for_thread, received, send));
+            self.requests = Some(requests);
+            self.replies = Some(replies);
+            self.owed.clear();
+            self.readers = None;
+            self.thread_stopped = false;
+        }
+
+        fn stop_thread(&mut self) {
+            self.requests = None;
+            self.replies = None;
+            self.owed.clear();
+            self.thread_stopped = true;
+            self.stops += 1;
+            self.event(Event::Stopped);
         }
 
         fn random(&mut self, below: u64) -> u64 {
@@ -718,14 +757,22 @@ mod tests {
             for effect in effects {
                 match effect {
                     Effect::Send(request) => {
-                        let sent = match &request {
-                            Request::Open { serial, .. } => open_key(*serial),
-                            Request::Locate { tag, .. } => locate_key(*tag),
-                            Request::Page { token, page } => page_key(*token, *page),
-                            Request::Ids { tag, .. } => format!("ids {tag}"),
-                        };
-                        *self.owed.entry(sent).or_default() += 1;
-                        self.requests.send(request).unwrap();
+                        if let Request::Open { serial, .. } = &request {
+                            self.latest_open_serial = *serial;
+                            self.latest_open_outcome = None;
+                        }
+                        if let Some(requests) = &self.requests {
+                            let sent = match &request {
+                                Request::Open { serial, .. } => open_key(*serial),
+                                Request::Locate { tag, .. } => locate_key(*tag),
+                                Request::Page { token, page } => page_key(*token, *page),
+                                Request::Ids { tag, .. } => format!("ids {tag}"),
+                            };
+                            *self.owed.entry(sent).or_default() += 1;
+                            requests.send(request).unwrap();
+                        } else {
+                            self.event(Event::Stopped);
+                        }
                     }
                     // Every waiting place is told.
                     Effect::Gone => self.waiting.clear(),
@@ -741,6 +788,7 @@ mod tests {
                             self.core.query.shelf.then_some(view.count as usize)
                         );
                         assert!(self.waiting.is_empty(), "a swap left places untold");
+                        self.shown_first = view.first.iter().map(|r| r.id.clone()).collect();
                         self.filled = vec![0];
                         self.filled.extend(pages.iter().map(|(page, _)| *page));
                         if background
@@ -777,6 +825,7 @@ mod tests {
                     Effect::Empty => {
                         assert!(self.waiting.is_empty(), "an error left places untold");
                         self.filled.clear();
+                        self.shown_first.clear();
                     }
                     Effect::Place(_) | Effect::Absent(_) => {}
                 }
@@ -795,15 +844,36 @@ mod tests {
                     if let Some(strip) = strip {
                         assert_eq!(strip.thickness.len(), view.count as usize);
                     }
-                    self.readers = Some(view.token);
+                    self.readers = Some((
+                        view.token,
+                        view.count,
+                        view.first.iter().map(|r| r.id.clone()).collect(),
+                    ));
+                    if *serial == self.latest_open_serial {
+                        self.latest_open_outcome = Some(OpenOutcome::Succeeded);
+                    }
                     open_key(*serial)
                 }
                 Reply::Unchanged { serial } => {
                     self.unchanged += 1;
+                    if *serial == self.latest_open_serial {
+                        self.latest_open_outcome = Some(OpenOutcome::Unchanged);
+                    }
                     open_key(*serial)
                 }
-                Reply::Failed { serial, .. } | Reply::Cancelled { serial } => open_key(*serial),
-                Reply::Located { tag, .. } | Reply::NotLocated { tag, .. } => locate_key(*tag),
+                Reply::Failed { serial, .. } | Reply::Cancelled { serial } => {
+                    if *serial == self.latest_open_serial {
+                        self.latest_open_outcome = Some(OpenOutcome::FailedOrCancelled);
+                    }
+                    open_key(*serial)
+                }
+                Reply::Located { tag, .. } => locate_key(*tag),
+                Reply::NotLocated { tag, why } => {
+                    if *why == Why::Unreadable {
+                        self.latest_open_outcome = Some(OpenOutcome::UnreadablePlace);
+                    }
+                    locate_key(*tag)
+                }
                 Reply::Page { token, page, .. } => page_key(*token, *page),
                 Reply::NoPage { token, page } => {
                     self.lost += 1;
@@ -829,7 +899,7 @@ mod tests {
         /// One thing the reader or the library does.
         fn act(&mut self) {
             self.steps += 1;
-            match self.random(12) {
+            match self.random(14) {
                 // Another search or sort, one of which cannot be opened.
                 0 | 1 => {
                     let query = match self.random(5) {
@@ -903,7 +973,24 @@ mod tests {
                     ];
                     self.event(Event::Prune(ids));
                 }
-                9 => self.event(Event::Retry),
+                9 => {
+                    if self.thread_stopped {
+                        self.start_thread();
+                    }
+                    self.event(Event::Retry);
+                }
+                // A page leaves the cache, so a later Want asks for it again.
+                10 => {
+                    if !self.filled.is_empty() {
+                        let idx = self.random(self.filled.len() as u64) as usize;
+                        self.filled.swap_remove(idx);
+                        self.evictions += 1;
+                    }
+                }
+                // Occasionally the read thread stops; a later Retry starts a new one.
+                11 if !self.thread_stopped && self.random(12) == 0 => {
+                    self.stop_thread();
+                }
                 // The reader scrolls or moves the focus.
                 _ => {
                     let current = fixture::id(self.random(u64::from(BOOKS)) as u32);
@@ -929,6 +1016,9 @@ mod tests {
             let started = Instant::now();
             let mut delivered = 0;
             while self.outstanding() > 0 {
+                let Some(replies) = &self.replies else {
+                    break;
+                };
                 delivered += 1;
                 assert!(
                     delivered < 10_000,
@@ -936,7 +1026,7 @@ mod tests {
                     self.steps
                 );
                 let reply = loop {
-                    match self.replies.try_recv() {
+                    match replies.try_recv() {
                         Ok(reply) => break reply,
                         Err(_) => {
                             assert!(
@@ -955,11 +1045,13 @@ mod tests {
                 };
                 self.deliver(reply);
             }
-            assert!(
-                self.replies.is_empty(),
-                "step {}: a reply nothing asked for",
-                self.steps
-            );
+            if let Some(replies) = &self.replies {
+                assert!(
+                    replies.is_empty(),
+                    "step {}: a reply nothing asked for",
+                    self.steps
+                );
+            }
         }
 
         /// What must hold once the read thread has nothing left to say.
@@ -974,13 +1066,38 @@ mod tests {
                         view.query, self.core.query,
                         "step {step}: an older query's books"
                     );
+                    let Some((expected_token, expected_count, expected_first)) = &self.readers
+                    else {
+                        panic!("step {step}: the model shows a view the reader never opened");
+                    };
                     assert_eq!(
-                        Some(view.token),
-                        self.readers,
+                        view.token, *expected_token,
                         "step {step}: the model shows a view the reader does not hold"
                     );
+                    assert_eq!(
+                        view.count, *expected_count,
+                        "step {step}: shown book count differs from reader"
+                    );
+                    assert_eq!(
+                        &self.shown_first, expected_first,
+                        "step {step}: shown first page differs from reader"
+                    );
                 }
-                Phase::Error { .. } => {}
+                Phase::Error { .. } => {
+                    assert!(
+                        self.shown_first.is_empty(),
+                        "step {step}: error phase left first page shown"
+                    );
+                    assert!(
+                        self.thread_stopped
+                            || matches!(
+                                self.latest_open_outcome,
+                                Some(OpenOutcome::FailedOrCancelled | OpenOutcome::UnreadablePlace)
+                            ),
+                        "step {step}: error shown although newest open succeeded ({:?})",
+                        self.latest_open_outcome
+                    );
+                }
                 Phase::Showing { .. } => {
                     panic!("step {step}: an open in flight with no reply owed")
                 }
@@ -1249,7 +1366,7 @@ mod tests {
             // thread's replies taken at any point between.
             for _ in 0..1 + harness.random(9) {
                 if harness.random(3) == 0 {
-                    if let Ok(reply) = harness.replies.try_recv() {
+                    if let Some(reply) = harness.replies.as_ref().and_then(|r| r.try_recv().ok()) {
                         harness.deliver(reply);
                     }
                 } else {
@@ -1260,15 +1377,21 @@ mod tests {
             harness.check();
         }
         eprintln!(
-            "{} steps and {} replies in {:.1} s, {} of them Unchanged and {} refused pages",
+            "{} steps and {} replies in {:.1} s, {} Unchanged, {} refused pages, {} stops, {} evictions",
             harness.steps,
             harness.replies_seen,
             started.elapsed().as_secs_f64(),
             harness.unchanged,
-            harness.lost
+            harness.lost,
+            harness.stops,
+            harness.evictions
         );
         assert!(
-            harness.steps > 5000 && harness.unchanged > 50 && harness.lost > 20,
+            harness.steps > 5000
+                && harness.unchanged > 50
+                && harness.lost > 20
+                && harness.stops > 5
+                && harness.evictions > 20,
             "the run was too thin"
         );
     }
