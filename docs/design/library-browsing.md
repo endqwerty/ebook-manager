@@ -225,6 +225,7 @@ impl BrowseReader {
     pub fn open(&mut self, query: &BrowseQuery, cancel: &Cancel) -> Result<OpenView>;
     pub fn window(&mut self, view: ViewToken, start: u32, len: u32) -> Result<Vec<BrowseRow>>;
     pub fn locate(&mut self, view: ViewToken, ids: &[String]) -> Result<Vec<Option<u32>>>;
+    pub fn ids(&mut self, view: ViewToken, ranks: &[u32]) -> Result<Vec<String>>;
     pub fn shelf(&mut self, view: ViewToken) -> Result<ShelfStrip>;
     pub fn changed(&mut self) -> Result<bool>;   // has the catalogue changed since the view opened
 }
@@ -239,7 +240,7 @@ and the first page see one state of the catalogue, and it records that state's
 change counter in the view. `changed` compares the counter and is the signal
 to open the query again.
 
-A view stays readable after the catalogue changes. `window`, `locate` and
+A view stays readable after the catalogue changes. `window`, `locate`, `ids` and
 `shelf` each read in their own transaction and refuse only a token that is
 not the reader's current view. Between reopens a view shows current rows at
 the ranks they had when it opened, and a book added since is absent until the
@@ -252,7 +253,7 @@ read on a large library, where a write always lands before an open returns.
 This holds for one catalogue file. A file rebuilt from the portable folder
 numbers its rows afresh, so a view of the old file must never be answered
 from the new one. Each catalogue file gets a random identity in `meta` when
-it is created. A view records it at `open`, and `window`, `locate` and
+it is created. A view records it at `open`, and `window`, `locate`, `ids` and
 `shelf` read it in the same transaction as their rows. When it differs or
 cannot be read they fail with `CatalogueReplaced`. `open` and `changed` fail
 the same way when the file at the catalogue's path is no longer the one the
@@ -278,7 +279,12 @@ missing row.
 
 `window` fetches the rows for a slice of the view by primary key. `locate`
 gives the ranks of books by ID, for keeping selection and scroll position.
-`shelf` returns each book's spine thickness in view order,
+`ids` resolves a slice of ranks in the current view to their book IDs in the
+caller's rank order, skipping out-of-range ranks and missing rows, so commands
+acting on a large selection (such as `Ctrl+A` then `Ctrl+D` at 100,000 books)
+do not need to page every row through the UI list model. `ids` is checked by
+`ids_resolves_small_and_large_rank_sets_and_rejects_stale_views` and by
+`scale.py`. `shelf` returns each book's spine thickness in view order,
 `min(48, 16 + round(words / 12000))` or 24 when the length is unknown, and
 the group starts for a first sort key of Author (the first letter of the sort
 name; see below), Series (series name) or a date (year). Any other first key has no
@@ -432,7 +438,7 @@ the keyboard.
 
 ```mermaid
 flowchart LR
-    UI[GTK main thread] -- open, window, locate, shelf --> RT[Read thread: BrowseReader]
+    UI[GTK main thread] -- open, window, locate, ids, shelf --> RT[Read thread: BrowseReader]
     UI -- import, edit, save position --> WT[Write thread: Library]
     WT -- changed --> UI
 ```

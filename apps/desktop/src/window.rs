@@ -57,16 +57,24 @@ struct Library {
     surveying: Cell<bool>,
 }
 
-fn books(count: u32) -> String {
+fn grouped(count: u32) -> String {
     let digits = count.to_string();
-    let mut grouped = String::new();
+    let mut out = String::new();
     for (n, digit) in digits.chars().enumerate() {
         if n > 0 && (digits.len() - n).is_multiple_of(3) {
-            grouped.push(',');
+            out.push(',');
         }
-        grouped.push(digit);
+        out.push(digit);
     }
-    format!("{grouped} {}", if count == 1 { "book" } else { "books" })
+    out
+}
+
+fn books(count: u32) -> String {
+    format!(
+        "{} {}",
+        grouped(count),
+        if count == 1 { "book" } else { "books" }
+    )
 }
 
 /// The desktop's text size setting, as a multiple of the usual size.
@@ -570,47 +578,179 @@ impl Library {
                 let Some(folder) = paths.into_iter().next() else {
                     return;
                 };
-                let books = books.clone();
-                let library = library.clone();
-                glib::spawn_future_local(async move {
-                    let result = library
-                        .store
-                        .run(move |lib| {
-                            books
-                                .iter()
-                                .map(|id| {
-                                    let title = lib.book(id)?.title;
-                                    let source = lib.managed_file(id)?;
-                                    Ok(ebook_device::export_epub(&source, &folder, &title)?)
-                                })
-                                .collect::<Result<Vec<_>>>()
-                        })
-                        .await;
-                    let window = &library.window;
-                    match result.as_deref() {
-                        Ok([ExportOutcome::Copied(path)]) => {
-                            notice(window, "Book exported", &path.display().to_string())
+                if books.len() == 1 {
+                    let id = books[0].clone();
+                    let library = library.clone();
+                    glib::spawn_future_local(async move {
+                        let lookup = library
+                            .store
+                            .run(move |lib| Ok((lib.book(&id)?.title, lib.managed_file(&id)?)))
+                            .await;
+                        let result = match lookup {
+                            Ok((title, source)) => gio::spawn_blocking(move || {
+                                ebook_device::export_epub(&source, &folder, &title)
+                            })
+                            .await
+                            .map_err(|_| anyhow::anyhow!("Export interrupted"))
+                            .and_then(|r| Ok(r?)),
+                            Err(e) => Err(e),
+                        };
+                        let window = &library.window;
+                        match result {
+                            Ok(ExportOutcome::Copied(path)) => {
+                                notice(window, "Book exported", &path.display().to_string())
+                            }
+                            Ok(ExportOutcome::AlreadyPresent(path)) => {
+                                notice(window, "Already exported", &path.display().to_string())
+                            }
+                            Err(e) => notice(window, "Couldn’t export", &format!("{e:#}")),
                         }
-                        Ok([ExportOutcome::AlreadyPresent(path)]) => {
-                            notice(window, "Already exported", &path.display().to_string())
-                        }
-                        Ok(outcomes) => {
-                            let present = outcomes
-                                .iter()
-                                .filter(|o| matches!(o, ExportOutcome::AlreadyPresent(_)))
-                                .count();
-                            notice(
-                                window,
-                                &format!("{} exported", books_exported(outcomes.len() - present)),
-                                &if present > 0 {
-                                    format!("{} already in the folder.", books_exported(present))
-                                } else {
-                                    String::new()
-                                },
-                            )
-                        }
-                        Err(e) => notice(window, "Couldn’t export", &format!("{e:#}")),
+                    });
+                    return;
+                }
+                let total = books.len();
+                let d = gtk::Window::builder()
+                    .title("Sending to device")
+                    .transient_for(&library.window)
+                    .default_width(440)
+                    .build();
+                let content = column(12);
+                inset(&content, 20);
+                d.set_child(Some(&content));
+                let heading = label(
+                    &format!("Exporting 1 of {}", grouped(total as u32)),
+                    "title-2",
+                );
+                content.append(&heading);
+                let bar = gtk::ProgressBar::new();
+                content.append(&bar);
+                let counts = label("0 exported · 0 already in folder · 0 failed", "body");
+                content.append(&counts);
+                let detail = label("", "dim-label");
+                detail.set_visible(false);
+                content.append(&detail);
+                let stop = gtk::Button::with_label("Stop after current book");
+                content.append(&stop);
+                let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let done_flag = Rc::new(Cell::new(false));
+                let c = cancelled.clone();
+                stop.connect_clicked(move |b| {
+                    c.store(true, std::sync::atomic::Ordering::Relaxed);
+                    b.set_sensitive(false);
+                });
+                let c_close = cancelled.clone();
+                let d_close = done_flag.clone();
+                let stop_close = stop.clone();
+                d.connect_close_request(move |_| {
+                    if d_close.get() {
+                        glib::Propagation::Proceed
+                    } else {
+                        c_close.store(true, std::sync::atomic::Ordering::Relaxed);
+                        stop_close.set_sensitive(false);
+                        glib::Propagation::Stop
                     }
+                });
+                d.set_deletable(false);
+                d.present();
+                let books = books.clone();
+                let store = library.store.clone();
+                let (tx, rx) =
+                    async_channel::bounded::<(usize, usize, usize, usize, Option<String>, bool)>(4);
+                let worker_cancelled = cancelled.clone();
+                std::thread::spawn(move || {
+                    let mut copied = 0usize;
+                    let mut present = 0usize;
+                    let mut failed = 0usize;
+                    let mut first_error: Option<String> = None;
+                    let mut last_ui = std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_millis(100))
+                        .unwrap_or_else(std::time::Instant::now);
+                    let mut done = 0usize;
+                    for id in books {
+                        if worker_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        let lookup = store
+                            .call(move |lib| Ok((lib.book(&id)?.title, lib.managed_file(&id)?)));
+                        let outcome = match lookup {
+                            Ok((title, source)) => {
+                                ebook_device::export_epub(&source, &folder, &title)
+                                    .map_err(anyhow::Error::from)
+                            }
+                            Err(e) => Err(e),
+                        };
+                        match outcome {
+                            Ok(ExportOutcome::Copied(_)) => copied += 1,
+                            Ok(ExportOutcome::AlreadyPresent(_)) => present += 1,
+                            Err(e) => {
+                                failed += 1;
+                                if first_error.is_none() {
+                                    first_error = Some(format!("{e:#}"));
+                                }
+                            }
+                        }
+                        done += 1;
+                        if last_ui.elapsed() >= std::time::Duration::from_millis(50) {
+                            last_ui = std::time::Instant::now();
+                            let _ = tx.try_send((
+                                done,
+                                copied,
+                                present,
+                                failed,
+                                first_error.clone(),
+                                false,
+                            ));
+                        }
+                    }
+                    let _ = tx.send_blocking((done, copied, present, failed, first_error, true));
+                });
+                glib::spawn_future_local(async move {
+                    let mut final_state = (0usize, 0usize, 0usize, 0usize, None);
+                    while let Ok((done, copied, present, failed, first_error, finished)) =
+                        rx.recv().await
+                    {
+                        final_state = (done, copied, present, failed, first_error);
+                        heading.set_text(&format!(
+                            "Exporting {} of {}",
+                            grouped(done as u32),
+                            grouped(total as u32),
+                        ));
+                        bar.set_fraction(done as f64 / total as f64);
+                        counts.set_text(&format!(
+                            "{} exported · {} already in folder · {} failed",
+                            grouped(copied as u32),
+                            grouped(present as u32),
+                            grouped(failed as u32),
+                        ));
+                        if let Some(err) = &final_state.4 {
+                            detail.set_text(err);
+                            detail.set_visible(true);
+                        }
+                        if finished {
+                            break;
+                        }
+                    }
+                    let (done, copied, _, _, _) = final_state;
+                    heading.set_text(&if cancelled.load(std::sync::atomic::Ordering::Relaxed)
+                        && done < total
+                    {
+                        format!(
+                            "Export stopped after {} of {}",
+                            grouped(done as u32),
+                            grouped(total as u32),
+                        )
+                    } else {
+                        format!("{} exported", books_exported(copied))
+                    });
+                    content.remove(&stop);
+                    let window = d.downgrade();
+                    content.append(&button("Done", move || {
+                        if let Some(w) = window.upgrade() {
+                            w.close();
+                        }
+                    }));
+                    done_flag.set(true);
+                    d.set_deletable(true);
                 });
             },
         );
