@@ -188,27 +188,40 @@ struct ClothKey {
     height: i32,
 }
 
+struct CpuRenderer(gsk::Renderer);
+
+impl Drop for CpuRenderer {
+    fn drop(&mut self) {
+        self.0.unrealize();
+    }
+}
+
 // A shared CPU renderer for caching cloth and shadow textures without forcing
 // a synchronous GPU readback (`vkQueueWaitIdle` / `glReadPixels`) on GL or
-// Vulkan renderers when a new width or colour enters the cache.
-fn texture_renderer(fallback: &gsk::Renderer) -> gsk::Renderer {
+// Vulkan renderers when a new width or colour enters the cache. Unrealized on
+// application shutdown (and on Drop as a fallback) per GTK's renderer contract.
+fn texture_renderer(fallback: &gsk::Renderer, display: &gdk::Display) -> gsk::Renderer {
     if fallback.is::<gsk::CairoRenderer>() {
         return fallback.clone();
     }
     thread_local! {
-        static CPU: RefCell<Option<gsk::Renderer>> = const { RefCell::new(None) };
+        static CPU: RefCell<Option<CpuRenderer>> = const { RefCell::new(None) };
     }
     CPU.with_borrow_mut(|slot| {
         if let Some(r) = slot.as_ref() {
-            return r.clone();
+            return r.0.clone();
         }
         let cairo = gsk::CairoRenderer::new();
-        if cairo
-            .realize_for_display(&gdk::Display::default().unwrap())
-            .is_ok()
-        {
+        if cairo.realize_for_display(display).is_ok() {
             let r: gsk::Renderer = cairo.upcast();
-            *slot = Some(r.clone());
+            if let Some(app) = gtk::gio::Application::default() {
+                app.connect_shutdown(|_| {
+                    CPU.with_borrow_mut(|slot| {
+                        slot.take();
+                    });
+                });
+            }
+            *slot = Some(CpuRenderer(r.clone()));
             r
         } else {
             fallback.clone()
@@ -218,8 +231,13 @@ fn texture_renderer(fallback: &gsk::Renderer) -> gsk::Renderer {
 
 // GTK keeps each widget's snapshot. Share just the cloth across titles and
 // bound the cache even when every book in the catalogue has a different colour.
-fn software_cloth(renderer: &gsk::Renderer, key: ClothKey, colour: &gdk::RGBA) -> gdk::Texture {
-    let renderer = texture_renderer(renderer);
+fn software_cloth(
+    renderer: &gsk::Renderer,
+    display: &gdk::Display,
+    key: ClothKey,
+    colour: &gdk::RGBA,
+) -> gdk::Texture {
+    let renderer = texture_renderer(renderer, display);
     thread_local! {
         static CLOTH: RefCell<std::collections::VecDeque<(ClothKey, gdk::Texture)>> = const { RefCell::new(std::collections::VecDeque::new()) };
     }
@@ -268,8 +286,12 @@ struct ShadowKey {
 // A resting spine's outset shadow depends only on its size and direction.
 // Caching it on Cairo avoids running a Gaussian blur for every spine in a
 // newly revealed row while scrolling.
-fn software_shadow(renderer: &gsk::Renderer, key: ShadowKey) -> (gdk::Texture, Rect) {
-    let renderer = texture_renderer(renderer);
+fn software_shadow(
+    renderer: &gsk::Renderer,
+    display: &gdk::Display,
+    key: ShadowKey,
+) -> (gdk::Texture, Rect) {
+    let renderer = texture_renderer(renderer, display);
     thread_local! {
         static SHADOW: RefCell<std::collections::VecDeque<(ShadowKey, gdk::Texture, Rect)>> =
             const { RefCell::new(std::collections::VecDeque::new()) };
@@ -435,6 +457,7 @@ impl Spine {
             if let Some(renderer) = renderer.as_ref().filter(|_| angle == 0.) {
                 let (tex, bounds) = software_shadow(
                     renderer,
+                    &self.display(),
                     ShadowKey {
                         scale: display_scale,
                         width: self.width(),
@@ -493,7 +516,7 @@ impl Spine {
                 scale: display_scale,
             };
             s.append_texture(
-                &software_cloth(renderer, key, &cloth),
+                &software_cloth(renderer, &self.display(), key, &cloth),
                 &Rect::new(0., 14., w, h.ceil()),
             );
         } else {
