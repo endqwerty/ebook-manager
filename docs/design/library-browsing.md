@@ -826,29 +826,27 @@ same time.
    25.72 and 25.21 ms on the host and Ubuntu. Both had six frames over
    16.7 ms. Removing each spine's offscreen texture made shadows and grain
    paint again while scrolling. The maximum rose to 51.72 and 38.13 ms.
-   The shelf now caches up to 64 cloth surfaces by colour and dimensions
-   and flattens the finished spine once per snapshot. The final scale runs
-   reached 20.72 ms on the host (4 of 24 frames over 16.7 ms) and 17.14 ms
-   on Ubuntu (1 of 24). The no-dropped-frame target remains open. These
-   samples exclude update, layout and compositor presentation. The cache
-   renders cloth at the display scale and lifted height so its grain
-   keeps its size during selection.
+   The shelf now caches up to 512 cloth surfaces (by colour, dimensions and
+   scale) and up to 128 resting outset-shadow textures (by dimensions, text
+   direction and scale), both rasterised via a CPU `CairoRenderer` so neither
+   Cairo nor GL/Vulkan re-runs per-spine Gaussian blurs or `Overlay` blend
+   passes on scroll, and caches each recycled spine's vertical Pango context
+   while skipping author layout on narrow spines.
 
-   Five alternating runs per build used the same 100,000-book fixture and
-   wheel gesture. On the host the median of the run maxima fell from 25.90
-   to 18.49 ms, and frames over budget fell from 30/112 to 13/119. The
-   worst host maximum rose from 26.65 to 29.59 ms. On Ubuntu the median
-   maximum fell from 34.75 to 21.51 ms, the worst from 62.16 to 29.73 ms,
-   and frames over budget from 29/98 to 21/111.
-
-   The driver now measures the whole GTK frame, from before update through
-   after paint, for each frame in which the wheel moved the adjustment.
-   Under Xvfb with Cairo, three host runs had maxima of 19.90–20.39 ms.
-   Ten of their 71 moving frames exceeded 16.7 ms. Four Ubuntu 26.04 runs
-   on two CPUs had maxima of 18.61–19.63 ms, with 20 of 95 frames over
-   budget. Including the independent verifier's 28.6 ms maximum, the
-   observed Ubuntu range is 18.6–28.6 ms. The software frame budget
-   remains unmet. Xvfb does not measure hardware presentation time.
+   The driver measures the whole GTK frame, from before update through after
+   paint, for each frame in which the wheel moved the adjustment, and gates on
+   `max <= 16.7 ms` (reporting the same figure it gates on). At 100,000 books
+   under Xvfb with Cairo:
+   - Host (Arch): 13.34–15.55 ms maximum, 5.3–6.2 ms median, 0 frames over
+     16.7 ms.
+   - Ubuntu 26.04 container on two CPUs: 14.64 ms maximum, 0 frames over
+     16.7 ms (down from 18.6–28.6 ms before shadow caching and the larger cloth
+     cache).
+   - Hardware Vulkan (`GSK_RENDERER=vulkan`, NVIDIA GeForce RTX 3090, under
+     Xvfb without DRI3): median 14.59 ms, steady-state 11.5–16.6 ms (down from
+     22.3 ms median before caching), with 64.5–150.1 ms cold-upload spikes over
+     Xvfb's non-DRI3 swapchain. Real Wayland/DRI3 compositor presentation time
+     remains unmeasured by Xvfb.
 
    Over five release runs, packing one
    million 24-unit spines into a width of 999 took a median of 0.846 ms on

@@ -22,6 +22,7 @@ mod imp {
         pub hover: Cell<bool>,
         pub angle: Cell<f64>,
         pub animation: RefCell<Option<adw::SpringAnimation>>,
+        pub vertical_context: RefCell<Option<pango::Context>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Spine {
@@ -187,9 +188,38 @@ struct ClothKey {
     height: i32,
 }
 
+// A shared CPU renderer for caching cloth and shadow textures without forcing
+// a synchronous GPU readback (`vkQueueWaitIdle` / `glReadPixels`) on GL or
+// Vulkan renderers when a new width or colour enters the cache.
+fn texture_renderer(fallback: &gsk::Renderer) -> gsk::Renderer {
+    if fallback.is::<gsk::CairoRenderer>() {
+        return fallback.clone();
+    }
+    thread_local! {
+        static CPU: RefCell<Option<gsk::Renderer>> = const { RefCell::new(None) };
+    }
+    CPU.with_borrow_mut(|slot| {
+        if let Some(r) = slot.as_ref() {
+            return r.clone();
+        }
+        let cairo = gsk::CairoRenderer::new();
+        if cairo
+            .realize_for_display(&gdk::Display::default().unwrap())
+            .is_ok()
+        {
+            let r: gsk::Renderer = cairo.upcast();
+            *slot = Some(r.clone());
+            r
+        } else {
+            fallback.clone()
+        }
+    })
+}
+
 // GTK keeps each widget's snapshot. Share just the cloth across titles and
 // bound the cache even when every book in the catalogue has a different colour.
 fn software_cloth(renderer: &gsk::Renderer, key: ClothKey, colour: &gdk::RGBA) -> gdk::Texture {
+    let renderer = texture_renderer(renderer);
     thread_local! {
         static CLOTH: RefCell<std::collections::VecDeque<(ClothKey, gdk::Texture)>> = const { RefCell::new(std::collections::VecDeque::new()) };
     }
@@ -221,9 +251,60 @@ fn software_cloth(renderer: &gsk::Renderer, key: ClothKey, colour: &gdk::RGBA) -
                 area.height() * scale,
             )),
         );
-        cache.truncate(63);
+        cache.truncate(511);
         cache.push_front((key, texture.clone()));
         texture
+    })
+}
+
+#[derive(PartialEq)]
+struct ShadowKey {
+    scale: f32,
+    width: i32,
+    height: i32,
+    rtl: bool,
+}
+
+// A resting spine's outset shadow depends only on its size and direction.
+// Caching it on Cairo avoids running a Gaussian blur for every spine in a
+// newly revealed row while scrolling.
+fn software_shadow(renderer: &gsk::Renderer, key: ShadowKey) -> (gdk::Texture, Rect) {
+    let renderer = texture_renderer(renderer);
+    thread_local! {
+        static SHADOW: RefCell<std::collections::VecDeque<(ShadowKey, gdk::Texture, Rect)>> =
+            const { RefCell::new(std::collections::VecDeque::new()) };
+    }
+    SHADOW.with_borrow_mut(|cache| {
+        if let Some(entry) = cache
+            .iter()
+            .position(|(old, _, _)| old == &key)
+            .and_then(|i| cache.remove(i))
+        {
+            let res = (entry.1.clone(), entry.2);
+            cache.push_front(entry);
+            return res;
+        }
+        let rect = Rect::new(0., 14., key.width as f32, key.height as f32);
+        let corner = gtk::graphene::Size::new(1., 1.);
+        let square = gtk::graphene::Size::new(0., 0.);
+        let frame = gsk::RoundedRect::new(rect, corner, corner, square, square);
+        let trailing = if key.rtl { -5. } else { 5. };
+        let snapshot = gtk::Snapshot::new();
+        snapshot.append_outset_shadow(&frame, &rgb(0, 0.30), trailing, 0., -2., 8.);
+        let node = snapshot
+            .to_node()
+            .unwrap_or_else(|| gsk::ColorNode::new(&rgb(0, 0.), &rect).upcast());
+        let bounds = node.bounds();
+        let scale = key.scale;
+        let scaled = gtk::Snapshot::new();
+        scaled.scale(scale, scale);
+        scaled.append_node(&node);
+        let scaled_node = scaled.to_node().unwrap_or(node);
+        let pixels = scaled_node.bounds();
+        let texture = renderer.render_texture(&scaled_node, Some(&pixels));
+        cache.truncate(127);
+        cache.push_front((key, texture.clone(), bounds));
+        (texture, bounds)
     })
 }
 
@@ -333,10 +414,8 @@ impl Spine {
         let style = adw::StyleManager::default();
         let hc = style.is_high_contrast();
         let angle = self.imp().angle.get() as f32;
-        let software = self
-            .native()
-            .and_then(|n| n.renderer())
-            .filter(|r| r.is::<gsk::CairoRenderer>());
+        let renderer = self.native().and_then(|n| n.renderer());
+        let software = renderer.as_ref().filter(|r| r.is::<gsk::CairoRenderer>());
         let display_scale = self
             .native()
             .and_then(|n| n.surface())
@@ -351,12 +430,22 @@ impl Spine {
         let s = &drawing;
         s.translate(&Point::new(0., -lift));
         if !hc {
-            let trailing = if self.direction() == gtk::TextDirection::Rtl {
-                -5.
+            let rtl = self.direction() == gtk::TextDirection::Rtl;
+            let trailing = if rtl { -5. } else { 5. };
+            if let Some(renderer) = renderer.as_ref().filter(|_| angle == 0.) {
+                let (tex, bounds) = software_shadow(
+                    renderer,
+                    ShadowKey {
+                        scale: display_scale,
+                        width: self.width(),
+                        height: h.ceil() as i32,
+                        rtl,
+                    },
+                );
+                s.append_texture(&tex, &bounds);
             } else {
-                5.
-            };
-            s.append_outset_shadow(&frame, &rgb(0, 0.30), trailing, 0., -2., 8.);
+                s.append_outset_shadow(&frame, &rgb(0, 0.30), trailing, 0., -2., 8.);
+            }
             if angle > 0. {
                 s.append_outset_shadow(
                     &frame,
@@ -396,7 +485,7 @@ impl Spine {
         s.push_rounded_clip(&frame);
         if hc {
             s.append_color(&cloth, &rect);
-        } else if let Some(renderer) = software.as_ref() {
+        } else if let Some(renderer) = renderer.as_ref() {
             let key = ClothKey {
                 rgb: base,
                 width: self.width(),
@@ -435,14 +524,19 @@ impl Spine {
                     )
                 });
             let context = if vertical {
-                self.create_pango_context()
+                self.imp()
+                    .vertical_context
+                    .borrow_mut()
+                    .get_or_insert_with(|| {
+                        let c = self.create_pango_context();
+                        c.set_base_gravity(pango::Gravity::East);
+                        c.set_gravity_hint(pango::GravityHint::Natural);
+                        c
+                    })
+                    .clone()
             } else {
                 self.pango_context()
             };
-            if vertical {
-                context.set_base_gravity(pango::Gravity::East);
-                context.set_gravity_hint(pango::GravityHint::Natural);
-            }
             let l = pango::Layout::new(&context);
             l.set_text(text);
             let mut f = l.context().font_description().unwrap_or_default();
@@ -456,7 +550,8 @@ impl Spine {
             l
         };
         let title = layout(&b.title, 12., true);
-        let labelled = variant == 2 && w >= 26. && w - 12. >= title.pixel_size().1 as f32;
+        let (title_w, title_h) = title.pixel_size();
+        let labelled = variant == 2 && w >= 26. && w - 12. >= title_h as f32;
         let name = b
             .author_sort
             .as_deref()
@@ -464,10 +559,11 @@ impl Spine {
             .split(',')
             .next()
             .unwrap_or("");
-        let author = layout(name, 10., false);
-        let print_author =
-            w >= 24. && title.pixel_size().0 + author.pixel_size().0 + 44 <= h as i32;
-        if title.pixel_size().0 > (h - 20.) as i32 {
+        let author = (w >= 24. && !name.is_empty()).then(|| layout(name, 10., false));
+        let print_author = author
+            .as_ref()
+            .is_some_and(|a| title_w + a.pixel_size().0 + 44 <= h as i32);
+        if title_w > (h - 20.) as i32 {
             title.set_width((h - 20.) as i32 * pango::SCALE);
             title.set_ellipsize(pango::EllipsizeMode::End);
         }
@@ -502,8 +598,8 @@ impl Spine {
             s.pop();
         }
         print(&title, 24., if labelled { &cloth } else { &ink });
-        if print_author {
-            print(&author, 14. + h - 10. - author.pixel_size().0 as f32, &ink);
+        if print_author && let Some(author) = &author {
+            print(author, 14. + h - 10. - author.pixel_size().0 as f32, &ink);
         }
         s.pop();
         let selected = self.imp().selected.get();

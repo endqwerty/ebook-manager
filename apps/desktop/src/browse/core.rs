@@ -683,6 +683,7 @@ mod tests {
         lost: u64,
         stops: u64,
         evictions: u64,
+        shelf_relocates: u64,
         seed: u64,
     }
 
@@ -710,6 +711,7 @@ mod tests {
                 lost: 0,
                 stops: 0,
                 evictions: 0,
+                shelf_relocates: 0,
                 seed,
             };
             harness.start_thread();
@@ -867,7 +869,25 @@ mod tests {
                     }
                     open_key(*serial)
                 }
-                Reply::Located { tag, .. } => locate_key(*tag),
+                Reply::Located { tag, .. } => {
+                    let place_serial = match self.core.locating.get(tag) {
+                        Some(Locating::Place { serial }) => Some(*serial),
+                        _ => None,
+                    };
+                    if let Some(serial) = place_serial
+                        && self.core.opening().is_some_and(|o| {
+                            o.serial == serial
+                                && o.reason == Placement::Refresh
+                                && o.query.shelf
+                                && o.arrived
+                                    .as_ref()
+                                    .is_some_and(|(_, _, asked)| *asked != *self.anchors.borrow())
+                        })
+                    {
+                        self.shelf_relocates += 1;
+                    }
+                    locate_key(*tag)
+                }
                 Reply::NotLocated { tag, why } => {
                     if *why == Why::Unreadable
                         && matches!(
@@ -894,7 +914,25 @@ mod tests {
                 ),
             }
             self.replies_seen += 1;
+            let was_opened = matches!(reply, Reply::Opened { .. });
             self.event(Event::Reply(reply));
+            // Occasionally the reader scrolls while placement (`Request::Locate`)
+            // is in flight on the read thread, exercising shelf re-location and Follow.
+            if was_opened && self.random(6) == 0 {
+                let current = fixture::id(self.random(u64::from(BOOKS)) as u32);
+                let top_offset = -(self.random(40) as f32);
+                *self.anchors.borrow_mut() = Anchors {
+                    shelf: Some(super::super::ShelfViewport {
+                        first: self.random(BOOKS as u64) as u32,
+                        capacity: 62,
+                    }),
+                    shelf_focus: Some(current.clone()),
+                    current: Some(current.clone()),
+                    top: Some(current),
+                    top_offset,
+                    focused: true,
+                };
+            }
         }
 
         fn outstanding(&self) -> u32 {
@@ -910,7 +948,7 @@ mod tests {
                     let query = match self.random(5) {
                         0 => Query::default(),
                         1 => Query {
-                            shelf: false,
+                            shelf: true,
                             text: "atlas".into(),
                             sort: vec![],
                         },
@@ -1382,21 +1420,23 @@ mod tests {
             harness.check();
         }
         eprintln!(
-            "{} steps and {} replies in {:.1} s, {} Unchanged, {} refused pages, {} stops, {} evictions",
+            "{} steps and {} replies in {:.1} s, {} Unchanged, {} refused pages, {} stops, {} evictions, {} shelf relocates",
             harness.steps,
             harness.replies_seen,
             started.elapsed().as_secs_f64(),
             harness.unchanged,
             harness.lost,
             harness.stops,
-            harness.evictions
+            harness.evictions,
+            harness.shelf_relocates
         );
         assert!(
             harness.steps > 5000
                 && harness.unchanged > 50
                 && harness.lost > 20
                 && harness.stops > 5
-                && harness.evictions > 20,
+                && harness.evictions > 20
+                && harness.shelf_relocates > 0,
             "the run was too thin"
         );
     }
