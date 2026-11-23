@@ -795,10 +795,12 @@ same time.
    The canvas holds a fixed number of rows: one above the viewport, the most
    rows a viewport of its height can cross, and one below, shifted inward at
    either end of the shelf. Scrolling rebinds the row that leaves to the row
-   that enters, so it rebuilds no row; a spine is built only when the row
-   that enters holds more books than any row before it. A row kept wholly off
-   screen parks its focus and closes its preview as a recycled row does, so a
-   focused spine is always either in view or parked, and the Menu key brings
+   that enters, so it rebuilds no row. A board keeps one spine per book of
+   the row it shows: taking a row with fewer books drops spines, and taking
+   one with more builds them, including ones it dropped earlier. A row whose
+   spines are wholly off screen, whatever of its board still shows, parks its
+   focus and closes its preview as a recycled row does, so a
+   focused spine is always at least partly in view or parked, and the Menu key brings
    a parked book back before opening its menu.
    Cairo lifts the head of the selected spine four units, leaves its foot on
    the board and enlarges its top strip. Projecting the lettering in pixel

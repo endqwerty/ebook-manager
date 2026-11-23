@@ -457,13 +457,23 @@ def shelf_run(binary, root):
         key("Escape")
         assert focused_name() == focus_before_wheel
         print("PASS Menu reveals the parked book and returns focus to it", flush=True)
-        # A row just past the bottom keeps its spines, and its focus, while
-        # off screen; Menu must still bring the focused book into view.
+        # A row kept just past the bottom parks its focus once its spines
+        # leave the view; Menu must still bring the book back into view.
         key("Home", *(["Down"] * 4))
         time.sleep(0.3)
         held = focused_name()
         smoke.xd("mousemove", "--window", wid, 400, 350, "click", "--repeat", 12, "--delay", 12, 4)
-        time.sleep(0.3)
+        # Its spines scrolled wholly out of view, the book's focus is parked.
+        # Wait for the wheel to finish too: a scroll that lands after Menu
+        # cancels the reveal, as a reader's own scroll would.
+        deadline = time.monotonic() + 8
+        shown, still = None, 0
+        while focused_name() is not None or still < 3:
+            assert time.monotonic() < deadline, (held, focused_name())
+            now = [n.get_name() for n in spines()]
+            still = still + 1 if now == shown else 0
+            shown = now
+            time.sleep(0.1)
         key("Menu")
         find("", "menu item")
         key("Escape")
