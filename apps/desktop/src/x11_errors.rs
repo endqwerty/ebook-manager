@@ -3,24 +3,36 @@
 //!
 //! When another client destroys one of our toplevel X windows, GTK can still
 //! paint it or set a property on it before GDK reads the destroy notice. The
-//! server answers that request with `BadWindow` or `BadDrawable`, and GDK's
-//! handler ends the process with status 1. Such an error names a window that
-//! is already gone, so nothing is lost by ignoring it. Every other error goes
-//! to GDK's handler as before.
+//! server answers that request with `BadWindow` or `BadDrawable`, and GDK
+//! ends the process with status 1. Such an error names a window that is
+//! already gone, so nothing is lost by ignoring it. Every other error goes
+//! to the handler that was asked for, as before.
 //!
-//! [`install`] does nothing on a display that is not X11.
+//! GDK installs its own handler again each time it opens an error trap, and
+//! that handler ends the process for any error outside the trap. So the
+//! executable provides `XSetErrorHandler` itself. Rust exports an
+//! executable's `#[no_mangle]` functions, so libraries' calls reach this one
+//! before libX11's: whatever handler a caller sets becomes the one this
+//! module's filter passes errors on to, and the filter stays in front of it.
+//! [`interposed`] says whether that holds.
+//!
+//! [`install`] starts learning the app's windows. It does nothing on a
+//! display that is not X11. Should the symbol not be reached, it puts the filter
+//! in front of GDK's handler directly, which covers every error outside a
+//! GDK error trap.
 
 use gtk::{gdk, glib, glib::translate::ToGlibPtr, prelude::*};
 use gtk4 as gtk;
 use std::collections::HashSet;
 use std::ffi::{c_int, c_uchar, c_ulong, c_void};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const BAD_WINDOW: c_uchar = 3;
 const BAD_DRAWABLE: c_uchar = 9;
 
 #[repr(C)]
-struct XErrorEvent {
+pub struct XErrorEvent {
     kind: c_int,
     display: *mut c_void,
     resource: c_ulong,
@@ -30,30 +42,65 @@ struct XErrorEvent {
     minor_code: c_uchar,
 }
 
-type Handler = unsafe extern "C" fn(*mut c_void, *mut XErrorEvent) -> c_int;
-
-#[link(name = "X11")]
-unsafe extern "C" {
-    fn XSetErrorHandler(handler: Option<Handler>) -> Option<Handler>;
-}
+pub type Handler = unsafe extern "C" fn(*mut c_void, *mut XErrorEvent) -> c_int;
+type SetHandler = unsafe extern "C" fn(Option<Handler>) -> Option<Handler>;
 
 unsafe extern "C" {
     fn gdk_x11_surface_get_xid(surface: *mut gdk::ffi::GdkSurface) -> c_ulong;
 }
 
-/// GDK's handler, which every error not ignored here goes to.
-static GDK_HANDLER: OnceLock<Option<Handler>> = OnceLock::new();
+/// The handler a caller last asked for, as an address; 0 for Xlib's own.
+static ASKED: AtomicUsize = AtomicUsize::new(0);
+/// Xlib's own handler, which `XSetErrorHandler(NULL)` means.
+static XLIB_DEFAULT: AtomicUsize = AtomicUsize::new(0);
 /// Every toplevel X window the app has had. A window's number stays here
 /// after it is destroyed, because its late errors arrive after GDK forgets
 /// it.
 static OURS: Mutex<Option<HashSet<c_ulong>>> = Mutex::new(None);
+
+fn libx11_set_handler() -> Option<SetHandler> {
+    static REAL: OnceLock<Option<SetHandler>> = OnceLock::new();
+    *REAL.get_or_init(|| {
+        // SAFETY: dlsym with RTLD_NEXT and a NUL-terminated name; a non-null
+        // result is libX11's XSetErrorHandler, whose signature this is.
+        unsafe {
+            let found = libc::dlsym(libc::RTLD_NEXT, c"XSetErrorHandler".as_ptr());
+            (!found.is_null()).then(|| std::mem::transmute::<*mut c_void, SetHandler>(found))
+        }
+    })
+}
+
+fn as_handler(address: usize) -> Option<Handler> {
+    // SAFETY: every non-zero address stored here was a `Handler`.
+    (address != 0).then(|| unsafe { std::mem::transmute::<usize, Handler>(address) })
+}
+
+/// Xlib's `XSetErrorHandler`, as every library in the process calls it: the
+/// filter is installed, and `handler` is what it passes errors on to.
+///
+/// # Safety
+///
+/// As Xlib's: `handler`, if any, must be a valid error handler.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn XSetErrorHandler(handler: Option<Handler>) -> Option<Handler> {
+    let set = libx11_set_handler()?;
+    // SAFETY: libX11's own function, called as Xlib documents.
+    let replaced = unsafe { set(Some(filter as Handler)) };
+    if let Some(replaced) = replaced
+        && replaced as usize != filter as Handler as usize
+    {
+        XLIB_DEFAULT.store(replaced as usize, Ordering::SeqCst);
+    }
+    let previous = ASKED.swap(handler.map_or(0, |h| h as usize), Ordering::SeqCst);
+    as_handler(previous).or_else(|| as_handler(XLIB_DEFAULT.load(Ordering::SeqCst)))
+}
 
 /// Whether an error is one only a window destroyed by another program gives.
 fn ignored(error_code: c_uchar, resource: c_ulong, ours: &HashSet<c_ulong>) -> bool {
     matches!(error_code, BAD_WINDOW | BAD_DRAWABLE) && ours.contains(&resource)
 }
 
-unsafe extern "C" fn handle(display: *mut c_void, event: *mut XErrorEvent) -> c_int {
+unsafe extern "C" fn filter(display: *mut c_void, event: *mut XErrorEvent) -> c_int {
     // SAFETY: Xlib passes a valid event for the duration of the call.
     let (code, resource) = unsafe { ((*event).error_code, (*event).resource) };
     let mine = OURS
@@ -64,11 +111,20 @@ unsafe extern "C" fn handle(display: *mut c_void, event: *mut XErrorEvent) -> c_
     if mine {
         return 0;
     }
-    match GDK_HANDLER.get().copied().flatten() {
-        // SAFETY: the handler Xlib had before ours, called as Xlib would.
-        Some(gdk_handler) => unsafe { gdk_handler(display, event) },
+    let next = as_handler(ASKED.load(Ordering::SeqCst))
+        .or_else(|| as_handler(XLIB_DEFAULT.load(Ordering::SeqCst)));
+    match next {
+        // SAFETY: the handler a caller set, called as Xlib would.
+        Some(next) => unsafe { next(display, event) },
         None => 0,
     }
+}
+
+/// Whether libraries' calls to `XSetErrorHandler` reach this module's.
+pub fn interposed() -> bool {
+    // SAFETY: dlsym with RTLD_DEFAULT and a NUL-terminated name.
+    let found = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"XSetErrorHandler".as_ptr()) };
+    found as usize == XSetErrorHandler as SetHandler as usize
 }
 
 fn remember(window: &gtk::Window) {
@@ -93,16 +149,21 @@ fn watch(window: &gtk::Window) {
     window.connect_realize(remember);
 }
 
-/// Put the handler in front of GDK's and learn every toplevel window the app
-/// opens from now on. Call once, after the display is open.
+/// Learn every toplevel window the app opens from now on. Call once, after
+/// the display is open.
 pub fn install(display: &gdk::Display) {
-    if !display.type_().name().starts_with("GdkX11") || GDK_HANDLER.get().is_some() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    if !display.type_().name().starts_with("GdkX11") || INSTALLED.set(()).is_err() {
         return;
     }
-    // SAFETY: called on the GTK thread after GDK installed its handler; the
-    // one it returns is kept and called for every error not ignored.
-    let gdk_handler = unsafe { XSetErrorHandler(Some(handle)) };
-    let _ = GDK_HANDLER.set(gdk_handler);
+    if !interposed()
+        && let Some(set) = libx11_set_handler()
+    {
+        // SAFETY: libX11's own function; what it replaces is GDK's handler,
+        // which the filter then passes errors on to.
+        let gdk_handler = unsafe { set(Some(filter as Handler)) };
+        ASKED.store(gdk_handler.map_or(0, |h| h as usize), Ordering::SeqCst);
+    }
     let toplevels = gtk::Window::toplevels();
     for item in toplevels.iter::<glib::Object>().flatten() {
         if let Ok(window) = item.downcast::<gtk::Window>() {
@@ -120,7 +181,7 @@ pub fn install(display: &gdk::Display) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BAD_DRAWABLE, BAD_WINDOW, ignored};
+    use super::{BAD_DRAWABLE, BAD_WINDOW, ignored, interposed};
     use std::collections::HashSet;
 
     #[test]
@@ -132,5 +193,10 @@ mod tests {
         for other in [8, 11, 2] {
             assert!(!ignored(other, 0x600005, &ours));
         }
+    }
+
+    #[test]
+    fn libraries_reach_this_set_handler() {
+        assert!(interposed());
     }
 }
