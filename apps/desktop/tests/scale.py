@@ -333,19 +333,22 @@ def shelf_run(binary, root):
         )
         time.sleep(0.5)
 
-        samples = [
-            int(line.split()[-1]) / 1000
+        frames = [
+            [int(us) / 1000 for us in line.split()[1:3]]
             for line in (root / "app-stderr.log").read_text().splitlines()
             if line.startswith("shelf-frame-us ")
         ]
-        assert samples, "no moving frames were timed"
+        assert frames, "no moving frames were timed"
+        samples = [wall for wall, _ in frames]
         worst = max(samples)
         median = statistics.median(samples)
         over = sum(ms > SHELF_FRAME_LIMIT_MS for ms in samples)
+        cpu = max(cpu for _, cpu in frames)
         print(
             f"Shelf whole frame (before update through after paint) under Xvfb and Cairo: "
             f"{len(samples)} frames, median {median:.2f} ms, maximum {worst:.2f} ms "
-            f"(limit {SHELF_FRAME_LIMIT_MS} ms, {over} over)",
+            f"(limit {SHELF_FRAME_LIMIT_MS} ms, {over} over); "
+            f"window thread CPU time maximum {cpu:.2f} ms",
             flush=True,
         )
         assert worst <= SHELF_FRAME_LIMIT_MS, (
@@ -454,6 +457,26 @@ def shelf_run(binary, root):
         key("Escape")
         assert focused_name() == focus_before_wheel
         print("PASS Menu reveals the parked book and returns focus to it", flush=True)
+        # A row kept just past the bottom parks its focus once its spines
+        # leave the view; Menu must still bring the book back into view.
+        key("Home", *(["Down"] * 4))
+        time.sleep(0.3)
+        held = focused_name()
+        smoke.xd("mousemove", "--window", wid, 400, 350, "click", "--repeat", 12, "--delay", 12, 4)
+        # Its spines scrolled wholly out of view, the book's focus is parked.
+        # Menu comes at once, while the wheel's deceleration at the top runs.
+        deadline = time.monotonic() + 8
+        while focused_name() is not None:
+            assert time.monotonic() < deadline, (held, focused_name())
+            time.sleep(POLL)
+        key("Menu")
+        find("", "menu item")
+        key("Escape")
+        assert focused_name() == held, (held, focused_name())
+        shown = pane.get_extents(Atspi.CoordType.WINDOW)
+        box = next(n for n in spines() if n.get_name() == held).get_extents(Atspi.CoordType.WINDOW)
+        assert shown.y <= box.y and box.y + box.height <= shown.y + shown.height, (held, box.y, shown.y, shown.height)
+        print("PASS Menu brings a focused book from a row just off screen into view", flush=True)
         key("Page_Up")
         above = focused_name()
         assert above not in (None, focus_before_wheel)

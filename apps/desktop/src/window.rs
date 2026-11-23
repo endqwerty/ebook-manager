@@ -1333,6 +1333,9 @@ pub fn open(app: &adw::Application) {
             let parked = library
                 .with_view(|view| match view {
                     View::Shelf(s) => s.parked_book().inspect(|book| {
+                        // A wheel's deceleration at an edge would pull the reveal back.
+                        library.scrolled.set_kinetic_scrolling(false);
+                        library.scrolled.set_kinetic_scrolling(true);
                         s.scroll_to(book.rank(), gtk::ListScrollFlags::FOCUS);
                     }),
                     _ => None,
@@ -1342,6 +1345,7 @@ pub fn open(app: &adw::Application) {
                 let weak = Rc::downgrade(&library);
                 let moved = library.moved.get();
                 let placed = library.placed.get();
+                let ready = Cell::new(0);
                 library.scrolled.add_tick_callback(move |_, _| {
                     let Some(lib) = weak.upgrade() else {
                         return glib::ControlFlow::Break;
@@ -1353,6 +1357,12 @@ pub fn open(app: &adw::Application) {
                         && cell.book().is_some_and(|b| b.rank() == book.rank())
                     {
                         if cell.width() == 0 || !cell.is_mapped() {
+                            return glib::ControlFlow::Continue;
+                        }
+                        // A tick runs before layout, and a row kept off screen
+                        // already has a size, so wait for the next frame's layout.
+                        ready.set(ready.get() + 1);
+                        if ready.get() < 2 {
                             return glib::ControlFlow::Continue;
                         }
                         if let Some(row) = book.row() {

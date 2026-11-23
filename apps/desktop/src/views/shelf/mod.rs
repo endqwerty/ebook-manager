@@ -232,16 +232,31 @@ impl Shelf {
                 let Some(clock) = widget.frame_clock() else {
                     return;
                 };
-                let start = Rc::new(Cell::new(std::time::Instant::now()));
+                let thread_cpu = || {
+                    let mut t = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    };
+                    // SAFETY: `t` is a valid timespec for the call to fill.
+                    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+                    t.tv_sec * 1_000_000 + t.tv_nsec / 1000
+                };
+                let start = Rc::new(Cell::new((std::time::Instant::now(), thread_cpu())));
                 let begin = start.clone();
-                let before =
-                    clock.connect_before_paint(move |_| begin.set(std::time::Instant::now()));
+                let before = clock.connect_before_paint(move |_| {
+                    begin.set((std::time::Instant::now(), thread_cpu()))
+                });
                 let scroll = scroll.clone();
                 let previous = Cell::new(scroll.value());
                 let after = clock.connect_after_paint(move |_| {
                     let y = scroll.value();
                     if previous.replace(y) != y {
-                        eprintln!("shelf-frame-us {}", start.get().elapsed().as_micros());
+                        let (wall, cpu) = start.get();
+                        eprintln!(
+                            "shelf-frame-us {} {}",
+                            wall.elapsed().as_micros(),
+                            thread_cpu() - cpu
+                        );
                     }
                 });
                 let handlers = Cell::new(Some((before, after)));
@@ -386,6 +401,11 @@ impl Drop for Shelf {
     }
 }
 impl State {
+    /// Whether a row's spines, not its caption or board, lie wholly outside the view
+    /// from `y` down `height`.
+    fn spines_hidden(&self, row: &layout::Row, y: u64, height: i32) -> bool {
+        layout::spines_hidden(row, 24, self.height as u64 + 14, y, height as u64)
+    }
     fn stride(&self) -> u64 {
         self.height as u64 + 71
     }
@@ -436,14 +456,23 @@ impl State {
     fn fill(self: &Rc<Self>, height: i32, repack: bool) {
         let rows = self.rows.borrow();
         let y = self.scroll.value() as u64;
-        let start = rows.partition_point(|r| r.top <= y).saturating_sub(2);
-        let end = (rows.partition_point(|r| r.top < y + height as u64) + 1).min(rows.len());
+        let span = (height.max(1) - 1) as usize / self.stride() as usize + 4;
+        let start = rows
+            .partition_point(|r| r.top <= y)
+            .saturating_sub(2)
+            .min(rows.len().saturating_sub(span));
+        let end = (start + span).min(rows.len());
         let mut visible = self.visible.borrow_mut();
         let mut spare: Vec<_> = visible
             .extract_if(.., |i, _| repack || !(start..end).contains(i))
             .map(|(_, b)| b)
             .collect();
-        for board in &spare {
+        // A row kept just off screen parks its focus and preview as a
+        // recycled row does, so a focused spine is always shown or parked.
+        let off_screen = visible
+            .iter()
+            .filter(|(i, _)| self.spines_hidden(&rows[**i], y, height));
+        for board in spare.iter().chain(off_screen.map(|(_, b)| b)) {
             for cell in &board.cells {
                 (self.shared.preview)(cell, false);
                 if cell.is_focus() {
@@ -468,7 +497,7 @@ impl State {
             && let Some(book) = self.model.parked_focus()
         {
             for (index, board) in visible.iter() {
-                if rows[*index].top + self.stride() <= y || rows[*index].top >= y + height as u64 {
+                if self.spines_hidden(&rows[*index], y, height) {
                     continue;
                 }
                 if let Some(cell) = board.cells.iter().find(|c| {

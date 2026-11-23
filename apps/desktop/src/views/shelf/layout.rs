@@ -17,6 +17,19 @@ impl Row {
     }
 }
 
+/// Whether a row's spine cells, `cell_height` tall below any caption, lie
+/// wholly outside the view from `y` down `view_height`.
+pub fn spines_hidden(
+    row: &Row,
+    caption_height: u64,
+    cell_height: u64,
+    y: u64,
+    view_height: u64,
+) -> bool {
+    let top = row.spine_top(caption_height);
+    top + cell_height <= y || top >= y + view_height
+}
+
 pub fn first_full_book(rows: &[Row], scroll: u64, caption_height: u64) -> Option<u32> {
     let index = rows.partition_point(|row| row.spine_top(caption_height) < scroll);
     rows.get(index).map(|row| row.first)
@@ -65,6 +78,32 @@ pub fn pack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spines_count_as_hidden_only_once_wholly_out_of_view() {
+        let plain = Row {
+            first: 0,
+            top: 0,
+            caption: None,
+        };
+        let grouped = Row {
+            first: 0,
+            top: 0,
+            caption: Some(0),
+        };
+        assert!(!spines_hidden(&plain, 24, 206, 205, 600));
+        assert!(spines_hidden(&plain, 24, 206, 206, 600));
+        assert!(!spines_hidden(&grouped, 24, 206, 218, 600));
+        assert!(!spines_hidden(&grouped, 24, 206, 229, 600));
+        assert!(spines_hidden(&grouped, 24, 206, 230, 600));
+        let lower = Row {
+            first: 40,
+            top: 600,
+            caption: Some(1),
+        };
+        assert!(!spines_hidden(&lower, 24, 206, 1, 624));
+        assert!(spines_hidden(&lower, 24, 206, 0, 624));
+    }
 
     #[test]
     fn deep_resize_tracks_the_first_complete_spine_through_both_widths() {
