@@ -796,9 +796,10 @@ same time.
    rows a viewport of its height can cross, and one below, shifted inward at
    either end of the shelf. Scrolling rebinds the row that leaves to the row
    that enters, so it rebuilds no row; a spine is built only when the row
-   that enters holds more books than any row before it. A focused spine in a
-   row just off screen keeps its focus, so the Menu key scrolls to a focused
-   book that is not wholly in view before opening its menu.
+   that enters holds more books than any row before it. A row kept wholly off
+   screen parks its focus and closes its preview as a recycled row does, so a
+   focused spine is always either in view or parked, and the Menu key brings
+   a parked book back before opening its menu.
    Cairo lifts the head of the selected spine four units, leaves its foot on
    the board and enlarges its top strip. Projecting the lettering in pixel
    bands made it unreadable. Other renderers use the perspective transform.
@@ -814,8 +815,9 @@ same time.
 
    At 100,000 books the grouped shelf appeared in 0.56–0.75 s over five runs
    on two CPUs under Ubuntu 26.04, with 267 spine widgets against a bound of
-   336. Before the row count was fixed the top of the shelf held one row
-   fewer above and below, and the same container counted 186 spines in
+   336. Before the row count was fixed the window held only the rows the
+   viewport crossed and one beyond each edge, so at the top of the shelf it
+   held two rows fewer below, and the same container counted 186 spines in
    0.49–0.55 s. On a width change the window waits for the new scroll range
    before placing the first full book. A later move by the reader cancels
    that placement. The window clamps the new position to keep the focused
@@ -855,9 +857,11 @@ same time.
    removed, a bind frame on a quiet host spends about 6 ms drawing spines
    (half of it rasterising text, which the stamped lettering draws twice),
    1.5 ms in update and layout and 2.5 ms in GTK's own frame. A tipped spine
-   draws the cached texture of its shadow at its height rounded up, so while
-   the pointer rests on one its pixels shift by a fraction of a pixel
-   compared with an exact shadow (a channel difference of at most 27 of 255).
+   draws the cached texture of its shadow at its height rounded up, which
+   makes its composed layer a whole number of pixels tall, so while the
+   pointer rests on one the whole spine, not only its shadow, shifts by a
+   fraction of a pixel (a channel difference of at most 38 of 255 in one
+   comparison, invisible side by side at three times the size).
    Resting and selected spines draw the same pixels as before.
 
    The driver measures the whole GTK frame, from before update through after

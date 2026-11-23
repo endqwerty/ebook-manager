@@ -462,7 +462,12 @@ impl State {
             .extract_if(.., |i, _| repack || !(start..end).contains(i))
             .map(|(_, b)| b)
             .collect();
-        for board in &spare {
+        // A row kept just off screen parks its focus and preview as a
+        // recycled row does, so a focused spine is always shown or parked.
+        let off_screen = visible.iter().filter(|(i, _)| {
+            rows[**i].top + self.stride() <= y || rows[**i].top >= y + height as u64
+        });
+        for board in spare.iter().chain(off_screen.map(|(_, b)| b)) {
             for cell in &board.cells {
                 (self.shared.preview)(cell, false);
                 if cell.is_focus() {
