@@ -10,7 +10,7 @@ use crate::session::{self, Reply, Session};
 use crate::wire::{
     markup_text_units, BookOutline, Payload, Request, WireError, WireErrorKind, WireSurvey,
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -68,7 +68,11 @@ impl Inner {
 /// Helper, bubblewrap and limits that have already shown a working sandbox in
 /// this process. Every session checks its sandbox again as it starts, so this
 /// only spares a reader a second check before its first call.
-static PROVEN: Mutex<Option<HashSet<(PathBuf, PathBuf, String)>>> = Mutex::new(None);
+/// Each configuration has its own flag, so a slow check of one holds up only
+/// the readers that wait on that one.
+static PROVEN: Mutex<Option<HashMap<ProbeKey, Arc<Mutex<bool>>>>> = Mutex::new(None);
+
+type ProbeKey = (PathBuf, PathBuf, String);
 
 /// Entry point. Cheap to clone and safe to share between threads.
 #[derive(Debug, Clone)]
@@ -101,16 +105,22 @@ impl Reader {
             reader.inner.bwrap.clone(),
             reader.inner.limits_json.clone(),
         );
+        let flag = PROVEN
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .entry(key)
+            .or_default()
+            .clone();
         // Held through the check, so callers that start together prove one
         // configuration once.
-        let mut proven = PROVEN.lock().unwrap_or_else(|p| p.into_inner());
-        let proven = proven.get_or_insert_with(HashSet::new);
-        if proven.contains(&key) {
+        let mut proven = flag.lock().unwrap_or_else(|p| p.into_inner());
+        if *proven {
             return Ok(reader);
         }
         match Session::start(&reader.inner, None, reader.inner.deadline()) {
             Ok(_) => {
-                proven.insert(key);
+                *proven = true;
                 Ok(reader)
             }
             Err(ReaderError::SandboxUnavailable { reason }) => {
@@ -158,7 +168,8 @@ impl Reader {
     /// gave no answer and asking again later may work.
     pub fn survey(&self, epub: &Path) -> Result<Survey, ReaderError> {
         let source = Source::check(epub, &self.inner.limits)?;
-        let (payload, blob) = session::once(&self.inner, &source.path, Request::Survey)?;
+        let deadline = self.inner.deadline();
+        let (payload, blob) = session::once(&self.inner, &source.path, Request::Survey, deadline)?;
         match *payload {
             Payload::Survey(survey) => checked_survey(survey, blob),
             _ => Err(unexpected()),
@@ -167,7 +178,7 @@ impl Reader {
 
     /// A request that sends no bytes after its reply, in a session of its own.
     fn once(&self, source: &Source, request: Request) -> Result<Payload, ReaderError> {
-        match session::once(&self.inner, &source.path, request)? {
+        match session::once(&self.inner, &source.path, request, self.inner.deadline())? {
             (payload, blob) if blob.is_empty() => Ok(*payload),
             _ => Err(unexpected()),
         }
@@ -327,6 +338,9 @@ pub struct Book {
 /// A picture or a chapter takes well under a millisecond, so this is a
 /// queue of dozens; a read held up longer than this is slow, not queued.
 const SHARE_WAIT: Duration = Duration::from_millis(50);
+/// Most helpers of their own one book's calls run at once. Past this, a call
+/// waits for the book's helper or a spare until its deadline.
+const MAX_SPARES: usize = 4;
 
 /// A book's helper, used by one call at a time.
 #[derive(Debug)]
@@ -339,25 +353,66 @@ struct Shared {
 struct Slot {
     session: Option<Session>,
     busy: bool,
+    /// Calls running in helpers of their own.
+    spares: usize,
+}
+
+/// What a call gets to run in.
+enum Taken<'a> {
+    Helper(Turn<'a>),
+    /// A place for a helper of its own, given back when dropped.
+    Own(Spare<'a>),
+    /// Neither came free before the deadline.
+    Nothing,
 }
 
 impl Shared {
-    /// The helper for this call, once no other call is using it, or `None`
-    /// when another still is after `wait`.
-    fn take(&self, wait: Duration) -> Option<Turn<'_>> {
-        let slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
-        let (mut slot, _) = self
-            .freed
-            .wait_timeout_while(slot, wait, |s| s.busy)
-            .unwrap_or_else(|p| p.into_inner());
-        if slot.busy {
-            return None;
+    /// The book's helper once no other call is using it. After
+    /// [`SHARE_WAIT`], a place for a helper of the call's own when fewer
+    /// than [`MAX_SPARES`] are running, else whichever comes free first.
+    fn take(&self, deadline: Instant) -> Taken<'_> {
+        let share_until = Instant::now() + SHARE_WAIT;
+        let mut slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
+        loop {
+            if !slot.busy {
+                slot.busy = true;
+                return Taken::Helper(Turn {
+                    shared: self,
+                    session: slot.session.take(),
+                });
+            }
+            let now = Instant::now();
+            if now >= share_until && slot.spares < MAX_SPARES {
+                slot.spares += 1;
+                return Taken::Own(Spare { shared: self });
+            }
+            if now >= deadline {
+                return Taken::Nothing;
+            }
+            let until = if now < share_until {
+                share_until
+            } else {
+                deadline
+            };
+            slot = self
+                .freed
+                .wait_timeout(slot, until.saturating_duration_since(now))
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
         }
-        slot.busy = true;
-        Some(Turn {
-            shared: self,
-            session: slot.session.take(),
-        })
+    }
+}
+
+/// A call's place among a book's spare helpers.
+struct Spare<'a> {
+    shared: &'a Shared,
+}
+
+impl Drop for Spare<'_> {
+    fn drop(&mut self) {
+        let mut slot = self.shared.slot.lock().unwrap_or_else(|p| p.into_inner());
+        slot.spares -= 1;
+        self.shared.freed.notify_all();
     }
 }
 
@@ -373,7 +428,7 @@ impl Drop for Turn<'_> {
         let mut slot = self.shared.slot.lock().unwrap_or_else(|p| p.into_inner());
         slot.session = self.session.take();
         slot.busy = false;
-        self.shared.freed.notify_one();
+        self.shared.freed.notify_all();
     }
 }
 
@@ -430,6 +485,7 @@ impl Book {
                 slot: Mutex::new(Slot {
                     session: Some(session),
                     busy: false,
+                    spares: 0,
                 }),
                 freed: Condvar::new(),
             }),
@@ -452,12 +508,15 @@ impl Book {
             return Err(ReaderError::SourceChanged);
         }
         let inner = &self.reader.inner;
-        let Some(mut turn) = self.helper.take(SHARE_WAIT) else {
-            let (payload, blob) = session::once(inner, &self.source.path, request)?;
-            return check(*payload, blob);
-        };
-        // From when this call has the helper, not from when it began waiting.
         let deadline = inner.deadline();
+        let mut turn = match self.helper.take(deadline) {
+            Taken::Helper(turn) => turn,
+            Taken::Own(_spare) => {
+                let (payload, blob) = session::once(inner, &self.source.path, request, deadline)?;
+                return check(*payload, blob);
+            }
+            Taken::Nothing => return Err(ReaderError::Timeout),
+        };
         let mut tried_fresh = false;
         let (payload, blob) = loop {
             let mut session = match turn.session.take() {

@@ -133,6 +133,8 @@ fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
 
 /// What one helper keeps between requests: the book's archive and package,
 /// read on the first request that needs them, and its contents once read.
+/// Each request is charged for what it uses as if it had read it itself, so
+/// a request gets the same answer here as in a helper of its own.
 struct Session {
     limits: Limits,
     book: Option<Result<Loaded, WireError>>,
@@ -141,15 +143,28 @@ struct Session {
 struct Loaded {
     archive: Archive,
     package: Package,
-    toc: Option<Vec<TocEntry>>,
+    /// Bytes unpacked to read the container, encryption list and package.
+    package_bytes: u64,
+    /// The contents, with the bytes unpacked to read them.
+    toc: Option<(Vec<TocEntry>, u64)>,
 }
 
 impl Loaded {
     fn toc(&mut self, limits: &Limits) -> Result<&[TocEntry], WireError> {
-        if self.toc.is_none() {
-            self.toc = Some(toc::load(&mut self.archive, &self.package, limits)?);
+        match &self.toc {
+            Some((_, bytes)) => self.archive.charge(*bytes)?,
+            None => {
+                let before = self.archive.unpacked();
+                let toc = toc::load(&mut self.archive, &self.package, limits)?;
+                let bytes = self.archive.unpacked().saturating_sub(before);
+                self.toc = Some((toc, bytes));
+            }
         }
-        Ok(self.toc.as_deref().unwrap_or_default())
+        Ok(self
+            .toc
+            .as_ref()
+            .map(|(t, _)| t.as_slice())
+            .unwrap_or_default())
     }
 }
 
@@ -163,16 +178,17 @@ impl Session {
             let mut archive = Archive::open(file, limits)?;
             let package = package::load(&mut archive, limits)?;
             Ok(Loaded {
+                package_bytes: archive.unpacked(),
                 archive,
                 package,
                 toc: None,
             })
         });
         let book = book.as_mut().map_err(|e| e.clone())?;
-        // Every request has the whole unpacking allowance, as if it were the
-        // helper's only one. The first also pays for the package it read.
+        // The first request has just paid for the package; a later one
+        // pays for it again, as a helper of its own would.
         if loaded_before {
-            book.archive.begin_request();
+            book.archive.begin_request(book.package_bytes);
         }
         let none = Vec::new;
         match request {

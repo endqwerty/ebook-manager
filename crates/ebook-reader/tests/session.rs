@@ -389,3 +389,99 @@ fn a_helper_that_answers_out_of_turn_is_ended() {
     assert!(book.read_content(1).is_err());
     assert_eq!(number(&count), first + 1);
 }
+
+/// F3, S5: a helper that closes its replies and hangs runs out the call's
+/// time, and is not tried again once the time is gone.
+#[test]
+fn a_helper_that_goes_quiet_is_not_tried_again() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let count = dir.0.join("count");
+    let cfg = numbered(&dir, "quiet", &count, "exec 1>&-; exec /usr/bin/sleep 30");
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    let first = number(&count);
+    let started = Instant::now();
+    assert_eq!(book.read_content(0).unwrap_err(), ReaderError::Timeout);
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(number(&count), first);
+}
+
+/// S5: a helper that stops reading requests is ended when its input is full,
+/// instead of holding the call past its deadline.
+#[test]
+fn a_helper_that_stops_reading_requests_is_ended() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let flood = content_frame(&dir);
+    let script = format!(
+        "#!/bin/sh\necho '0 {{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}'\nread -r request\n{open}\nwhile cat '{flood}'; do :; done\n",
+        open = send(&outline_frame(&dir)),
+        flood = flood.display(),
+    );
+    let cfg = ReaderConfig {
+        bwrap_path: Some(executable(&dir, "deaf-bwrap", &script)),
+        timeout: Duration::from_secs(2),
+        ..config()
+    };
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    let started = Instant::now();
+    // Each read takes a reply already waiting and leaves a request unread.
+    let ended = (0..20_000).find_map(|_| book.read_content(0).err());
+    match ended {
+        Some(ReaderError::HelperFailed { detail }) => {
+            assert!(detail.contains("stopped reading"), "{detail}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// S5: however many calls find a book's helper busy, at most four run in
+/// helpers of their own at once; the rest wait within their deadline.
+#[test]
+fn a_book_runs_at_most_four_spare_helpers() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let count = dir.0.join("count");
+    let mut cfg = numbered(&dir, "stuck-all", &count, "exec /usr/bin/sleep 30");
+    cfg.timeout = Duration::from_secs(2);
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    let first = number(&count);
+    let started = Instant::now();
+    let calls: Vec<_> = (0..10)
+        .map(|_| {
+            let book = book.clone();
+            std::thread::spawn(move || book.read_content(0))
+        })
+        .collect();
+    for call in calls {
+        assert_eq!(call.join().unwrap().unwrap_err(), ReaderError::Timeout);
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        number(&count) <= first + 4,
+        "{} spares",
+        number(&count) - first
+    );
+}
+
+/// F6: a reply allowance of nothing refuses at once instead of waiting.
+#[test]
+fn a_reply_allowance_of_nothing_refuses_at_once() {
+    let mut cfg = config();
+    cfg.limits.max_output_bytes = 0;
+    let started = Instant::now();
+    assert!(matches!(
+        Reader::new(cfg),
+        Err(ReaderError::SandboxUnavailable { .. })
+    ));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}

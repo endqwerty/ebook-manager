@@ -728,26 +728,39 @@ fn compression_ratio_and_total_unpacked_size_are_bounded() {
     }
 }
 
-/// F6: a book's first call pays for the container and package its helper
-/// reads, as well as for what the call itself unpacks.
+/// F6: every call is charged for the container and package, and for the
+/// contents when it uses them, as if its helper had just read them, whether
+/// it is the helper's first call or a later one.
 #[test]
-fn the_first_call_counts_the_package_it_reads() {
+fn every_call_counts_the_package_and_contents_it_uses() {
     let dir = Scratch::new();
-    let bytes = simple(&["<p>x</p>"], &[]);
+    let bytes = epub3();
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
     let mut size = |name: &str| zip.by_name(name).unwrap().size();
-    let needed = size("META-INF/container.xml") + size("OEBPS/content.opf");
+    let package = size("META-INF/container.xml") + size("OEBPS/content.opf");
+    let contents = size("OEBPS/nav.xhtml");
+    let chapter = size("OEBPS/text/chapter1.xhtml");
     let path = dir.file("b.epub", &bytes);
-    let opened = |allowance: u64| {
+    let reader = |allowance: u64| {
         let mut cfg = config();
         cfg.limits.max_unpacked_bytes = allowance;
-        Reader::new(cfg).unwrap().open(&path)
+        Reader::new(cfg).unwrap()
     };
-    assert!(opened(needed).is_ok());
-    match opened(needed - 1) {
+    let total = |r: Result<(), ReaderError>| match r {
         Err(ReaderError::LimitExceeded { what }) => assert!(what.contains("total"), "{what}"),
-        other => panic!("expected a total-size refusal, got {:?}", other.map(|_| ())),
-    }
+        other => panic!("expected a total-size refusal, got {other:?}"),
+    };
+    // Opening reads the package and the contents.
+    assert!(reader(package + contents).open(&path).is_ok());
+    total(reader(package + contents - 1).open(&path).map(|_| ()));
+    // A later chapter is charged for both again, on the helper that read them.
+    let book = reader(package + contents + chapter).open(&path).unwrap();
+    assert!(book.read_chapter(1).is_ok());
+    assert!(book.read_chapter(1).is_ok());
+    let book = reader(package + contents + chapter - 1)
+        .open(&path)
+        .unwrap();
+    total(book.read_chapter(1).map(|_| ()));
 }
 
 /// F7: an application that already runs under a lower memory ceiling than the

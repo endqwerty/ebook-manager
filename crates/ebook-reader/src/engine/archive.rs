@@ -80,9 +80,25 @@ impl Archive {
             .and_then(|m| m.get(&name.to_lowercase()).copied().flatten())
     }
 
-    /// Start a request with the whole unpacking allowance again.
-    pub fn begin_request(&mut self) {
-        self.unpacked = 0;
+    /// Bytes unpacked so far in this request.
+    pub fn unpacked(&self) -> u64 {
+        self.unpacked
+    }
+
+    /// Start a request as if `already` bytes had been unpacked in it.
+    pub fn begin_request(&mut self, already: u64) {
+        self.unpacked = already;
+    }
+
+    /// Count `bytes` this request uses again from an earlier one, as if they
+    /// were unpacked now.
+    pub fn charge(&mut self, bytes: u64) -> Result<(), WireError> {
+        let total = self.unpacked.saturating_add(bytes);
+        if total > self.max_unpacked {
+            return Err(WireError::limit("total unpacked size"));
+        }
+        self.unpacked = total;
+        Ok(())
     }
 
     /// Some entry is ZIP-encrypted, wherever it is in the archive.

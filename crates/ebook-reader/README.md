@@ -89,7 +89,9 @@ book's helper, about 4 ms on a desktop; after that a chapter takes about
 0.3 ms and a picture of 650 KB about 0.4 ms (`reader-bench`, below). Call
 from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`. Calls on
 one book take turns on its helper; a call that would wait more than 50 ms
-for it runs in a short-lived helper of its own, about 4 ms more.
+for it runs in a short-lived helper of its own, about 4 ms more, with at
+most four of those per book at once. A call's deadline runs from when it is
+made.
 
 ## What callers can rely on
 
@@ -151,7 +153,10 @@ for it runs in a short-lived helper of its own, about 4 ms more.
   what the helper had used up over the session, such as CPU time. A call past
   its deadline, or whose reply was refused, is not tried again. The host
   reads only the reply it asked for, so a helper that writes more stalls on
-  its own pipe.
+  its own pipe, and writes requests without waiting, so a helper that stops
+  reading them is ended. Each call is charged for the container, package and
+  contents it uses as if its helper had just read them, so the limits give
+  the same answer whichever helper serves it.
   The helper doesn't crash in the system's sense. Its first step installs
   handlers, and after that, running out of memory or stack, or any signal that
   would dump core, makes it exit with status 4 and

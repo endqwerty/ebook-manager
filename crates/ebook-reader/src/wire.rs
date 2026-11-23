@@ -124,6 +124,9 @@ pub fn read_frame(
     max: u64,
 ) -> Result<(Response, Vec<u8>), FrameError> {
     use std::io::Read;
+    if max == 0 {
+        return Err(FrameError::TooLarge);
+    }
     let mut line = Vec::new();
     let read = std::io::BufRead::read_until(&mut input.by_ref().take(max), b'\n', &mut line)
         .map_err(|_| FrameError::Malformed)?;

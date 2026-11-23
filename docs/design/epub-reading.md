@@ -270,8 +270,9 @@ about 5 ms. A picture's reply is now its bytes plus one line, a quarter smaller 
   it one request line at a time and reads one reply each. A reply is a line
   of JSON that states how many raw bytes follow it. The helper reads the
   book's package on its first request and its contents on the first request
-  that needs them, and keeps both. Each request has the whole unpacking
-  allowance.
+  that needs them, and keeps both. Each request is still charged for them
+  against its unpacking allowance, as if it had read them itself, so the
+  limits give the same answer in the book's helper and in a short-lived one.
 - **Why a thread of its own.** The kernel's parent-death signal follows the
   thread that started a child. The desktop reads on GIO's worker threads,
   which end when idle, so a helper started on one would die with it.
@@ -292,7 +293,8 @@ about 5 ms. A picture's reply is now its bytes plus one line, a quarter smaller 
 - **Waiting.** Calls on one book take turns. A call that waits more than
   50 ms runs in a short-lived helper of its own, so a stuck chapter holds up
   neither the next chapter nor the pictures, and GIO's worker threads are not
-  parked behind it. The host asks for one reply at a time and reads nothing
+  parked behind it. At most four such helpers run per book; a call past that
+  waits within its deadline, which runs from when the call is made. The host asks for one reply at a time and reads nothing
   else, so a helper that writes unasked replies stalls on its own pipe.
 - **What would show this is wrong.** A chapter with many large pictures that
   draws visibly later than its text, because its pictures now wait in turn.

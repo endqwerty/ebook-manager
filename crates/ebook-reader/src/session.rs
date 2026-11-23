@@ -126,8 +126,7 @@ impl Session {
 }
 
 /// One request in a session of its own, both within one deadline.
-pub fn once(inner: &Arc<Inner>, book: &Path, request: Request) -> Answer {
-    let deadline = inner.deadline();
+pub fn once(inner: &Arc<Inner>, book: &Path, request: Request, deadline: Instant) -> Answer {
     match Session::start(inner, Some(book), deadline)?.ask(request, deadline) {
         Reply::Kept(answer) => answer,
         Reply::Lost { error, .. } => Err(error),
@@ -257,6 +256,10 @@ struct Running {
 impl Running {
     fn new(child: &mut Child, inner: &Inner) -> Option<Running> {
         let input = child.stdin.take()?;
+        // A request line is shorter than the pipe's atomic write, so a write
+        // either goes whole or finds the pipe full. Full means the helper
+        // stopped reading, and waiting for it would pass the deadline.
+        rustix::fs::fcntl_setfl(&input, rustix::fs::OFlags::NONBLOCK).ok()?;
         let stdout = child.stdout.take()?;
         let mut stderr = child.stderr.take()?;
         let max = inner.limits.max_output_bytes;
@@ -317,16 +320,20 @@ impl Running {
             .input
             .write_all(request.line().as_bytes())
             .and_then(|()| self.input.flush());
-        if sent.is_err() {
-            return Outcome::Ended {
-                error: self.ended(child, FrameError::Closed, deadline),
-                by_itself: true,
-            };
-        }
         let refused = |error| Outcome::Ended {
             error,
             by_itself: false,
         };
+        match sent {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let _ = child.kill();
+                return refused(ReaderError::HelperFailed {
+                    detail: "the helper stopped reading requests".into(),
+                });
+            }
+            Err(_) => return Self::closed(self.ended(child, FrameError::Closed, deadline)),
+        }
         match self.next(deadline) {
             Ok(Ok((Response::Ok(payload), blob))) => {
                 Outcome::Answered(Ok((Box::new(payload), blob)))
@@ -345,11 +352,20 @@ impl Running {
                     detail: "inconsistent reply".into(),
                 }),
             },
-            Ok(Err(frame)) => Outcome::Ended {
-                by_itself: frame == FrameError::Closed,
-                error: self.ended(child, frame, deadline),
-            },
+            Ok(Err(FrameError::Closed)) => {
+                Self::closed(self.ended(child, FrameError::Closed, deadline))
+            }
+            Ok(Err(frame)) => refused(self.ended(child, frame, deadline)),
             Err(()) => refused(ReaderError::Timeout),
+        }
+    }
+
+    /// The helper stopped answering by itself. Only an ending that came in
+    /// time may be tried again.
+    fn closed(error: ReaderError) -> Outcome {
+        Outcome::Ended {
+            by_itself: !matches!(error, ReaderError::Timeout),
+            error,
         }
     }
 
@@ -376,7 +392,10 @@ impl Running {
                 }
             }
         };
-        let _ = self.note_done.recv_timeout(Duration::from_millis(200));
+        let left = deadline.saturating_duration_since(Instant::now());
+        let _ = self
+            .note_done
+            .recv_timeout(left.min(Duration::from_millis(200)));
         let raw = self.note.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let mut note = String::from_utf8_lossy(&raw).trim().to_owned();
         note.retain(|c| !c.is_control());
