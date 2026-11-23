@@ -16,6 +16,13 @@
 //! module's filter passes errors on to, and the filter stays in front of it.
 //! [`interposed`] says whether that holds.
 //!
+//! Two limits remain. Inside a GDK error trap, a request about one of these
+//! destroyed windows now counts as succeeded, because the filter takes the
+//! error before GDK can match it to the trap; the window is gone and GDK
+//! reads its destroy notice next. And a library that looks up libX11's own
+//! function by name and calls it directly would replace the filter until the
+//! next call here; none that the app loads does.
+//!
 //! [`install`] starts learning the app's windows. It does nothing on a
 //! display that is not X11. Should the symbol not be reached, it puts the filter
 //! in front of GDK's handler directly, which covers every error outside a
@@ -51,8 +58,10 @@ unsafe extern "C" {
 
 /// The handler a caller last asked for, as an address; 0 for Xlib's own.
 static ASKED: AtomicUsize = AtomicUsize::new(0);
-/// Xlib's own handler, which `XSetErrorHandler(NULL)` means.
-static XLIB_DEFAULT: AtomicUsize = AtomicUsize::new(0);
+/// Xlib's own handler, which `XSetErrorHandler(NULL)` means. Learned once,
+/// by the first call, which installs the filter; callers that arrive while
+/// it runs wait for it.
+static XLIB_DEFAULT: OnceLock<usize> = OnceLock::new();
 /// Every toplevel X window the app has had. A window's number stays here
 /// after it is destroyed, because its late errors arrive after GDK forgets
 /// it.
@@ -84,15 +93,19 @@ fn as_handler(address: usize) -> Option<Handler> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn XSetErrorHandler(handler: Option<Handler>) -> Option<Handler> {
     let set = libx11_set_handler()?;
-    // SAFETY: libX11's own function, called as Xlib documents.
-    let replaced = unsafe { set(Some(filter as Handler)) };
-    if let Some(replaced) = replaced
-        && replaced as usize != filter as Handler as usize
-    {
-        XLIB_DEFAULT.store(replaced as usize, Ordering::SeqCst);
+    let mut first = false;
+    let default = *XLIB_DEFAULT.get_or_init(|| {
+        first = true;
+        // SAFETY: libX11's own function, called as Xlib documents.
+        unsafe { set(Some(filter as Handler)) }.map_or(0, |h| h as usize)
+    });
+    if !first {
+        // SAFETY: as above. Puts the filter back should anything have
+        // replaced it through libX11 directly.
+        unsafe { set(Some(filter as Handler)) };
     }
     let previous = ASKED.swap(handler.map_or(0, |h| h as usize), Ordering::SeqCst);
-    as_handler(previous).or_else(|| as_handler(XLIB_DEFAULT.load(Ordering::SeqCst)))
+    as_handler(previous).or_else(|| as_handler(default))
 }
 
 /// Whether an error is one only a window destroyed by another program gives.
@@ -112,7 +125,7 @@ unsafe extern "C" fn filter(display: *mut c_void, event: *mut XErrorEvent) -> c_
         return 0;
     }
     let next = as_handler(ASKED.load(Ordering::SeqCst))
-        .or_else(|| as_handler(XLIB_DEFAULT.load(Ordering::SeqCst)));
+        .or_else(|| XLIB_DEFAULT.get().copied().and_then(as_handler));
     match next {
         // SAFETY: the handler a caller set, called as Xlib would.
         Some(next) => unsafe { next(display, event) },
