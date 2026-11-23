@@ -401,10 +401,10 @@ impl Drop for Shelf {
     }
 }
 impl State {
-    /// Whether a row's spines, not its board, lie wholly outside the view
+    /// Whether a row's spines, not its caption or board, lie wholly outside the view
     /// from `y` down `height`.
-    fn spines_hidden(&self, top: u64, y: u64, height: i32) -> bool {
-        top + self.height as u64 + 14 <= y || top >= y + height as u64
+    fn spines_hidden(&self, row: &layout::Row, y: u64, height: i32) -> bool {
+        layout::spines_hidden(row, 24, self.height as u64 + 14, y, height as u64)
     }
     fn stride(&self) -> u64 {
         self.height as u64 + 71
@@ -471,7 +471,7 @@ impl State {
         // recycled row does, so a focused spine is always shown or parked.
         let off_screen = visible
             .iter()
-            .filter(|(i, _)| self.spines_hidden(rows[**i].top, y, height));
+            .filter(|(i, _)| self.spines_hidden(&rows[**i], y, height));
         for board in spare.iter().chain(off_screen.map(|(_, b)| b)) {
             for cell in &board.cells {
                 (self.shared.preview)(cell, false);
@@ -497,7 +497,7 @@ impl State {
             && let Some(book) = self.model.parked_focus()
         {
             for (index, board) in visible.iter() {
-                if self.spines_hidden(rows[*index].top, y, height) {
+                if self.spines_hidden(&rows[*index], y, height) {
                     continue;
                 }
                 if let Some(cell) = board.cells.iter().find(|c| {
