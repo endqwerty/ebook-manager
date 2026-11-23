@@ -447,10 +447,15 @@ fn a_book_runs_at_most_four_spare_helpers() {
     let dir = Scratch::new();
     let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
     let count = dir.0.join("count");
-    let mut cfg = numbered(&dir, "stuck-all", &count, "exec /usr/bin/sleep 30");
+    let asked = dir.0.join("asked");
+    let mut cfg = numbered(
+        &dir,
+        "stuck-all",
+        &count,
+        &format!("echo x >> '{}'; exec /usr/bin/sleep 30", asked.display()),
+    );
     cfg.timeout = Duration::from_secs(2);
     let book = reader_over(&cfg).open(&book_path).unwrap();
-    let first = number(&count);
     let started = Instant::now();
     let calls: Vec<_> = (0..10)
         .map(|_| {
@@ -458,6 +463,10 @@ fn a_book_runs_at_most_four_spare_helpers() {
             std::thread::spawn(move || book.read_content(0))
         })
         .collect();
+    // Every helper there will be until the first deadlines has been asked by
+    // now: the book's own and the four spares. Nothing ends before then.
+    std::thread::sleep(Duration::from_millis(1500));
+    let early = std::fs::read_to_string(&asked).map_or(0, |s| s.lines().count());
     for call in calls {
         assert_eq!(call.join().unwrap().unwrap_err(), ReaderError::Timeout);
     }
@@ -466,11 +475,7 @@ fn a_book_runs_at_most_four_spare_helpers() {
         "{:?}",
         started.elapsed()
     );
-    assert!(
-        number(&count) <= first + 4,
-        "{} spares",
-        number(&count) - first
-    );
+    assert_eq!(early, 5, "the book's helper and four spares");
 }
 
 /// F6: a reply allowance of nothing refuses at once instead of waiting.

@@ -371,9 +371,12 @@ impl Shared {
     /// [`SHARE_WAIT`], a place for a helper of the call's own when fewer
     /// than [`MAX_SPARES`] are running, else whichever comes free first.
     fn take(&self, deadline: Instant) -> Taken<'_> {
-        let share_until = Instant::now() + SHARE_WAIT;
+        let share_until = (Instant::now() + SHARE_WAIT).min(deadline);
         let mut slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
         loop {
+            if Instant::now() >= deadline {
+                return Taken::Nothing;
+            }
             if !slot.busy {
                 slot.busy = true;
                 return Taken::Helper(Turn {
@@ -385,9 +388,6 @@ impl Shared {
             if now >= share_until && slot.spares < MAX_SPARES {
                 slot.spares += 1;
                 return Taken::Own(Spare { shared: self });
-            }
-            if now >= deadline {
-                return Taken::Nothing;
             }
             let until = if now < share_until {
                 share_until

@@ -46,6 +46,9 @@ struct Job {
 #[derive(Debug)]
 pub struct Session {
     jobs: Sender<Job>,
+    /// The thread that owns the helper, which ends once the helper is
+    /// collected.
+    owner: std::thread::JoinHandle<()>,
     /// The helper answered a request before, so a later failure may come
     /// from what the session as a whole used up rather than from one request.
     answered: bool,
@@ -73,22 +76,29 @@ impl Session {
         let (ready, started) = mpsc::channel();
         let inner = inner.clone();
         let book = book.map(Path::to_owned);
-        std::thread::Builder::new()
+        let owner = std::thread::Builder::new()
             .name("ebook-reader-session".into())
             .spawn(move || own(&inner, book, deadline, &ready, &inbox))
             .map_err(|e| ReaderError::HelperFailed {
                 detail: format!("cannot start a session thread: {e}"),
             })?;
-        match started.recv() {
-            Ok(Ok(())) => Ok(Session {
-                jobs,
-                answered: false,
-            }),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(ReaderError::HelperFailed {
+        let failed = match started.recv() {
+            Ok(Ok(())) => {
+                return Ok(Session {
+                    jobs,
+                    owner,
+                    answered: false,
+                })
+            }
+            Ok(Err(e)) => e,
+            Err(_) => ReaderError::HelperFailed {
                 detail: "the session ended while starting".into(),
-            }),
-        }
+            },
+        };
+        // The helper that failed to start is collected before the caller
+        // may start another in its place.
+        let _ = owner.join();
+        Err(failed)
     }
 
     /// Ask the helper, waiting for its reply at most until `deadline`.
@@ -127,9 +137,22 @@ impl Session {
 
 /// One request in a session of its own, both within one deadline.
 pub fn once(inner: &Arc<Inner>, book: &Path, request: Request, deadline: Instant) -> Answer {
-    match Session::start(inner, Some(book), deadline)?.ask(request, deadline) {
+    let mut session = Session::start(inner, Some(book), deadline)?;
+    let reply = session.ask(request, deadline);
+    session.close();
+    match reply {
         Reply::Kept(answer) => answer,
         Reply::Lost { error, .. } => Err(error),
+    }
+}
+
+impl Session {
+    /// End the helper and return once it has been collected. Dropping a
+    /// session ends the helper without waiting.
+    pub fn close(self) {
+        let Session { jobs, owner, .. } = self;
+        drop(jobs);
+        let _ = owner.join();
     }
 }
 
