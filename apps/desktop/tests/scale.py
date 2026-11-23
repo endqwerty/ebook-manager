@@ -333,19 +333,22 @@ def shelf_run(binary, root):
         )
         time.sleep(0.5)
 
-        samples = [
-            int(line.split()[-1]) / 1000
+        frames = [
+            [int(us) / 1000 for us in line.split()[1:3]]
             for line in (root / "app-stderr.log").read_text().splitlines()
             if line.startswith("shelf-frame-us ")
         ]
-        assert samples, "no moving frames were timed"
+        assert frames, "no moving frames were timed"
+        samples = [wall for wall, _ in frames]
         worst = max(samples)
         median = statistics.median(samples)
         over = sum(ms > SHELF_FRAME_LIMIT_MS for ms in samples)
+        cpu = max(cpu for _, cpu in frames)
         print(
             f"Shelf whole frame (before update through after paint) under Xvfb and Cairo: "
             f"{len(samples)} frames, median {median:.2f} ms, maximum {worst:.2f} ms "
-            f"(limit {SHELF_FRAME_LIMIT_MS} ms, {over} over)",
+            f"(limit {SHELF_FRAME_LIMIT_MS} ms, {over} over); "
+            f"window thread CPU time maximum {cpu:.2f} ms",
             flush=True,
         )
         assert worst <= SHELF_FRAME_LIMIT_MS, (

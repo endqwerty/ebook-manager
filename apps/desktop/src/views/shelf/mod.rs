@@ -232,16 +232,31 @@ impl Shelf {
                 let Some(clock) = widget.frame_clock() else {
                     return;
                 };
-                let start = Rc::new(Cell::new(std::time::Instant::now()));
+                let thread_cpu = || {
+                    let mut t = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    };
+                    // SAFETY: `t` is a valid timespec for the call to fill.
+                    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+                    t.tv_sec * 1_000_000 + t.tv_nsec / 1000
+                };
+                let start = Rc::new(Cell::new((std::time::Instant::now(), thread_cpu())));
                 let begin = start.clone();
-                let before =
-                    clock.connect_before_paint(move |_| begin.set(std::time::Instant::now()));
+                let before = clock.connect_before_paint(move |_| {
+                    begin.set((std::time::Instant::now(), thread_cpu()))
+                });
                 let scroll = scroll.clone();
                 let previous = Cell::new(scroll.value());
                 let after = clock.connect_after_paint(move |_| {
                     let y = scroll.value();
                     if previous.replace(y) != y {
-                        eprintln!("shelf-frame-us {}", start.get().elapsed().as_micros());
+                        let (wall, cpu) = start.get();
+                        eprintln!(
+                            "shelf-frame-us {} {}",
+                            wall.elapsed().as_micros(),
+                            thread_cpu() - cpu
+                        );
                     }
                 });
                 let handlers = Cell::new(Some((before, after)));
