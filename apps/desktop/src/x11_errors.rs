@@ -19,7 +19,7 @@
 //! Two limits remain. Inside a GDK error trap, a request about one of these
 //! destroyed windows now counts as succeeded, because the filter takes the
 //! error before GDK can match it to the trap; the window is gone and GDK
-//! reads its destroy notice next. And a library that looks up libX11's own
+//! handles its destroy notice soon after. And a library that looks up libX11's own
 //! function by name and calls it directly would replace the filter until the
 //! next call here; none that the app loads does.
 //!
@@ -101,8 +101,14 @@ pub unsafe extern "C" fn XSetErrorHandler(handler: Option<Handler>) -> Option<Ha
     });
     if !first {
         // SAFETY: as above. Puts the filter back should anything have
-        // replaced it through libX11 directly.
-        unsafe { set(Some(filter as Handler)) };
+        // replaced it through libX11 directly; that handler is then the one
+        // this call replaces.
+        let replaced = unsafe { set(Some(filter as Handler)) };
+        if let Some(replaced) = replaced
+            && replaced as usize != filter as Handler as usize
+        {
+            ASKED.store(replaced as usize, Ordering::SeqCst);
+        }
     }
     let previous = ASKED.swap(handler.map_or(0, |h| h as usize), Ordering::SeqCst);
     as_handler(previous).or_else(|| as_handler(default))
