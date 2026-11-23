@@ -795,7 +795,10 @@ same time.
    The canvas holds a fixed number of rows: one above the viewport, the most
    rows a viewport of its height can cross, and one below, shifted inward at
    either end of the shelf. Scrolling rebinds the row that leaves to the row
-   that enters, so it builds no new spine widgets.
+   that enters, so it rebuilds no row; a spine is built only when the row
+   that enters holds more books than any row before it. A focused spine in a
+   row just off screen keeps its focus, so the Menu key scrolls to a focused
+   book that is not wholly in view before opening its menu.
    Cairo lifts the head of the selected spine four units, leaves its foot on
    the board and enlarges its top strip. Projecting the lettering in pixel
    bands made it unreadable. Other renderers use the perspective transform.

@@ -457,6 +457,21 @@ def shelf_run(binary, root):
         key("Escape")
         assert focused_name() == focus_before_wheel
         print("PASS Menu reveals the parked book and returns focus to it", flush=True)
+        # A row just past the bottom keeps its spines, and its focus, while
+        # off screen; Menu must still bring the focused book into view.
+        key("Home", *(["Down"] * 4))
+        time.sleep(0.3)
+        held = focused_name()
+        smoke.xd("mousemove", "--window", wid, 400, 350, "click", "--repeat", 12, "--delay", 12, 4)
+        time.sleep(0.3)
+        key("Menu")
+        find("", "menu item")
+        key("Escape")
+        assert focused_name() == held, (held, focused_name())
+        shown = pane.get_extents(Atspi.CoordType.WINDOW)
+        box = next(n for n in spines() if n.get_name() == held).get_extents(Atspi.CoordType.WINDOW)
+        assert shown.y <= box.y and box.y + box.height <= shown.y + shown.height, (held, box.y, shown.y, shown.height)
+        print("PASS Menu brings a focused book from a row just off screen into view", flush=True)
         key("Page_Up")
         above = focused_name()
         assert above not in (None, focus_before_wheel)

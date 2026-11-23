@@ -1330,6 +1330,35 @@ pub fn open(app: &adw::Application) {
             let Some(library) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            // The shelf keeps a focused spine in a row just off screen without parking it.
+            if let Some(cell) = views::focused_cell(&library.scrolled)
+                .filter(|cell| !shown_in(cell, &library.scrolled))
+                && let Some(book) = cell.book()
+                && library
+                    .with_view(|view| match view {
+                        View::Shelf(s) => {
+                            s.scroll_to(book.rank(), gtk::ListScrollFlags::FOCUS);
+                            true
+                        }
+                        _ => false,
+                    })
+                    .unwrap_or(false)
+            {
+                let weak = Rc::downgrade(&library);
+                let frames = Cell::new(0);
+                library.scrolled.add_tick_callback(move |_, _| {
+                    let Some(lib) = weak.upgrade() else {
+                        return glib::ControlFlow::Break;
+                    };
+                    frames.set(frames.get() + 1);
+                    if !shown_in(&cell, &lib.scrolled) && frames.get() < 30 {
+                        return glib::ControlFlow::Continue;
+                    }
+                    lib.context_menu(&cell);
+                    glib::ControlFlow::Break
+                });
+                return glib::Propagation::Stop;
+            }
             let parked = library
                 .with_view(|view| match view {
                     View::Shelf(s) => s.parked_book().inspect(|book| {
@@ -1560,4 +1589,11 @@ pub fn open(app: &adw::Application) {
     });
     model.set_query(query);
     window.present();
+}
+
+/// Whether a widget lies wholly inside the scrolled window's view.
+fn shown_in(widget: &impl IsA<gtk::Widget>, scrolled: &gtk::ScrolledWindow) -> bool {
+    widget
+        .compute_bounds(scrolled)
+        .is_some_and(|b| b.y() >= 0. && b.y() + b.height() <= scrolled.height() as f32)
 }
