@@ -44,11 +44,18 @@ and media-overlay books, and every platform other than native Linux packages.
   build ignores that variable. `PATH` is not searched. `bwrap`
   is used from the configured path, `/usr/bin/bwrap` or `/bin/bwrap`.
 - **S5** An opened book reads through one helper process, which ends when
-  the book is dropped, whichever thread opened it. `inspect` and `survey`
-  each run one helper that ends with the call. A helper that fails, sends a
-  reply the host refuses or passes the deadline is ended, and the book's next
-  call starts another. A call whose helper ends after answering an earlier
-  call is tried once more in a fresh helper; a call past its deadline is not.
+  the book is dropped, whichever thread opened it. A call that finds that
+  helper busy for more than 50 ms runs in a helper of its own, so one slow
+  read holds up no other. `inspect` and `survey` each run one helper that
+  ends with the call. A helper that fails, sends a reply the host refuses,
+  sends an error no working helper sends, or passes the deadline is ended,
+  and the book's next call starts another. A call whose helper ends by itself
+  after answering an earlier call is tried once more in a fresh helper; a
+  call past its deadline, or whose reply was refused, is not. Each call has
+  one deadline, from when it has the helper to its answer, the fresh try
+  included. The helper reads only the replies asked for, so one that writes
+  more fills its own pipe and not the application's memory, and it stops at
+  a request line longer than any request.
   The sandbox check `Reader::new` makes is made once per helper, `bwrap` and
   limits in a process; every helper repeats its own check as it starts.
 - **S6** The helper's reply is checked before the interface sees it. A book
@@ -310,7 +317,8 @@ to the reader.
   on unpacked output rather than the size the archive declares; 10,000
   reading-order items; 20,000 contents entries; 400,000 elements and text runs
   in a package or contents document; 64 MiB unpacked in one call, counting
-  entries that failed part-way; a 200-to-1 unpacked-to-packed ratio for any
+  entries that failed part-way, with a book's first call also counting the
+  container and package its helper reads; a 200-to-1 unpacked-to-packed ratio for any
   entry that unpacks to more than 4 MiB; a 96 MiB reply; a 20 MiB cover file
   and 40 million cover pixels (V4). The entry count is
   read from the archive's end record before its directory is parsed. Passing a

@@ -282,12 +282,18 @@ about 5 ms. A picture's reply is now its bytes plus one line, a quarter smaller 
 - **Failure.** The CPU-time limit counts a helper's whole life, and a long
   session can use it up. So a call whose helper ends after answering an
   earlier call is tried once in a fresh helper; a book that kills every helper
-  still fails at once. A call past its deadline is not tried again, so a
+  still fails at once. A reply the host refuses, over the reply cap or in a
+  form no working helper writes, ends the helper and is not asked again. A call past its deadline is not tried again, so a
   stuck book costs one deadline per call, as before.
 - **Turned down.** A faster base64 decoder alone would have left the 3 ms start
   on every call. A pool of helpers per book would read pictures in parallel,
   but one picture takes 0.4 ms in turn. One helper for several books would
   let one book's reply reach another's reader.
+- **Waiting.** Calls on one book take turns. A call that waits more than
+  50 ms runs in a short-lived helper of its own, so a stuck chapter holds up
+  neither the next chapter nor the pictures, and GIO's worker threads are not
+  parked behind it. The host asks for one reply at a time and reads nothing
+  else, so a helper that writes unasked replies stalls on its own pipe.
 - **What would show this is wrong.** A chapter with many large pictures that
   draws visibly later than its text, because its pictures now wait in turn.
   Fifty pictures of 650 KB take about 20 ms in turn; measure a real chapter

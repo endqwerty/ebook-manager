@@ -38,16 +38,26 @@ pub fn main(args: &[String]) -> i32 {
     }
     let mut session = Session { limits, book: None };
     let stdin = std::io::stdin();
-    let mut input = stdin.lock();
+    requests(&mut stdin.lock(), &mut out, &mut session)
+}
+
+/// Answer each request line in turn until the input ends.
+fn requests(input: &mut impl BufRead, out: &mut impl std::io::Write, session: &mut Session) -> i32 {
     loop {
         let mut line = Vec::new();
-        let read = (&mut input)
-            .take(MAX_REQUEST_BYTES as u64 + 1)
+        let read = input
+            .by_ref()
+            .take(MAX_REQUEST_BYTES as u64)
             .read_until(b'\n', &mut line);
         match read {
             Ok(0) => return 0,
             Ok(_) => {}
             Err(_) => return 3,
+        }
+        // A line too long to be a request, or cut off by the end of input,
+        // ends the session: the rest of it must not be read as a request.
+        if line.last() != Some(&b'\n') {
+            return reply(out, Response::Err(usage()), &[]).max(2);
         }
         let (response, blob) = match Request::parse(&line).ok_or_else(usage) {
             Ok(request) => match session.serve(request) {
@@ -56,7 +66,7 @@ pub fn main(args: &[String]) -> i32 {
             },
             Err(e) => (Response::Err(e), Vec::new()),
         };
-        if reply(&mut out, response, &blob) != 0 {
+        if reply(out, response, &blob) != 0 {
             return 3;
         }
     }
@@ -146,6 +156,7 @@ impl Loaded {
 impl Session {
     fn serve(&mut self, request: Request) -> Result<(Payload, Vec<u8>), WireError> {
         let limits = &self.limits;
+        let loaded_before = self.book.is_some();
         let book = self.book.get_or_insert_with(|| {
             let file = File::open(BOOK_IN_SANDBOX)
                 .map_err(|e| WireError::invalid(format!("cannot open the book: {e}")))?;
@@ -159,8 +170,10 @@ impl Session {
         });
         let book = book.as_mut().map_err(|e| e.clone())?;
         // Every request has the whole unpacking allowance, as if it were the
-        // helper's only one.
-        book.archive.begin_request();
+        // helper's only one. The first also pays for the package it read.
+        if loaded_before {
+            book.archive.begin_request();
+        }
         let none = Vec::new;
         match request {
             Request::Metadata => Ok((Payload::Metadata(book.package.metadata.clone()), none())),
@@ -431,4 +444,57 @@ fn overflow_probe() -> i32 {
     let sum = std::hint::black_box(u8::MAX) + std::hint::black_box(1u8);
     println!("wrapped to {sum}");
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{requests, Session};
+    use crate::model::Limits;
+    use crate::wire::{read_frame, Response, WireErrorKind};
+    use std::io::Cursor;
+
+    fn replies(input: &[u8]) -> (i32, Vec<Response>) {
+        let mut session = Session {
+            limits: Limits::default(),
+            book: None,
+        };
+        let mut out = Vec::new();
+        let status = requests(&mut Cursor::new(input), &mut out, &mut session);
+        let mut out = Cursor::new(out);
+        let mut all = Vec::new();
+        while let Ok((response, _)) = read_frame(&mut out, 1 << 20) {
+            all.push(response);
+        }
+        (status, all)
+    }
+
+    fn usage(response: &Response) -> bool {
+        matches!(response, Response::Err(e) if e.kind == WireErrorKind::Usage)
+    }
+
+    #[test]
+    fn a_line_too_long_for_a_request_ends_the_session() {
+        let mut input = vec![b'x'; 33];
+        input.extend_from_slice(b"open\n");
+        let (status, all) = replies(&input);
+        assert_ne!(status, 0);
+        assert_eq!(all.len(), 1);
+        assert!(usage(&all[0]));
+    }
+
+    #[test]
+    fn a_request_cut_off_by_the_end_of_input_is_not_served() {
+        let (status, all) = replies(b"metadata\nopen");
+        assert_ne!(status, 0);
+        assert_eq!(all.len(), 2);
+        assert!(!usage(&all[0]) && usage(&all[1]));
+    }
+
+    #[test]
+    fn an_unknown_request_is_refused_and_the_next_is_served() {
+        let (status, all) = replies(b"probe\nmetadata\n");
+        assert_eq!(status, 0);
+        assert_eq!(all.len(), 2);
+        assert!(usage(&all[0]) && !usage(&all[1]));
+    }
 }

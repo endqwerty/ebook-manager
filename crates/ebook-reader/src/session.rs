@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 
 /// Read-only system library directories the helper's loader may need.
 const LIBRARY_DIRS: [&str; 4] = ["/usr/lib", "/usr/lib64", "/lib", "/lib64"];
+/// How often an idle session checks that its helper is still running.
+const IDLE_CHECK: Duration = Duration::from_secs(1);
 /// The most of the helper's error stream kept for a failure's detail.
 const NOTE_BYTES: usize = 8192;
 
@@ -28,12 +30,15 @@ pub type Answer = Result<(Box<Payload>, Vec<u8>), ReaderError>;
 enum Outcome {
     /// The helper answered, and is still running.
     Answered(Answer),
-    /// The helper ended or was ended, with this as the reason.
-    Ended(ReaderError),
+    /// The helper ended or was ended, with this as the reason. `by_itself`
+    /// says it stopped on its own rather than being stopped for its reply
+    /// or its time.
+    Ended { error: ReaderError, by_itself: bool },
 }
 
 struct Job {
     request: Request,
+    deadline: Instant,
     done: Sender<Outcome>,
 }
 
@@ -57,15 +62,20 @@ pub enum Reply {
 }
 
 impl Session {
-    /// Start a helper and wait until it says its sandbox holds.
-    pub fn start(inner: &Arc<Inner>, book: Option<&Path>) -> Result<Session, ReaderError> {
+    /// Start a helper and wait until it says its sandbox holds, at most
+    /// until `deadline`.
+    pub fn start(
+        inner: &Arc<Inner>,
+        book: Option<&Path>,
+        deadline: Instant,
+    ) -> Result<Session, ReaderError> {
         let (jobs, inbox) = mpsc::channel();
         let (ready, started) = mpsc::channel();
         let inner = inner.clone();
         let book = book.map(Path::to_owned);
         std::thread::Builder::new()
             .name("ebook-reader-session".into())
-            .spawn(move || own(&inner, book, &ready, &inbox))
+            .spawn(move || own(&inner, book, deadline, &ready, &inbox))
             .map_err(|e| ReaderError::HelperFailed {
                 detail: format!("cannot start a session thread: {e}"),
             })?;
@@ -81,31 +91,44 @@ impl Session {
         }
     }
 
-    pub fn ask(&mut self, request: Request) -> Reply {
+    /// Ask the helper, waiting for its reply at most until `deadline`.
+    pub fn ask(&mut self, request: Request, deadline: Instant) -> Reply {
         let (done, outcome) = mpsc::channel();
         let gone = || ReaderError::HelperFailed {
             detail: "the session ended".into(),
         };
-        let outcome = match self.jobs.send(Job { request, done }) {
-            Ok(()) => outcome.recv().unwrap_or_else(|_| Outcome::Ended(gone())),
-            Err(_) => Outcome::Ended(gone()),
+        let job = Job {
+            request,
+            deadline,
+            done,
+        };
+        let outcome = match self.jobs.send(job) {
+            Ok(()) => outcome.recv().unwrap_or_else(|_| Outcome::Ended {
+                error: gone(),
+                by_itself: true,
+            }),
+            Err(_) => Outcome::Ended {
+                error: gone(),
+                by_itself: true,
+            },
         };
         match outcome {
             Outcome::Answered(answer) => {
                 self.answered = true;
                 Reply::Kept(answer)
             }
-            Outcome::Ended(error) => {
-                let retry = self.answered && !matches!(error, ReaderError::Timeout);
+            Outcome::Ended { error, by_itself } => {
+                let retry = self.answered && by_itself;
                 Reply::Lost { error, retry }
             }
         }
     }
 }
 
-/// One request in a session of its own.
+/// One request in a session of its own, both within one deadline.
 pub fn once(inner: &Arc<Inner>, book: &Path, request: Request) -> Answer {
-    match Session::start(inner, Some(book))?.ask(request) {
+    let deadline = inner.deadline();
+    match Session::start(inner, Some(book), deadline)?.ask(request, deadline) {
         Reply::Kept(answer) => answer,
         Reply::Lost { error, .. } => Err(error),
     }
@@ -154,6 +177,7 @@ type Frame = Result<(Response, Vec<u8>), FrameError>;
 fn own(
     inner: &Inner,
     book: Option<PathBuf>,
+    deadline: Instant,
     ready: &Sender<Result<(), ReaderError>>,
     inbox: &Receiver<Job>,
 ) {
@@ -176,7 +200,7 @@ fn own(
             return;
         }
     };
-    let first = running.next(inner.timeout);
+    let first = running.next(deadline);
     let started = match first {
         Ok(Ok((Response::Ok(Payload::Probe(report)), blob)))
             if report.isolated && blob.is_empty() =>
@@ -187,7 +211,7 @@ fn own(
         Ok(Ok(_)) => Err(ReaderError::SandboxUnavailable {
             reason: "unexpected probe reply".into(),
         }),
-        Ok(Err(frame)) => Err(running.ended(&mut child, frame, inner.timeout)),
+        Ok(Err(frame)) => Err(running.ended(&mut child, frame, deadline)),
         Err(()) => Err(ReaderError::Timeout),
     };
     let failed = started.is_err();
@@ -196,9 +220,16 @@ fn own(
         stop(&mut child);
         return;
     }
-    while let Ok(job) = inbox.recv() {
-        let outcome = running.serve(&mut child, job.request, inner);
-        let ended = matches!(outcome, Outcome::Ended(_));
+    loop {
+        let job = match inbox.recv_timeout(IDLE_CHECK) {
+            Ok(job) => job,
+            // A helper that ended between requests is collected now, not
+            // when its book is next read or dropped.
+            Err(RecvTimeoutError::Timeout) if matches!(child.try_wait(), Ok(None)) => continue,
+            Err(_) => break,
+        };
+        let outcome = running.serve(&mut child, job.request, job.deadline);
+        let ended = matches!(outcome, Outcome::Ended { .. });
         let _ = job.done.send(outcome);
         if ended {
             break;
@@ -214,6 +245,10 @@ fn stop(child: &mut Child) {
 
 struct Running {
     input: ChildStdin,
+    /// Asks the reply thread for exactly one reply. Nothing is read from the
+    /// helper unasked, so a helper that writes more stalls on its own full
+    /// pipe instead of filling the application's memory.
+    wanted: Sender<()>,
     frames: Receiver<Frame>,
     note: Arc<Mutex<Vec<u8>>>,
     note_done: Receiver<()>,
@@ -226,11 +261,12 @@ impl Running {
         let mut stderr = child.stderr.take()?;
         let max = inner.limits.max_output_bytes;
         let (send, frames) = mpsc::channel();
+        let (wanted, asks) = mpsc::channel::<()>();
         std::thread::Builder::new()
             .name("ebook-reader-replies".into())
             .spawn(move || {
                 let mut stdout = BufReader::with_capacity(256 * 1024, stdout);
-                loop {
+                while asks.recv().is_ok() {
                     let frame = read_frame(&mut stdout, max);
                     let last = frame.is_err();
                     if send.send(frame).is_err() || last {
@@ -256,14 +292,19 @@ impl Running {
             .ok()?;
         Some(Running {
             input,
+            wanted,
             frames,
             note,
             note_done,
         })
     }
 
-    /// The next reply, or `Err(())` when none came in time.
-    fn next(&self, timeout: Duration) -> Result<Frame, ()> {
+    /// The next reply, or `Err(())` when none came by `deadline`.
+    fn next(&self, deadline: Instant) -> Result<Frame, ()> {
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        if self.wanted.send(()).is_err() {
+            return Ok(Err(FrameError::Closed));
+        }
         match self.frames.recv_timeout(timeout) {
             Ok(frame) => Ok(frame),
             Err(RecvTimeoutError::Timeout) => Err(()),
@@ -271,25 +312,50 @@ impl Running {
         }
     }
 
-    fn serve(&mut self, child: &mut Child, request: Request, inner: &Inner) -> Outcome {
+    fn serve(&mut self, child: &mut Child, request: Request, deadline: Instant) -> Outcome {
         let sent = self
             .input
             .write_all(request.line().as_bytes())
             .and_then(|()| self.input.flush());
         if sent.is_err() {
-            return Outcome::Ended(self.ended(child, FrameError::Closed, inner.timeout));
+            return Outcome::Ended {
+                error: self.ended(child, FrameError::Closed, deadline),
+                by_itself: true,
+            };
         }
-        match self.next(inner.timeout) {
-            Ok(Ok((Response::Ok(payload), blob))) => Outcome::Answered(Ok((Box::new(payload), blob))),
-            Ok(Ok((Response::Err(e), _))) => Outcome::Answered(Err(from_wire(e))),
-            Ok(Err(frame)) => Outcome::Ended(self.ended(child, frame, inner.timeout)),
-            Err(()) => Outcome::Ended(ReaderError::Timeout),
+        let refused = |error| Outcome::Ended {
+            error,
+            by_itself: false,
+        };
+        match self.next(deadline) {
+            Ok(Ok((Response::Ok(payload), blob))) => {
+                Outcome::Answered(Ok((Box::new(payload), blob)))
+            }
+            Ok(Ok((Response::Err(e), blob))) => match from_wire(e) {
+                // A book's own error, which asking again would repeat.
+                error @ (ReaderError::Unsupported(_)
+                | ReaderError::InvalidBook { .. }
+                | ReaderError::LimitExceeded { .. })
+                    if blob.is_empty() =>
+                {
+                    Outcome::Answered(Err(error))
+                }
+                // Only a helper that is not working as written says this.
+                _ => refused(ReaderError::HelperFailed {
+                    detail: "inconsistent reply".into(),
+                }),
+            },
+            Ok(Err(frame)) => Outcome::Ended {
+                by_itself: frame == FrameError::Closed,
+                error: self.ended(child, frame, deadline),
+            },
+            Err(()) => refused(ReaderError::Timeout),
         }
     }
 
     /// The helper's replies stopped. Say why, from its exit status and the
     /// start of what it wrote on its error stream.
-    fn ended(&self, child: &mut Child, frame: FrameError, timeout: Duration) -> ReaderError {
+    fn ended(&self, child: &mut Child, frame: FrameError, deadline: Instant) -> ReaderError {
         if frame == FrameError::TooLarge {
             return ReaderError::LimitExceeded {
                 what: "size of the reader's reply".into(),
@@ -298,7 +364,6 @@ impl Running {
         if frame == FrameError::Malformed {
             let _ = child.kill();
         }
-        let deadline = Instant::now() + timeout;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status.to_string(),

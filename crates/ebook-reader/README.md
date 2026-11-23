@@ -87,8 +87,9 @@ progress figure.
 Every call blocks until the helper answers. `Reader::open` starts the
 book's helper, about 4 ms on a desktop; after that a chapter takes about
 0.3 ms and a picture of 650 KB about 0.4 ms (`reader-bench`, below). Call
-from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`, and the
-calls on one book take turns on its helper.
+from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`. Calls on
+one book take turns on its helper; a call that would wait more than 50 ms
+for it runs in a short-lived helper of its own, about 4 ms more.
 
 ## What callers can rely on
 
@@ -145,10 +146,12 @@ calls on one book take turns on its helper.
   last clone is dropped. It runs on a thread of its own, so the thread that
   opened the book may end. A helper that crashes, sends a reply the host
   refuses or runs past the deadline is ended, and the next call starts a new
-  one. A call whose helper ends after that helper had answered an earlier
-  call is tried once in a fresh helper, because what ended it may be what the
-  helper had used up over the session, such as CPU time. A call past its
-  deadline is not tried again.
+  one. A call whose helper ends by itself after that helper had answered an
+  earlier call is tried once in a fresh helper, because what ended it may be
+  what the helper had used up over the session, such as CPU time. A call past
+  its deadline, or whose reply was refused, is not tried again. The host
+  reads only the reply it asked for, so a helper that writes more stalls on
+  its own pipe.
   The helper doesn't crash in the system's sense. Its first step installs
   handlers, and after that, running out of memory or stack, or any signal that
   would dump core, makes it exit with status 4 and

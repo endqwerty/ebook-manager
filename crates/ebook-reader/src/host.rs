@@ -12,8 +12,8 @@ use crate::wire::{
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 /// File name of the helper program.
 pub const HELPER_NAME: &str = "ebook-reader-helper";
@@ -55,6 +55,16 @@ pub(crate) struct Inner {
     pub(crate) timeout: Duration,
 }
 
+impl Inner {
+    /// When a call that starts now must have its answer. A timeout too long
+    /// to add is a year, which is as good as none.
+    pub(crate) fn deadline(&self) -> Instant {
+        let now = Instant::now();
+        now.checked_add(self.timeout)
+            .unwrap_or_else(|| now + Duration::from_secs(365 * 24 * 60 * 60))
+    }
+}
+
 /// Helper, bubblewrap and limits that have already shown a working sandbox in
 /// this process. Every session checks its sandbox again as it starts, so this
 /// only spares a reader a second check before its first call.
@@ -91,18 +101,16 @@ impl Reader {
             reader.inner.bwrap.clone(),
             reader.inner.limits_json.clone(),
         );
-        let proven =
-            |set: &mut Option<HashSet<_>>| set.get_or_insert_with(HashSet::new).contains(&key);
-        if proven(&mut PROVEN.lock().unwrap_or_else(|p| p.into_inner())) {
+        // Held through the check, so callers that start together prove one
+        // configuration once.
+        let mut proven = PROVEN.lock().unwrap_or_else(|p| p.into_inner());
+        let proven = proven.get_or_insert_with(HashSet::new);
+        if proven.contains(&key) {
             return Ok(reader);
         }
-        match Session::start(&reader.inner, None) {
+        match Session::start(&reader.inner, None, reader.inner.deadline()) {
             Ok(_) => {
-                PROVEN
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .get_or_insert_with(HashSet::new)
-                    .insert(key);
+                proven.insert(key);
                 Ok(reader)
             }
             Err(ReaderError::SandboxUnavailable { reason }) => {
@@ -130,8 +138,9 @@ impl Reader {
     /// Open a book for reading: metadata, reading order and contents.
     pub fn open(&self, epub: &Path) -> Result<Book, ReaderError> {
         let source = Source::check(epub, &self.inner.limits)?;
-        let mut session = Session::start(&self.inner, Some(&source.path))?;
-        match session.ask(Request::Open) {
+        let deadline = self.inner.deadline();
+        let mut session = Session::start(&self.inner, Some(&source.path), deadline)?;
+        match session.ask(Request::Open, deadline) {
             Reply::Kept(Ok((payload, blob))) => match *payload {
                 Payload::Book(outline) if blob.is_empty() => {
                     Book::new(self.clone(), source, outline, session)
@@ -302,7 +311,8 @@ impl Source {
 
 /// An opened book. Holds one sandboxed helper for its reads, which ends when
 /// the last clone of the book is dropped. A helper that fails is ended and
-/// the next read starts another, so a crashed read loses nothing.
+/// the next read starts another, so a crashed read loses nothing. A read that
+/// would wait long for that helper uses a short-lived one of its own.
 #[derive(Debug, Clone)]
 pub struct Book {
     reader: Reader,
@@ -310,7 +320,61 @@ pub struct Book {
     metadata: Metadata,
     chapters: Vec<ChapterInfo>,
     toc: Vec<TocEntry>,
-    helper: Arc<Mutex<Option<Session>>>,
+    helper: Arc<Shared>,
+}
+
+/// How long a call waits for its book's helper before using one of its own.
+/// A picture or a chapter takes well under a millisecond, so this is a
+/// queue of dozens; a read held up longer than this is slow, not queued.
+const SHARE_WAIT: Duration = Duration::from_millis(50);
+
+/// A book's helper, used by one call at a time.
+#[derive(Debug)]
+struct Shared {
+    slot: Mutex<Slot>,
+    freed: Condvar,
+}
+
+#[derive(Debug)]
+struct Slot {
+    session: Option<Session>,
+    busy: bool,
+}
+
+impl Shared {
+    /// The helper for this call, once no other call is using it, or `None`
+    /// when another still is after `wait`.
+    fn take(&self, wait: Duration) -> Option<Turn<'_>> {
+        let slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
+        let (mut slot, _) = self
+            .freed
+            .wait_timeout_while(slot, wait, |s| s.busy)
+            .unwrap_or_else(|p| p.into_inner());
+        if slot.busy {
+            return None;
+        }
+        slot.busy = true;
+        Some(Turn {
+            shared: self,
+            session: slot.session.take(),
+        })
+    }
+}
+
+/// One call's use of its book's helper. Whatever it holds when it ends is
+/// the book's helper from then on.
+struct Turn<'a> {
+    shared: &'a Shared,
+    session: Option<Session>,
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        let mut slot = self.shared.slot.lock().unwrap_or_else(|p| p.into_inner());
+        slot.session = self.session.take();
+        slot.busy = false;
+        self.shared.freed.notify_one();
+    }
 }
 
 impl Book {
@@ -362,15 +426,23 @@ impl Book {
             metadata,
             chapters,
             toc,
-            helper: Arc::new(Mutex::new(Some(session))),
+            helper: Arc::new(Shared {
+                slot: Mutex::new(Slot {
+                    session: Some(session),
+                    busy: false,
+                }),
+                freed: Condvar::new(),
+            }),
         })
     }
 
-    /// Ask the book's helper, starting one if there is none. When a helper
-    /// that had already answered ends, one fresh helper is tried, because
-    /// what ended it may be what the session as a whole used up. `check`
-    /// turns the reply into what the caller gets; a reply it refuses ends the
-    /// helper too.
+    /// Ask the book's helper, starting one if there is none. A call that
+    /// finds the helper busy for longer than [`SHARE_WAIT`] uses a helper of
+    /// its own, so one slow read holds up no other. When the book's helper
+    /// ends by itself after having answered, one fresh helper is tried,
+    /// because what ended it may be what the session as a whole used up.
+    /// `check` turns the reply into what the caller gets; a reply it refuses
+    /// ends the helper too.
     fn ask<T>(
         &self,
         request: Request,
@@ -379,19 +451,25 @@ impl Book {
         if !self.source.unchanged() {
             return Err(ReaderError::SourceChanged);
         }
-        let mut slot = self.helper.lock().unwrap_or_else(|p| p.into_inner());
+        let inner = &self.reader.inner;
+        let Some(mut turn) = self.helper.take(SHARE_WAIT) else {
+            let (payload, blob) = session::once(inner, &self.source.path, request)?;
+            return check(*payload, blob);
+        };
+        // From when this call has the helper, not from when it began waiting.
+        let deadline = inner.deadline();
         let mut tried_fresh = false;
         let (payload, blob) = loop {
-            let mut session = match slot.take() {
+            let mut session = match turn.session.take() {
                 Some(session) => session,
                 None => {
                     tried_fresh = true;
-                    Session::start(&self.reader.inner, Some(&self.source.path))?
+                    Session::start(inner, Some(&self.source.path), deadline)?
                 }
             };
-            match session.ask(request) {
+            match session.ask(request, deadline) {
                 Reply::Kept(answer) => {
-                    *slot = Some(session);
+                    turn.session = Some(session);
                     break answer?;
                 }
                 Reply::Lost { error, retry } if !retry || tried_fresh => return Err(error),
@@ -400,7 +478,7 @@ impl Book {
         };
         let checked = check(*payload, blob);
         if matches!(checked, Err(ReaderError::HelperFailed { .. })) {
-            *slot = None;
+            turn.session = None;
         }
         checked
     }

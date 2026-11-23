@@ -125,19 +125,18 @@ pub fn read_frame(
 ) -> Result<(Response, Vec<u8>), FrameError> {
     use std::io::Read;
     let mut line = Vec::new();
-    let read = std::io::BufRead::read_until(
-        &mut input.by_ref().take(max.saturating_add(1)),
-        b'\n',
-        &mut line,
-    )
-    .map_err(|_| FrameError::Malformed)?;
+    let read = std::io::BufRead::read_until(&mut input.by_ref().take(max), b'\n', &mut line)
+        .map_err(|_| FrameError::Malformed)?;
     if read == 0 {
         return Err(FrameError::Closed);
     }
-    if line.len() as u64 > max {
-        return Err(FrameError::TooLarge);
-    }
-    let body = line.strip_suffix(b"\n").ok_or(FrameError::Malformed)?;
+    let Some(body) = line.strip_suffix(b"\n") else {
+        return Err(if line.len() as u64 == max {
+            FrameError::TooLarge
+        } else {
+            FrameError::Malformed
+        });
+    };
     let space = body
         .iter()
         .position(|b| *b == b' ')
@@ -499,6 +498,11 @@ mod tests {
             read_frame(&mut Cursor::new(&wire[..first + 2]), 1024).unwrap_err(),
             FrameError::Malformed
         );
+        // A line that fills the allowance without ending is too large, and
+        // nothing past the allowance is read.
+        let mut long = Cursor::new(vec![b'7'; 64]);
+        assert_eq!(read_frame(&mut long, 16).unwrap_err(), FrameError::TooLarge);
+        assert_eq!(long.position(), 16);
         for bad in [
             &b"{\"Ok\":{\"Probe\":{\"isolated\":true}}}\n"[..],
             b"x {}\n",

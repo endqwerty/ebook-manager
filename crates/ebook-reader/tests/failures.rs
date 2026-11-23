@@ -90,11 +90,16 @@ fn reader_fails_closed_without_a_working_sandbox() {
 /// S2: run directly, outside any sandbox, the helper will not touch a book.
 #[test]
 fn helper_refuses_to_parse_outside_a_sandbox() {
-    let out = Command::new(HELPER)
+    // A request after the refusal gets no reply: the helper has stopped.
+    let mut child = Command::new(HELPER)
         .arg("session")
-        .stdin(std::process::Stdio::null())
-        .output()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
+    use std::io::Write;
+    let _ = child.stdin.take().unwrap().write_all(b"open\nmetadata\n");
+    let out = child.wait_with_output().unwrap();
     let reply = String::from_utf8_lossy(&out.stdout);
     assert!(reply.starts_with("0 {\"Err\""), "{reply}");
     assert!(reply.contains("NotIsolated"), "{reply}");
@@ -720,6 +725,28 @@ fn compression_ratio_and_total_unpacked_size_are_bounded() {
     match lean.open(&dir.file("total.epub", &epub3())) {
         Err(ReaderError::LimitExceeded { what }) => assert!(what.contains("total"), "{what}"),
         other => panic!("expected a total-size refusal, got {other:?}"),
+    }
+}
+
+/// F6: a book's first call pays for the container and package its helper
+/// reads, as well as for what the call itself unpacks.
+#[test]
+fn the_first_call_counts_the_package_it_reads() {
+    let dir = Scratch::new();
+    let bytes = simple(&["<p>x</p>"], &[]);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut size = |name: &str| zip.by_name(name).unwrap().size();
+    let needed = size("META-INF/container.xml") + size("OEBPS/content.opf");
+    let path = dir.file("b.epub", &bytes);
+    let opened = |allowance: u64| {
+        let mut cfg = config();
+        cfg.limits.max_unpacked_bytes = allowance;
+        Reader::new(cfg).unwrap().open(&path)
+    };
+    assert!(opened(needed).is_ok());
+    match opened(needed - 1) {
+        Err(ReaderError::LimitExceeded { what }) => assert!(what.contains("total"), "{what}"),
+        other => panic!("expected a total-size refusal, got {:?}", other.map(|_| ())),
     }
 }
 

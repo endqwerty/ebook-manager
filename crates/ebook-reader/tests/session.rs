@@ -160,6 +160,38 @@ fn a_helper_that_ends_after_answering_is_replaced_once() {
     assert_eq!(number(&count), first + 1);
 }
 
+/// S5, S6: a reply the host refuses ends the helper that sent it, and the
+/// next read starts another.
+#[test]
+fn a_refused_reply_ends_its_helper() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let count = dir.0.join("count");
+    // The markup's text is one unit long, not the two the reply states.
+    let wrong = Response::Ok(Payload::Content(ChapterContent {
+        index: 0,
+        title: None,
+        markup: "<p>x</p>".into(),
+        length: 2,
+        styles: vec![],
+        language: None,
+        right_to_left: false,
+        truncated: false,
+        warnings: vec![],
+    }));
+    let wrong = frame(&dir, "wrong.frame", &wrong, &[]);
+    let cfg = numbered(&dir, "liar", &count, &send(&wrong));
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    let first = number(&count);
+    assert!(matches!(
+        book.read_content(0),
+        Err(ReaderError::HelperFailed { .. })
+    ));
+    assert_eq!(number(&count), first);
+    assert!(book.read_content(0).is_err());
+    assert_eq!(number(&count), first + 1);
+}
+
 /// S5: a read that ends every helper fails after one fresh try, and each
 /// later read tries one fresh helper of its own.
 #[test]
@@ -230,4 +262,130 @@ fn dropping_a_book_ends_its_helper() {
         assert!(Instant::now() < deadline, "helper {pid} outlived its book");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// F6: a helper that writes replies nobody asked for is not read ahead of the
+/// requests, so the host holds at most one reply's worth of them.
+#[test]
+fn replies_nobody_asked_for_are_not_read_ahead() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let written = dir.0.join("written");
+    let ready = Response::Ok(Payload::Probe(ebook_reader::wire::ProbeReport {
+        isolated: true,
+    }));
+    let flood = frame(&dir, "flood.frame", &ready, &[7; 64 * 1024]);
+    let script = format!(
+        "#!/bin/sh\necho '0 {{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}'\nwhile read -r request; do\ncase \"$request\" in\nopen) {open}; while cat '{flood}'; do echo x >> '{written}'; done;;\nesac\ndone\n",
+        open = send(&outline_frame(&dir)),
+        flood = flood.display(),
+        written = written.display(),
+    );
+    let cfg = ReaderConfig {
+        bwrap_path: Some(executable(&dir, "flood-bwrap", &script)),
+        ..config()
+    };
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    let frames = std::fs::read_to_string(&written).map_or(0, |s| s.lines().count());
+    // The pipe and one read buffer hold a few; reading ahead would take hundreds.
+    assert!(frames <= 16, "{frames} unasked replies were read");
+    drop(book);
+}
+
+/// S5: a read that finds its book's helper busy with a slow read uses a
+/// helper of its own instead of waiting for it.
+#[test]
+fn a_slow_read_holds_up_no_other() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>", "<p>y</p>"], &[]));
+    let count = dir.0.join("count");
+    let reply = send(&content_frame(&dir));
+    let mut cfg = numbered(
+        &dir,
+        "slow",
+        &count,
+        &format!("[ \"$request\" = 'content 0' ] && sleep 3; {reply}"),
+    );
+    cfg.timeout = Duration::from_secs(10);
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    let first = number(&count);
+    let slow = {
+        let book = book.clone();
+        std::thread::spawn(move || book.read_content(0).map(|c| c.length))
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    assert_eq!(book.read_content(1).unwrap().length, 1);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(number(&count), first + 1);
+    assert_eq!(slow.join().unwrap().unwrap(), 1);
+    // The book keeps its own helper for the reads after.
+    assert_eq!(book.read_content(1).unwrap().length, 1);
+    assert_eq!(number(&count), first + 1);
+}
+
+/// F6, S5: a reply over the size limit is refused and not asked for again.
+#[test]
+fn an_oversized_reply_is_not_asked_for_again() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
+    let count = dir.0.join("count");
+    let ready = Response::Ok(Payload::Probe(ebook_reader::wire::ProbeReport {
+        isolated: true,
+    }));
+    let big = frame(&dir, "big.frame", &ready, &[1; 8192]);
+    let mut cfg = numbered(&dir, "big", &count, &send(&big));
+    cfg.limits.max_output_bytes = 4096;
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    let first = number(&count);
+    assert!(matches!(
+        book.read_content(0),
+        Err(ReaderError::LimitExceeded { .. })
+    ));
+    assert_eq!(number(&count), first);
+}
+
+/// S5: an error only a helper that is not working as written would send ends
+/// that helper, and a book's own error keeps it.
+#[test]
+fn a_helper_that_answers_out_of_turn_is_ended() {
+    let dir = Scratch::new();
+    let book_path = dir.file("b.epub", &simple(&["<p>x</p>", "<p>y</p>"], &[]));
+    let count = dir.0.join("count");
+    let usage = dir.file(
+        "usage.frame",
+        b"0 {\"Err\":{\"kind\":\"Usage\",\"detail\":\"x\"}}\n",
+    );
+    let invalid = dir.file(
+        "invalid.frame",
+        b"0 {\"Err\":{\"kind\":\"Invalid\",\"detail\":\"missing file in book: c1.xhtml\"}}\n",
+    );
+    let cfg = numbered(
+        &dir,
+        "odd",
+        &count,
+        &format!(
+            "if [ \"$request\" = 'content 1' ]; then {}; else {}; fi",
+            send(&invalid),
+            send(&usage)
+        ),
+    );
+    let book = reader_over(&cfg).open(&book_path).unwrap();
+    let first = number(&count);
+    assert!(matches!(
+        book.read_content(1),
+        Err(ReaderError::InvalidBook { .. })
+    ));
+    assert_eq!(number(&count), first);
+    assert!(matches!(
+        book.read_content(0),
+        Err(ReaderError::HelperFailed { .. })
+    ));
+    assert!(book.read_content(1).is_err());
+    assert_eq!(number(&count), first + 1);
 }
