@@ -420,3 +420,39 @@ pub fn near(actual: ebook_reader::Rgb, expected: [u8; 3], tolerance: u8) -> bool
         .zip(expected)
         .all(|(a, e)| a.abs_diff(e) <= tolerance)
 }
+
+/// Write one helper reply to a file, framed as the helper frames it.
+pub fn frame(
+    dir: &Scratch,
+    name: &str,
+    response: &ebook_reader::wire::Response,
+    blob: &[u8],
+) -> PathBuf {
+    let mut bytes = Vec::new();
+    ebook_reader::wire::write_frame(&mut bytes, response, blob).unwrap();
+    dir.file(name, &bytes)
+}
+
+/// The shell command that sends a framed reply from a file.
+pub fn send(path: &Path) -> String {
+    format!("cat '{}'", path.display())
+}
+
+/// A stand-in for the whole sandbox. It says the sandbox holds, then runs
+/// the first command whose `case` pattern matches each request line.
+pub fn stand_in(dir: &Scratch, name: &str, answers: &[(&str, String)]) -> PathBuf {
+    let mut script = String::from(
+        "#!/bin/sh\necho '0 {\"Ok\":{\"Probe\":{\"isolated\":true}}}'\nwhile read -r request; do\ncase \"$request\" in\n",
+    );
+    for (pattern, command) in answers {
+        script.push_str(&format!("{pattern}) {command};;\n"));
+    }
+    script.push_str("esac\ndone\n");
+    let path = dir.file(name, script.as_bytes());
+    std::process::Command::new("/bin/chmod")
+        .arg("+x")
+        .arg(&path)
+        .status()
+        .unwrap();
+    path
+}

@@ -45,7 +45,7 @@ Where `coredumpctl` exists, the view tests fail if any core dump was recorded wh
 
 The smoke driver can also end the app one way with a reader open and report what was left: `--ending term`, `int`, `kill`, `abrt` or `display` after the two usual arguments. It is a check made by hand, once per way, when the way the reader ends has changed. It is never run in CI or in a loop, because an ending that crashes something leaves a record the desktop shows its user, and `abrt` always leaves the app's own.
 
-The scale check starts the app against 100,000 generated books. It measures the time to the first readable titles over five starts, checks scroll position and visible keyboard focus when switching between views, searches, jumps to the last row, and imports 400 generated EPUBs while checking that the list refreshes at most once a second and keeps its place.
+The scale check starts the app against 100,000 generated books. It measures the time to the first readable titles over five starts, checks scroll position and visible keyboard focus when switching between views, searches, jumps to the last row, and imports 2,400 generated EPUBs while checking that the list refreshes at most once a second and keeps its place, and prints how long that import took.
 
 ```sh
 cargo build --release -p ebook-library --features fixture --bin fixture

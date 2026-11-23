@@ -84,14 +84,22 @@ A place inside a chapter is an offset into its text in UTF-16 code units,
 from 0 to `content.length`. `book.chapters()[i].size` weighs chapters for a
 progress figure.
 
-Every call blocks while one helper process runs, usually a few milliseconds.
-Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
+Every call blocks until the helper answers. `Reader::open` starts the
+book's helper, about 4 ms on a desktop; after that a chapter takes about
+0.3 ms and a picture of 650 KB about 0.4 ms (`reader-bench`, below). Call
+from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`. Calls on
+one book take turns on its helper; a call that would wait more than 50 ms
+for it runs in a short-lived helper of its own, about 4 ms more, with at
+most four of those per book at once. A call's deadline runs from when it is
+made.
 
 ## What callers can rely on
 
 - **No book byte is parsed in the calling process.** The library starts
-  `ebook-reader-helper` under bubblewrap (`bwrap`) for every call and reads back
-  a size-capped JSON reply.
+  `ebook-reader-helper` under bubblewrap (`bwrap`), one for each opened book
+  and one for each `inspect` or `survey`, and reads back size-capped replies:
+  a line of JSON, followed by a picture's bytes or a cover's pixels as they
+  are.
 - **Fail closed.** `Reader::new` returns an error when the helper or `bwrap` is
   missing, or when the helper's isolation check fails inside the sandbox. There
   is no unsandboxed fallback. The helper also refuses to read a book when run
@@ -135,8 +143,20 @@ Call from a worker thread. `Reader` and `Book` are `Send + Sync + Clone`.
   header declares at most `Limits::max_cover_pixels` (40 million). JPEG, PNG,
   GIF and WebP are decoded; anything else gives no cover. A cover that would
   need enlarging more than three times gives no cover.
-- **Stateless reads.** `Book` holds no process and no open file. A helper that
-  crashes or times out costs one call; the next call starts a new helper.
+- **One helper per book.** A `Book` and its clones hold one helper process,
+  which keeps the book's package and contents between calls and ends when the
+  last clone is dropped. It runs on a thread of its own, so the thread that
+  opened the book may end. A helper that crashes, sends a reply the host
+  refuses or runs past the deadline is ended, and the next call starts a new
+  one. A call whose helper ends by itself after that helper had answered an
+  earlier call is tried once in a fresh helper, because what ended it may be
+  what the helper had used up over the session, such as CPU time. A call past
+  its deadline, or whose reply was refused, is not tried again. The host
+  reads only the reply it asked for, so a helper that writes more stalls on
+  its own pipe, and writes requests without waiting, so a helper that stops
+  reading them is ended. Each call is charged for the container, package and
+  contents it uses as if its helper had just read them, so the limits give
+  the same answer whichever helper serves it.
   The helper doesn't crash in the system's sense. Its first step installs
   handlers, and after that, running out of memory or stack, or any signal that
   would dump core, makes it exit with status 4 and
@@ -174,9 +194,9 @@ Before bubblewrap starts, the child process marks every descriptor above
 stderr close-on-exec and asks the kernel to kill it when the application
 exits, so no open file, socket or process handle of the application reaches
 the sandbox. This is the crate's only `unsafe` block, in `src/spawn.rs`. The
-kill-on-exit request follows the calling thread, so do not let the thread that
-made a call end before the call returns; every call here blocks, which keeps
-that true.
+kill-on-exit request follows the thread that starts the child, so each helper
+is started by a thread of its own that lives until the helper is collected
+(`src/session.rs`).
 
 The helper runs with new user, PID, network, IPC, UTS and cgroup namespaces,
 no way to create further user namespaces, no capabilities, an empty
@@ -192,8 +212,9 @@ set. It then checks that `/proc`, `/home`, `/etc` and similar paths are
 absent, that it cannot write, that it has no network route and that it cannot
 start another process. The last check is what lets the address-space limit
 stand for the whole sandbox. The
-host adds a wall-clock deadline and a cap on the reply size, and kills the
-sandbox when either is passed. Defaults are in `Limits` and
+host adds a wall-clock deadline and a cap on the size of each reply, and kills
+the sandbox when either is passed. The CPU-time limit counts the helper's
+whole life, which is why a book's call is tried once more in a fresh helper. Defaults are in `Limits` and
 `ReaderConfig::default()`.
 
 Not yet in place, in the order worth closing:
@@ -210,8 +231,10 @@ Not yet in place, in the order worth closing:
 
 ## Side effects
 
-One short-lived `bwrap` and helper process per call. Nothing is written to
-disk, nothing is cached and no network connection is made.
+One `bwrap` and helper process for each open `Book`, ended with it, and one
+short-lived pair for each `inspect` and `survey`. `Reader::new` starts one to
+prove the sandbox, once per helper, `bwrap` and limits in a process. Nothing
+is written to disk and no network connection is made.
 
 ## Checking it
 
@@ -220,7 +243,13 @@ cargo test                     # unit tests and end-to-end tests through the rea
 cargo test --release
 cargo run --example epub-dump -- book.epub      # debug build: set EBOOK_READER_HELPER to the built helper
 cargo test --release --test reading a_novel_is_surveyed -- --nocapture   # prints the survey time
+cargo build --release --bin ebook-reader-helper --example reader-bench
+target/release/examples/reader-bench target/release/ebook-reader-helper 5   # open, chapter and picture times
 ```
+
+`tests/session.rs` checks that a book's reads share one helper, that the
+helper outlives the thread that opened the book, the one fresh try, no try
+after a deadline, and that dropping a book ends its helper.
 
 The survey's statements (V1 to V6 in the spec) are checked in
 `tests/reading.rs` (series, dates, each image format, spine colour, word

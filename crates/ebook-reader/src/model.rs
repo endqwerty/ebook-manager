@@ -22,7 +22,7 @@ pub struct Limits {
     pub max_toc_entries: u32,
     /// Most blocks returned for one chapter. A longer chapter is cut and flagged.
     pub max_blocks_per_chapter: u32,
-    /// Most unpacked bytes one helper run may take out of the archive.
+    /// Most unpacked bytes one request may take out of the archive.
     pub max_unpacked_bytes: u64,
     /// Largest unpacked-to-packed ratio for an entry over 4 MiB unpacked.
     pub max_compression_ratio: u32,

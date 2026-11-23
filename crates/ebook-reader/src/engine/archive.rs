@@ -80,6 +80,27 @@ impl Archive {
             .and_then(|m| m.get(&name.to_lowercase()).copied().flatten())
     }
 
+    /// Bytes unpacked so far in this request.
+    pub fn unpacked(&self) -> u64 {
+        self.unpacked
+    }
+
+    /// Start a request as if `already` bytes had been unpacked in it.
+    pub fn begin_request(&mut self, already: u64) {
+        self.unpacked = already;
+    }
+
+    /// Count `bytes` this request uses again from an earlier one, as if they
+    /// were unpacked now.
+    pub fn charge(&mut self, bytes: u64) -> Result<(), WireError> {
+        let total = self.unpacked.saturating_add(bytes);
+        if total > self.max_unpacked {
+            return Err(WireError::limit("total unpacked size"));
+        }
+        self.unpacked = total;
+        Ok(())
+    }
+
     /// Some entry is ZIP-encrypted, wherever it is in the archive.
     pub fn has_encrypted_entries(&self) -> bool {
         self.encrypted_entries
@@ -127,7 +148,7 @@ impl Archive {
             }
             packed = raw.compressed_size();
         }
-        // Never unpack more than this run's remaining allowance.
+        // Never unpack more than this request's remaining allowance.
         let left = self.max_unpacked.saturating_sub(self.unpacked);
         let over_budget = cap > left;
         let cap = cap.min(left);
@@ -138,7 +159,7 @@ impl Archive {
         let mut out = Vec::new();
         // The declared size is the book's claim. Stop on actual output.
         let read = entry.take(cap.saturating_add(1)).read_to_end(&mut out);
-        // Unpacked bytes count against the run whether or not the read ended well.
+        // Unpacked bytes count against the request whether or not the read ended well.
         let size = out.len() as u64;
         self.unpacked = self.unpacked.saturating_add(size.min(cap));
         read.map_err(|e| WireError::invalid(format!("damaged entry {}: {e}", short(name))))?;
