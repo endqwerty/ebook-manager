@@ -464,16 +464,11 @@ def shelf_run(binary, root):
         held = focused_name()
         smoke.xd("mousemove", "--window", wid, 400, 350, "click", "--repeat", 12, "--delay", 12, 4)
         # Its spines scrolled wholly out of view, the book's focus is parked.
-        # Wait for the wheel to finish too: a scroll that lands after Menu
-        # cancels the reveal, as a reader's own scroll would.
+        # Menu comes at once, while the wheel's deceleration at the top runs.
         deadline = time.monotonic() + 8
-        shown, still = None, 0
-        while focused_name() is not None or still < 3:
+        while focused_name() is not None:
             assert time.monotonic() < deadline, (held, focused_name())
-            now = [n.get_name() for n in spines()]
-            still = still + 1 if now == shown else 0
-            shown = now
-            time.sleep(0.1)
+            time.sleep(POLL)
         key("Menu")
         find("", "menu item")
         key("Escape")

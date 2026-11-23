@@ -1333,6 +1333,9 @@ pub fn open(app: &adw::Application) {
             let parked = library
                 .with_view(|view| match view {
                     View::Shelf(s) => s.parked_book().inspect(|book| {
+                        // A wheel's deceleration at an edge would pull the reveal back.
+                        library.scrolled.set_kinetic_scrolling(false);
+                        library.scrolled.set_kinetic_scrolling(true);
                         s.scroll_to(book.rank(), gtk::ListScrollFlags::FOCUS);
                     }),
                     _ => None,
