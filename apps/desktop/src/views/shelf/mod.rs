@@ -436,8 +436,12 @@ impl State {
     fn fill(self: &Rc<Self>, height: i32, repack: bool) {
         let rows = self.rows.borrow();
         let y = self.scroll.value() as u64;
-        let start = rows.partition_point(|r| r.top <= y).saturating_sub(2);
-        let end = (rows.partition_point(|r| r.top < y + height as u64) + 1).min(rows.len());
+        let span = (height.max(1) - 1) as usize / self.stride() as usize + 4;
+        let start = rows
+            .partition_point(|r| r.top <= y)
+            .saturating_sub(2)
+            .min(rows.len().saturating_sub(span));
+        let end = (start + span).min(rows.len());
         let mut visible = self.visible.borrow_mut();
         let mut spare: Vec<_> = visible
             .extract_if(.., |i, _| repack || !(start..end).contains(i))

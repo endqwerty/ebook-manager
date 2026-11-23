@@ -281,11 +281,20 @@ struct ShadowKey {
     width: i32,
     height: i32,
     rtl: bool,
+    raised: f32,
 }
 
-// A resting spine's outset shadow depends only on its size and direction.
-// Caching it on Cairo avoids running a Gaussian blur for every spine in a
-// newly revealed row while scrolling.
+fn shadows(s: &gtk::Snapshot, frame: &gsk::RoundedRect, rtl: bool, raised: f32) {
+    let trailing = if rtl { -5. } else { 5. };
+    s.append_outset_shadow(frame, &rgb(0, 0.30), trailing, 0., -2., 8.);
+    if raised > 0. {
+        s.append_outset_shadow(frame, &rgb(0, raised), 0., 6., -4., 14.);
+    }
+}
+
+// A spine's shadows depend only on its size, direction and lift. Caching them
+// avoids a Gaussian blur for every spine in a newly revealed row and for every
+// frame of a hover or selection spring.
 fn software_shadow(
     renderer: &gsk::Renderer,
     display: &gdk::Display,
@@ -310,9 +319,8 @@ fn software_shadow(
         let corner = gtk::graphene::Size::new(1., 1.);
         let square = gtk::graphene::Size::new(0., 0.);
         let frame = gsk::RoundedRect::new(rect, corner, corner, square, square);
-        let trailing = if key.rtl { -5. } else { 5. };
         let snapshot = gtk::Snapshot::new();
-        snapshot.append_outset_shadow(&frame, &rgb(0, 0.30), trailing, 0., -2., 8.);
+        shadows(&snapshot, &frame, key.rtl, key.raised);
         let node = snapshot
             .to_node()
             .unwrap_or_else(|| gsk::ColorNode::new(&rgb(0, 0.), &rect).upcast());
@@ -453,8 +461,12 @@ impl Spine {
         s.translate(&Point::new(0., -lift));
         if !hc {
             let rtl = self.direction() == gtk::TextDirection::Rtl;
-            let trailing = if rtl { -5. } else { 5. };
-            if let Some(renderer) = renderer.as_ref().filter(|_| angle == 0.) {
+            let raised = match (angle > 0., style.is_dark()) {
+                (false, _) => 0.,
+                (true, true) => 0.28,
+                (true, false) => 0.16,
+            };
+            if let Some(renderer) = renderer.as_ref() {
                 let (tex, bounds) = software_shadow(
                     renderer,
                     &self.display(),
@@ -463,21 +475,12 @@ impl Spine {
                         width: self.width(),
                         height: h.ceil() as i32,
                         rtl,
+                        raised,
                     },
                 );
                 s.append_texture(&tex, &bounds);
             } else {
-                s.append_outset_shadow(&frame, &rgb(0, 0.30), trailing, 0., -2., 8.);
-            }
-            if angle > 0. {
-                s.append_outset_shadow(
-                    &frame,
-                    &rgb(0, if style.is_dark() { 0.28 } else { 0.16 }),
-                    0.,
-                    6.,
-                    -4.,
-                    14.,
-                );
+                shadows(s, &frame, rtl, raised);
             }
         }
         let top = 14. - 4. - angle / 2.;
