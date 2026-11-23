@@ -90,11 +90,15 @@ fn reader_fails_closed_without_a_working_sandbox() {
 /// S2: run directly, outside any sandbox, the helper will not touch a book.
 #[test]
 fn helper_refuses_to_parse_outside_a_sandbox() {
-    for op in ["probe", "metadata", "open"] {
-        let out = Command::new(HELPER).arg(op).output().unwrap();
-        let reply = String::from_utf8_lossy(&out.stdout);
-        assert!(reply.contains("NotIsolated"), "{op}: {reply}");
-    }
+    let out = Command::new(HELPER)
+        .arg("session")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let reply = String::from_utf8_lossy(&out.stdout);
+    assert!(reply.starts_with("0 {\"Err\""), "{reply}");
+    assert!(reply.contains("NotIsolated"), "{reply}");
+    assert_eq!(reply.lines().count(), 1, "{reply}");
 }
 
 /// S3: inside the sandbox there is no network, no home, no writable disk, and
@@ -417,14 +421,12 @@ fn memory_and_time_limits_stop_the_helper() {
     }
     assert!(starved.inspect(&path).is_ok());
 
-    // A stand-in sandbox that answers the probe and then never replies.
-    let script = "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{\"Ok\":{\"Probe\":{\"isolated\":true}}}';;\n*) exec /usr/bin/sleep 30;;\nesac\n";
-    let stuck = dir.file("stuck-bwrap", script.as_bytes());
-    Command::new("/bin/chmod")
-        .arg("+x")
-        .arg(&stuck)
-        .status()
-        .unwrap();
+    // A stand-in sandbox that says it is ready and then never replies.
+    let stuck = stand_in(
+        &dir,
+        "stuck-bwrap",
+        &[("*", "exec /usr/bin/sleep 30".into())],
+    );
     let cfg = ReaderConfig {
         bwrap_path: Some(stuck),
         timeout: Duration::from_millis(300),
@@ -642,15 +644,11 @@ fn inconsistent_replies_are_not_passed_on() {
     let book = dir.file("b.epub", &epub3());
     // A stand-in for the whole sandbox that answers with fixed replies.
     let fake = |name: &str, open_reply: &str| {
-        let script = format!(
-            "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}';;\n*) echo '{open_reply}';;\nesac\n"
+        let reply = dir.file(
+            &format!("{name}.frame"),
+            format!("0 {open_reply}\n").as_bytes(),
         );
-        let path = dir.file(name, script.as_bytes());
-        Command::new("/bin/chmod")
-            .arg("+x")
-            .arg(&path)
-            .status()
-            .unwrap();
+        let path = stand_in(&dir, name, &[("*", send(&reply))]);
         ReaderConfig {
             bwrap_path: Some(path),
             ..config()
@@ -1084,21 +1082,14 @@ fn malformed_cover_replies_are_refused() {
     let dir = Scratch::new();
     let book = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
     let fake = |name: &str, width: u32, height: u32, len: usize| {
-        let pixels = vec!["7"; len].join(",");
         let reply = format!(
-            r#"{{"Ok":{{"Survey":{{"words":9,"cover":{{"width":{width},"height":{height},"pixels":[{pixels}],"average":{{"r":1,"g":2,"b":3}},"spine":{{"r":4,"g":5,"b":6}}}}}}}}}}"#
+            r#"{{"Ok":{{"Survey":{{"words":9,"cover":{{"width":{width},"height":{height},"average":{{"r":1,"g":2,"b":3}},"spine":{{"r":4,"g":5,"b":6}}}}}}}}}}"#
         );
-        let reply_file = dir.file(&format!("{name}.json"), reply.as_bytes());
-        let script = format!(
-            "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}';;\n*) cat '{}';;\nesac\n",
-            reply_file.display()
-        );
-        let path = dir.file(name, script.as_bytes());
-        Command::new("/bin/chmod")
-            .arg("+x")
-            .arg(&path)
-            .status()
-            .unwrap();
+        let line = format!("{len} {reply}\n");
+        let mut bytes = line.into_bytes();
+        bytes.extend(std::iter::repeat_n(7u8, len));
+        let reply_file = dir.file(&format!("{name}.frame"), &bytes);
+        let path = stand_in(&dir, name, &[("*", send(&reply_file))]);
         let cfg = ReaderConfig {
             bwrap_path: Some(path),
             ..config()

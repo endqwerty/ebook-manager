@@ -80,6 +80,11 @@ impl Archive {
             .and_then(|m| m.get(&name.to_lowercase()).copied().flatten())
     }
 
+    /// Start a request with the whole unpacking allowance again.
+    pub fn begin_request(&mut self) {
+        self.unpacked = 0;
+    }
+
     /// Some entry is ZIP-encrypted, wherever it is in the archive.
     pub fn has_encrypted_entries(&self) -> bool {
         self.encrypted_entries
@@ -127,7 +132,7 @@ impl Archive {
             }
             packed = raw.compressed_size();
         }
-        // Never unpack more than this run's remaining allowance.
+        // Never unpack more than this request's remaining allowance.
         let left = self.max_unpacked.saturating_sub(self.unpacked);
         let over_budget = cap > left;
         let cap = cap.min(left);
@@ -138,7 +143,7 @@ impl Archive {
         let mut out = Vec::new();
         // The declared size is the book's claim. Stop on actual output.
         let read = entry.take(cap.saturating_add(1)).read_to_end(&mut out);
-        // Unpacked bytes count against the run whether or not the read ended well.
+        // Unpacked bytes count against the request whether or not the read ended well.
         let size = out.len() as u64;
         self.unpacked = self.unpacked.saturating_add(size.min(cap));
         read.map_err(|e| WireError::invalid(format!("damaged entry {}: {e}", short(name))))?;

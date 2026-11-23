@@ -238,7 +238,7 @@ how often.
 
 ```mermaid
 flowchart LR
-    subgraph Sandbox [bubblewrap sandbox, one process per call]
+    subgraph Sandbox [bubblewrap sandbox, one process per open book]
         Helper[ebook-reader-helper]
     end
     Book[(EPUB file)] --> Helper
@@ -253,10 +253,50 @@ flowchart LR
     Shell -- chapter, offset, fraction, time --> Store[Library]
 ```
 
+### The book's helper
+
+An opened book keeps one sandboxed helper for all its reads
+([#120](https://github.com/endqwerty/ebook-manager/issues/120)). Starting
+`bwrap` and the helper takes about 3 ms, which a helper per call paid for every
+chapter and every picture, and pictures crossed as base64 that the host then
+decoded. With `reader-bench` (24 chapters, 24 pictures of about 650 KB, five
+rounds, three runs each, host machine), a chapter went from about 4 ms to
+0.2–0.3 ms, a picture from about 13.5 ms to 0.4 ms, and creating a reader,
+opening a book and reading its first chapter and picture from about 23 ms to
+about 5 ms. A picture's reply is now its bytes plus one line, a quarter smaller than its base64.
+
+- **Shape.** `Reader::open` starts a session (`src/session.rs`): a thread that
+  starts the helper, waits for the helper to say its sandbox holds, then sends
+  it one request line at a time and reads one reply each. A reply is a line
+  of JSON that states how many raw bytes follow it. The helper reads the
+  book's package on its first request and its contents on the first request
+  that needs them, and keeps both. Each request has the whole unpacking
+  allowance.
+- **Why a thread of its own.** The kernel's parent-death signal follows the
+  thread that started a child. The desktop reads on GIO's worker threads,
+  which end when idle, so a helper started on one would die with it.
+- **What stays the same.** The sandbox, the limits, the source-change check
+  before every call, the deadline and reply cap on every reply, and every
+  check the host makes on a reply. The helper reads one book, so keeping it
+  for that book's reads gives it nothing it could not already have.
+- **Failure.** The CPU-time limit counts a helper's whole life, and a long
+  session can use it up. So a call whose helper ends after answering an
+  earlier call is tried once in a fresh helper; a book that kills every helper
+  still fails at once. A call past its deadline is not tried again, so a
+  stuck book costs one deadline per call, as before.
+- **Turned down.** A faster base64 decoder alone would have left the 3 ms start
+  on every call. A pool of helpers per book would read pictures in parallel,
+  but one picture takes 0.4 ms in turn. One helper for several books would
+  let one book's reply reach another's reader.
+- **What would show this is wrong.** A chapter with many large pictures that
+  draws visibly later than its text, because its pictures now wait in turn.
+  Fifty pictures of 650 KB take about 20 ms in turn; measure a real chapter
+  before adding parallel helpers.
+
 ### What the helper returns
 
 The helper gains three requests. Each is a method on `ebook_reader::Book` and
-runs one sandboxed helper process like the existing calls, with the same
+asks the book's helper process, like the existing calls, with the same
 source-change check, deadline and reply size limit. `read_chapter` and its
 block model stay for import, tests and footnote text.
 
@@ -422,7 +462,8 @@ signature.
 `Archive::read`, so the unpacked-size and compression limits apply, and checks
 its first bytes against its media type: the PNG, JPEG, GIF and WebP
 signatures. A mismatch, an SVG picture or any other type is an error. Bytes
-cross the helper's reply as base64. When a picture fails, the scheme handler
+follow the helper's reply line as they are, and the line states their
+length. When a picture fails, the scheme handler
 answers 404 and the page shows the picture's text alternative.
 
 **The CSS sanitiser** (`engine/css.rs`, task 4b) reads a style sheet with a

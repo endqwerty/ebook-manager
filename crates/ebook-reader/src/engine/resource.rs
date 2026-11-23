@@ -7,7 +7,7 @@ use super::archive::Archive;
 use super::package::Package;
 use super::paths;
 use crate::model::{Limits, ResourceKind};
-use crate::wire::{base64_encode, WireError, WireResource};
+use crate::wire::{WireError, WireResource};
 use std::collections::HashMap;
 
 fn kind_for(media_type: &str) -> Option<ResourceKind> {
@@ -67,6 +67,6 @@ pub fn read(
     }
     Ok(WireResource {
         kind: declared,
-        base64: base64_encode(&bytes),
+        bytes,
     })
 }

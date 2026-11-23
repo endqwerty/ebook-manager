@@ -1,4 +1,5 @@
-//! The helper's entry point: limits, isolation check, one operation, one reply.
+//! The helper's entry point: limits, isolation check, then one reply for each
+//! request until the host closes its input.
 
 use super::archive::Archive;
 use super::package::{self, Package};
@@ -8,33 +9,61 @@ use super::{
 };
 use crate::model::{
     Block, BlockKind, Chapter, ChapterContent, ChapterInfo, ChapterWarning, Limits, Link, Target,
+    TocEntry,
 };
 use crate::wire::{
-    BookOutline, Payload, ProbeReport, Response, WireError, WireErrorKind, BOOK_IN_SANDBOX,
+    write_frame, BookOutline, Payload, ProbeReport, Request, Response, WireError, WireErrorKind,
+    BOOK_IN_SANDBOX, MAX_REQUEST_BYTES,
 };
 use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufRead, Read};
 
-/// Run the helper. `args` excludes the program name:
-/// `probe` | `metadata <limits>` | `open <limits>` | `survey <limits>` |
-/// `chapter <limits> <index>` | `content <limits> <index>` |
-/// `resource <limits> <id>`,
-/// followed by the CPU-seconds allowance where a limits argument is present.
+/// Run the helper. `args` excludes the program name: `session <limits>
+/// <cpu-seconds>`. The first reply says the sandbox holds; then each line on
+/// standard input is one [`Request`] and gets one reply, in order.
 pub fn main(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("overflow-probe") {
         return overflow_probe();
     }
-    let response = match dispatch(args) {
-        Ok(payload) => Response::Ok(payload),
-        Err(e) => Response::Err(e),
-    };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    match serde_json::to_writer(&mut out, &response)
-        .map_err(|e| e.to_string())
-        .and_then(|_| out.flush().map_err(|e| e.to_string()))
-    {
+    let limits = match start(args) {
+        Ok(limits) => limits,
+        Err(e) => return reply(&mut out, Response::Err(e), &[]),
+    };
+    let ready = Response::Ok(Payload::Probe(ProbeReport { isolated: true }));
+    if reply(&mut out, ready, &[]) != 0 {
+        return 3;
+    }
+    let mut session = Session { limits, book: None };
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    loop {
+        let mut line = Vec::new();
+        let read = (&mut input)
+            .take(MAX_REQUEST_BYTES as u64 + 1)
+            .read_until(b'\n', &mut line);
+        match read {
+            Ok(0) => return 0,
+            Ok(_) => {}
+            Err(_) => return 3,
+        }
+        let (response, blob) = match Request::parse(&line).ok_or_else(usage) {
+            Ok(request) => match session.serve(request) {
+                Ok((payload, blob)) => (Response::Ok(payload), blob),
+                Err(e) => (Response::Err(e), Vec::new()),
+            },
+            Err(e) => (Response::Err(e), Vec::new()),
+        };
+        if reply(&mut out, response, &blob) != 0 {
+            return 3;
+        }
+    }
+}
+
+fn reply(out: &mut impl std::io::Write, response: Response, blob: &[u8]) -> i32 {
+    match write_frame(out, &response, blob) {
         Ok(()) => 0,
         Err(_) => 3,
     }
@@ -42,6 +71,20 @@ pub fn main(args: &[String]) -> i32 {
 
 fn usage() -> WireError {
     WireError::new(WireErrorKind::Usage, "bad helper arguments")
+}
+
+fn start(args: &[String]) -> Result<Limits, WireError> {
+    if args.first().map(String::as_str) != Some("session") {
+        return Err(usage());
+    }
+    let limits: Limits = match args.get(1) {
+        Some(json) => serde_json::from_str(json).map_err(|_| usage())?,
+        None => Limits::default(),
+    };
+    let cpu = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
+    restrict(&limits, cpu)?;
+    isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why))?;
+    Ok(limits)
 }
 
 /// Lower this process's own limits. Hard and soft are set together, so they
@@ -78,44 +121,72 @@ fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
     set(Resource::Nofile, 32)
 }
 
-fn dispatch(args: &[String]) -> Result<Payload, WireError> {
-    let op = args.first().map(String::as_str).ok_or_else(usage)?;
-    let limits: Limits = match args.get(1) {
-        Some(json) => serde_json::from_str(json).map_err(|_| usage())?,
-        None => Limits::default(),
-    };
-    let cpu = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
-    restrict(&limits, cpu)?;
-    isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why))?;
-    if op == "probe" {
-        return Ok(Payload::Probe(ProbeReport { isolated: true }));
+/// What one helper keeps between requests: the book's archive and package,
+/// read on the first request that needs them, and its contents once read.
+struct Session {
+    limits: Limits,
+    book: Option<Result<Loaded, WireError>>,
+}
+
+struct Loaded {
+    archive: Archive,
+    package: Package,
+    toc: Option<Vec<TocEntry>>,
+}
+
+impl Loaded {
+    fn toc(&mut self, limits: &Limits) -> Result<&[TocEntry], WireError> {
+        if self.toc.is_none() {
+            self.toc = Some(toc::load(&mut self.archive, &self.package, limits)?);
+        }
+        Ok(self.toc.as_deref().unwrap_or_default())
     }
-    let file = File::open(BOOK_IN_SANDBOX)
-        .map_err(|e| WireError::invalid(format!("cannot open the book: {e}")))?;
-    let mut archive = Archive::open(file, &limits)?;
-    let package = package::load(&mut archive, &limits)?;
-    match op {
-        "metadata" => Ok(Payload::Metadata(package.metadata)),
-        "open" => open(&mut archive, package, &limits).map(Payload::Book),
-        "survey" => Ok(Payload::Survey(survey::survey(
-            &mut archive,
-            &package,
-            &limits,
-        ))),
-        "chapter" => {
-            let index: u32 = args.get(3).and_then(|s| s.parse().ok()).ok_or_else(usage)?;
-            chapter(&mut archive, &package, &limits, index).map(Payload::Chapter)
+}
+
+impl Session {
+    fn serve(&mut self, request: Request) -> Result<(Payload, Vec<u8>), WireError> {
+        let limits = &self.limits;
+        let book = self.book.get_or_insert_with(|| {
+            let file = File::open(BOOK_IN_SANDBOX)
+                .map_err(|e| WireError::invalid(format!("cannot open the book: {e}")))?;
+            let mut archive = Archive::open(file, limits)?;
+            let package = package::load(&mut archive, limits)?;
+            Ok(Loaded {
+                archive,
+                package,
+                toc: None,
+            })
+        });
+        let book = book.as_mut().map_err(|e| e.clone())?;
+        // Every request has the whole unpacking allowance, as if it were the
+        // helper's only one.
+        book.archive.begin_request();
+        let none = Vec::new;
+        match request {
+            Request::Metadata => Ok((Payload::Metadata(book.package.metadata.clone()), none())),
+            Request::Open => open(book, limits).map(|b| (Payload::Book(b), none())),
+            Request::Survey => {
+                let mut found = survey::survey(&mut book.archive, &book.package, limits);
+                let pixels = found
+                    .cover
+                    .as_mut()
+                    .map(|c| std::mem::take(&mut c.pixels))
+                    .unwrap_or_default();
+                Ok((Payload::Survey(found), pixels))
+            }
+            Request::Chapter(index) => {
+                chapter(book, limits, index).map(|c| (Payload::Chapter(c), none()))
+            }
+            Request::Content(index) => {
+                content(book, limits, index).map(|c| (Payload::Content(c), none()))
+            }
+            Request::Resource(id) => {
+                readable(&book.package)?;
+                let mut wire = resource::read(&mut book.archive, &book.package, limits, id)?;
+                let bytes = std::mem::take(&mut wire.bytes);
+                Ok((Payload::Resource(wire), bytes))
+            }
         }
-        "content" => {
-            let index: u32 = args.get(3).and_then(|s| s.parse().ok()).ok_or_else(usage)?;
-            content(&mut archive, &package, &limits, index).map(Payload::Content)
-        }
-        "resource" => {
-            let id: u32 = args.get(3).and_then(|s| s.parse().ok()).ok_or_else(usage)?;
-            readable(&package)?;
-            resource::read(&mut archive, &package, &limits, id).map(Payload::Resource)
-        }
-        _ => Err(usage()),
     }
 }
 
@@ -132,13 +203,10 @@ fn readable(package: &Package) -> Result<(), WireError> {
     Ok(())
 }
 
-fn open(
-    archive: &mut Archive,
-    package: Package,
-    limits: &Limits,
-) -> Result<BookOutline, WireError> {
-    readable(&package)?;
-    let toc = toc::load(archive, &package, limits)?;
+fn open(book: &mut Loaded, limits: &Limits) -> Result<BookOutline, WireError> {
+    readable(&book.package)?;
+    let toc = book.toc(limits)?.to_vec();
+    let (archive, package) = (&mut book.archive, &book.package);
     // One pass over the contents: the first label that points into each chapter.
     let mut titles: Vec<Option<&str>> = vec![None; package.spine.len()];
     for entry in &toc {
@@ -169,7 +237,7 @@ fn open(
         })
         .collect();
     Ok(BookOutline {
-        metadata: package.metadata,
+        metadata: package.metadata.clone(),
         chapters,
         toc,
     })
@@ -181,23 +249,19 @@ fn toc_title(toc: &[crate::model::TocEntry], chapter: u32) -> Option<String> {
         .map(|e| e.title.clone())
 }
 
-fn chapter(
-    archive: &mut Archive,
-    package: &Package,
-    limits: &Limits,
-    index: u32,
-) -> Result<Chapter, WireError> {
-    readable(package)?;
+fn chapter(book: &mut Loaded, limits: &Limits, index: u32) -> Result<Chapter, WireError> {
+    readable(&book.package)?;
+    let title = book.toc(limits).map(|toc| toc_title(toc, index))?;
+    let (archive, package) = (&mut book.archive, &book.package);
     let item = package.spine.get(index as usize).ok_or_else(|| {
         WireError::new(
             WireErrorKind::ChapterOutOfRange,
             package.spine.len().to_string(),
         )
     })?;
-    let toc = toc::load(archive, package, limits)?;
     let mut out = Chapter {
         index,
-        title: toc_title(&toc, index),
+        title,
         blocks: Vec::new(),
         truncated: false,
         warnings: Vec::new(),
@@ -271,23 +335,19 @@ fn resolve_link(
     Some(Link::Internal(Target { chapter, anchor }))
 }
 
-fn content(
-    archive: &mut Archive,
-    package: &Package,
-    limits: &Limits,
-    index: u32,
-) -> Result<ChapterContent, WireError> {
-    readable(package)?;
+fn content(book: &mut Loaded, limits: &Limits, index: u32) -> Result<ChapterContent, WireError> {
+    readable(&book.package)?;
+    let title = book.toc(limits).map(|toc| toc_title(toc, index))?;
+    let (archive, package) = (&mut book.archive, &book.package);
     let item = package.spine.get(index as usize).ok_or_else(|| {
         WireError::new(
             WireErrorKind::ChapterOutOfRange,
             package.spine.len().to_string(),
         )
     })?;
-    let toc = toc::load(archive, package, limits)?;
     let mut out = ChapterContent {
         index,
-        title: toc_title(&toc, index),
+        title,
         markup: String::new(),
         length: 0,
         styles: Vec::new(),

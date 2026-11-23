@@ -372,11 +372,11 @@ fn content_calls_refuse_what_chapter_reads_refuse() {
 /// whatever a misbehaving helper sends.
 #[test]
 fn malformed_content_and_resource_replies_are_refused() {
-    use ebook_reader::wire::{base64_encode, BookOutline, Payload, Response, WireResource};
+    use ebook_reader::wire::{BookOutline, Payload, Response, WireResource};
     use ebook_reader::{ChapterContent, ChapterInfo, Metadata};
     let dir = Scratch::new();
     let book = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
-    let outline = serde_json::to_string(&Response::Ok(Payload::Book(BookOutline {
+    let outline = Response::Ok(Payload::Book(BookOutline {
         metadata: Metadata::default(),
         chapters: vec![ChapterInfo {
             index: 0,
@@ -385,34 +385,23 @@ fn malformed_content_and_resource_replies_are_refused() {
             size: u32::MAX,
         }],
         toc: vec![],
-    })))
-    .unwrap();
-    let outline = dir.file("outline.json", outline.as_bytes());
+    }));
+    let outline = frame(&dir, "outline.frame", &outline, &[]);
     // A stand-in for the whole sandbox that answers with fixed replies.
     let fake = |name: &str, reply: &Payload| {
-        let reply = match reply {
-            Payload::Content(c) => Response::Ok(Payload::Content(c.clone())),
-            Payload::Resource(r) => Response::Ok(Payload::Resource(WireResource {
-                kind: r.kind,
-                base64: r.base64.clone(),
-            })),
+        let (reply, blob) = match reply {
+            Payload::Content(c) => (Response::Ok(Payload::Content(c.clone())), Vec::new()),
+            Payload::Resource(r) => (
+                Response::Ok(Payload::Resource(WireResource {
+                    kind: r.kind,
+                    bytes: Vec::new(),
+                })),
+                r.bytes.clone(),
+            ),
             _ => unreachable!(),
         };
-        let reply = dir.file(
-            &format!("{name}.json"),
-            serde_json::to_string(&reply).unwrap().as_bytes(),
-        );
-        let script = format!(
-            "#!/bin/sh\ncase \"$*\" in\n*' -- /helper probe '*) echo '{{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}';;\n*' -- /helper open '*) cat '{}';;\n*) cat '{}';;\nesac\n",
-            outline.display(),
-            reply.display()
-        );
-        let path = dir.file(name, script.as_bytes());
-        std::process::Command::new("/bin/chmod")
-            .arg("+x")
-            .arg(&path)
-            .status()
-            .unwrap();
+        let reply = frame(&dir, &format!("{name}.frame"), &reply, &blob);
+        let path = stand_in(&dir, name, &[("open", send(&outline)), ("*", send(&reply))]);
         let cfg = ebook_reader::ReaderConfig {
             bwrap_path: Some(path),
             ..config()
@@ -519,32 +508,20 @@ fn malformed_content_and_resource_replies_are_refused() {
     }
 
     let png = picture(1, 1, ImageFormat::Png, |_, _| [0, 0, 0, 255]);
-    let resource = |kind, base64: String| Payload::Resource(WireResource { kind, base64 });
-    let ok = fake("png", &resource(ResourceKind::Png, base64_encode(&png)))
+    let resource = |kind, bytes: &[u8]| {
+        Payload::Resource(WireResource {
+            kind,
+            bytes: bytes.to_vec(),
+        })
+    };
+    let ok = fake("png", &resource(ResourceKind::Png, &png))
         .read_resource(ResourceId(0))
         .unwrap();
     assert_eq!(ok.bytes, png);
     for (name, reply) in [
-        (
-            "mislabelled",
-            resource(ResourceKind::Jpeg, base64_encode(&png)),
-        ),
-        (
-            "not-a-picture",
-            resource(ResourceKind::Png, base64_encode(b"<script>")),
-        ),
-        (
-            "not-base64",
-            resource(ResourceKind::Png, "iVBORw0KGgo!".into()),
-        ),
-        ("empty", resource(ResourceKind::Gif, String::new())),
-        ("loose-padding", {
-            // The same bytes with a bit set that canonical base64 leaves 0.
-            let mut text = base64_encode(&png[..png.len() - png.len() % 3 + 1]);
-            let at = text.len() - 3;
-            text.replace_range(at..at + 1, "R");
-            resource(ResourceKind::Png, text)
-        }),
+        ("mislabelled", resource(ResourceKind::Jpeg, &png)),
+        ("not-a-picture", resource(ResourceKind::Png, b"<script>")),
+        ("empty", resource(ResourceKind::Gif, b"")),
     ] {
         match fake(name, &reply).read_resource(ResourceId(0)) {
             Err(ReaderError::HelperFailed { .. }) => {}

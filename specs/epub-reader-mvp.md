@@ -43,8 +43,14 @@ and media-overlay books, and every platform other than native Linux packages.
   build first tries the absolute path in `EBOOK_READER_HELPER`; a release
   build ignores that variable. `PATH` is not searched. `bwrap`
   is used from the configured path, `/usr/bin/bwrap` or `/bin/bwrap`.
-- **S5** Each call runs one helper process that ends with the call. A helper
-  that fails affects only that call.
+- **S5** An opened book reads through one helper process, which ends when
+  the book is dropped, whichever thread opened it. `inspect` and `survey`
+  each run one helper that ends with the call. A helper that fails, sends a
+  reply the host refuses or passes the deadline is ended, and the book's next
+  call starts another. A call whose helper ends after answering an earlier
+  call is tried once more in a fresh helper; a call past its deadline is not.
+  The sandbox check `Reader::new` makes is made once per helper, `bwrap` and
+  limits in a process; every helper repeats its own check as it starts.
 - **S6** The helper's reply is checked before the interface sees it. A book
   outline with no chapters, or with more chapters or contents entries than
   the limits allow, is refused. Chapter indices are renumbered, contents
@@ -247,7 +253,7 @@ and not this crate's.
 - **C5** A resource is returned only when its manifest item is a PNG, JPEG
   (`image/jpeg` or `image/jpg`), GIF or WebP, it unpacks to at most 32 MiB within the limits of F6, and its
   first bytes are that type's signature. The host checks the signature and
-  the size again and refuses base64 that is not canonical. The bytes are not
+  the size again. The bytes cross from the helper as they are and are not
   decoded. A reference in markup can therefore name a picture that is then
   refused. Its text alternative is in the markup's `alt`.
 - **C6** Markup with more than 400,000 elements and text runs is cut there,
@@ -309,9 +315,11 @@ to the reader.
   and 40 million cover pixels (V4). The entry count is
   read from the archive's end record before its directory is parsed. Passing a
   limit gives a limit error; in particular, contents that are too long or too large
-  are an error and never a shortened list. A reading call unpacks at most the
-  container file, the encryption list, the package, the two contents documents
-  and one chapter, so the per-document limits also bound the total. A survey
+  are an error and never a shortened list. A book's helper unpacks the
+  container file, the encryption list and the package once, for its first
+  call, and the two contents documents once, for the first call that needs
+  them. A later call unpacks one chapter or picture, so the per-document
+  limits also bound each call's total. A survey
   unpacks the cover first and then the linear chapters, all within the same
   64 MiB, so a book whose cover and text pass it has an unknown count. Nothing is
   unpacked to disk: archive entry names are only looked up, a looked-up name

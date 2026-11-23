@@ -6,17 +6,14 @@ use crate::model::{
     Chapter, ChapterContent, ChapterInfo, Limits, Link, Metadata, Position, Resource, ResourceId,
     ResourceKind, Survey, SurveyedCover, Thumbnail, TocEntry,
 };
+use crate::session::{self, Reply, Session};
 use crate::wire::{
-    base64_decode, markup_text_units, BookOutline, Payload, Response, WireError, WireErrorKind,
-    WireSurvey, BOOK_IN_SANDBOX, HELPER_IN_SANDBOX,
+    markup_text_units, BookOutline, Payload, Request, WireError, WireErrorKind, WireSurvey,
 };
-use std::ffi::OsString;
-use std::io::Read;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 /// File name of the helper program.
 pub const HELPER_NAME: &str = "ebook-reader-helper";
@@ -26,8 +23,6 @@ pub const HELPER_ENV: &str = "EBOOK_READER_HELPER";
 /// Deepest contents nesting the helper produces, counted from 0.
 const MAX_TOC_DEPTH: u32 = 32;
 const BWRAP_PLACES: [&str; 2] = ["/usr/bin/bwrap", "/bin/bwrap"];
-/// Read-only system library directories the helper's loader may need.
-const LIBRARY_DIRS: [&str; 4] = ["/usr/lib", "/usr/lib64", "/lib", "/lib64"];
 
 #[derive(Debug, Clone)]
 pub struct ReaderConfig {
@@ -52,13 +47,18 @@ impl Default for ReaderConfig {
 }
 
 #[derive(Debug)]
-struct Inner {
-    helper: PathBuf,
-    bwrap: PathBuf,
-    limits: Limits,
-    limits_json: String,
-    timeout: Duration,
+pub(crate) struct Inner {
+    pub(crate) helper: PathBuf,
+    pub(crate) bwrap: PathBuf,
+    pub(crate) limits: Limits,
+    pub(crate) limits_json: String,
+    pub(crate) timeout: Duration,
 }
+
+/// Helper, bubblewrap and limits that have already shown a working sandbox in
+/// this process. Every session checks its sandbox again as it starts, so this
+/// only spares a reader a second check before its first call.
+static PROVEN: Mutex<Option<HashSet<(PathBuf, PathBuf, String)>>> = Mutex::new(None);
 
 /// Entry point. Cheap to clone and safe to share between threads.
 #[derive(Debug, Clone)]
@@ -86,11 +86,25 @@ impl Reader {
                 timeout: config.timeout,
             }),
         };
-        match reader.run(None, &["probe"]) {
-            Ok(Payload::Probe(report)) if report.isolated => Ok(reader),
-            Ok(_) => Err(ReaderError::SandboxUnavailable {
-                reason: "unexpected probe reply".into(),
-            }),
+        let key = (
+            reader.inner.helper.clone(),
+            reader.inner.bwrap.clone(),
+            reader.inner.limits_json.clone(),
+        );
+        let proven =
+            |set: &mut Option<HashSet<_>>| set.get_or_insert_with(HashSet::new).contains(&key);
+        if proven(&mut PROVEN.lock().unwrap_or_else(|p| p.into_inner())) {
+            return Ok(reader);
+        }
+        match Session::start(&reader.inner, None) {
+            Ok(_) => {
+                PROVEN
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .get_or_insert_with(HashSet::new)
+                    .insert(key);
+                Ok(reader)
+            }
             Err(ReaderError::SandboxUnavailable { reason }) => {
                 Err(ReaderError::SandboxUnavailable { reason })
             }
@@ -104,7 +118,7 @@ impl Reader {
     /// A protected book still returns its metadata, with `protected` set.
     pub fn inspect(&self, epub: &Path) -> Result<Metadata, ReaderError> {
         let source = Source::check(epub, &self.inner.limits)?;
-        match self.run(Some(&source.path), &["metadata"])? {
+        match self.once(&source, Request::Metadata)? {
             Payload::Metadata(mut m) => {
                 scrub_metadata(&mut m);
                 Ok(m)
@@ -116,9 +130,15 @@ impl Reader {
     /// Open a book for reading: metadata, reading order and contents.
     pub fn open(&self, epub: &Path) -> Result<Book, ReaderError> {
         let source = Source::check(epub, &self.inner.limits)?;
-        match self.run(Some(&source.path), &["open"])? {
-            Payload::Book(outline) => Book::new(self.clone(), source, outline),
-            _ => Err(unexpected()),
+        let mut session = Session::start(&self.inner, Some(&source.path))?;
+        match session.ask(Request::Open) {
+            Reply::Kept(Ok((payload, blob))) => match *payload {
+                Payload::Book(outline) if blob.is_empty() => {
+                    Book::new(self.clone(), source, outline, session)
+                }
+                _ => Err(unexpected()),
+            },
+            Reply::Kept(Err(error)) | Reply::Lost { error, .. } => Err(error),
         }
     }
 
@@ -129,146 +149,30 @@ impl Reader {
     /// gave no answer and asking again later may work.
     pub fn survey(&self, epub: &Path) -> Result<Survey, ReaderError> {
         let source = Source::check(epub, &self.inner.limits)?;
-        match self.run(Some(&source.path), &["survey"])? {
-            Payload::Survey(survey) => checked_survey(survey),
+        let (payload, blob) = session::once(&self.inner, &source.path, Request::Survey)?;
+        match *payload {
+            Payload::Survey(survey) => checked_survey(survey, blob),
             _ => Err(unexpected()),
         }
     }
 
-    fn run(&self, book: Option<&Path>, op: &[&str]) -> Result<Payload, ReaderError> {
-        let inner = &*self.inner;
-        let mut cmd = Command::new(&inner.bwrap);
-        cmd.args([
-            "--unshare-all",
-            "--unshare-user",
-            "--disable-userns",
-            "--die-with-parent",
-            "--new-session",
-            "--clearenv",
-        ]);
-        cmd.args(["--cap-drop", "ALL"]);
-        for dir in LIBRARY_DIRS {
-            cmd.args(["--ro-bind-try", dir, dir]);
+    /// A request that sends no bytes after its reply, in a session of its own.
+    fn once(&self, source: &Source, request: Request) -> Result<Payload, ReaderError> {
+        match session::once(&self.inner, &source.path, request)? {
+            (payload, blob) if blob.is_empty() => Ok(*payload),
+            _ => Err(unexpected()),
         }
-        cmd.arg("--ro-bind")
-            .arg(&inner.helper)
-            .arg(HELPER_IN_SANDBOX);
-        if let Some(book) = book {
-            cmd.arg("--ro-bind").arg(book).arg(BOOK_IN_SANDBOX);
-        }
-        cmd.args(["--remount-ro", "/", "--chdir", "/", "--", HELPER_IN_SANDBOX]);
-        let mut args: Vec<OsString> = vec![op[0].into(), inner.limits_json.clone().into()];
-        args.push(
-            (inner.timeout.as_secs().saturating_add(2))
-                .to_string()
-                .into(),
-        );
-        args.extend(op[1..].iter().map(OsString::from));
-        cmd.args(args);
-        cmd.env_clear();
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        crate::spawn::confine(&mut cmd);
-
-        let mut child = cmd.spawn().map_err(|e| ReaderError::SandboxUnavailable {
-            reason: format!("cannot start bwrap: {e}"),
-        })?;
-        let outcome = collect(&mut child, inner.limits.max_output_bytes, inner.timeout);
-        let _ = child.kill();
-        let _ = child.wait();
-        let (stdout, stderr, status) = outcome?;
-
-        if let Ok(response) = serde_json::from_slice::<Response>(&stdout) {
-            return match response {
-                Response::Ok(payload) => Ok(payload),
-                Response::Err(e) => Err(from_wire(e)),
-            };
-        }
-        let mut note = String::from_utf8_lossy(&stderr).trim().to_owned();
-        note.retain(|c| !c.is_control());
-        if let Some((cut, _)) = note.char_indices().nth(300) {
-            note.truncate(cut);
-        }
-        // bwrap reports its own setup failures as "bwrap: ..." before the helper runs.
-        if stdout.is_empty() && note.starts_with("bwrap:") {
-            return Err(ReaderError::SandboxUnavailable { reason: note });
-        }
-        Err(ReaderError::HelperFailed {
-            detail: format!("{status}; {note}"),
-        })
     }
-}
-
-type Collected = (Vec<u8>, Vec<u8>, String);
-
-/// Read the helper's reply with a size cap and a deadline.
-fn collect(
-    child: &mut Child,
-    max_output: u64,
-    timeout: Duration,
-) -> Result<Collected, ReaderError> {
-    let now = Instant::now();
-    let deadline = now
-        .checked_add(timeout)
-        .unwrap_or_else(|| now + Duration::from_secs(365 * 24 * 60 * 60));
-    let failed = |what: &str| ReaderError::HelperFailed {
-        detail: what.to_owned(),
-    };
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| failed("no output pipe"))?;
-    let stderr = child.stderr.take().ok_or_else(|| failed("no error pipe"))?;
-
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let result = stdout
-            .take(max_output.saturating_add(1))
-            .read_to_end(&mut buf)
-            .map(|_| buf);
-        let _ = tx.send(result);
-    });
-    let (etx, erx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.take(8192).read_to_end(&mut buf);
-        let _ = etx.send(buf);
-    });
-
-    let remaining = |deadline: Instant| deadline.saturating_duration_since(Instant::now());
-    let out = match rx.recv_timeout(remaining(deadline)) {
-        Ok(Ok(buf)) => buf,
-        Ok(Err(e)) => return Err(failed(&format!("reading reply: {e}"))),
-        Err(_) => return Err(ReaderError::Timeout),
-    };
-    if out.len() as u64 > max_output {
-        return Err(ReaderError::LimitExceeded {
-            what: "size of the reader's reply".into(),
-        });
-    }
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status.to_string(),
-            Ok(None) if Instant::now() >= deadline => return Err(ReaderError::Timeout),
-            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
-            Err(e) => return Err(failed(&format!("waiting for helper: {e}"))),
-        }
-    };
-    let err = erx
-        .recv_timeout(Duration::from_millis(200))
-        .unwrap_or_default();
-    Ok((out, err, status))
 }
 
 /// The helper decoded the cover from an untrusted file. Its reply is held to
 /// the thumbnail's shape before any caller sees the pixels.
-fn checked_survey(survey: WireSurvey) -> Result<Survey, ReaderError> {
+fn checked_survey(survey: WireSurvey, pixels: Vec<u8>) -> Result<Survey, ReaderError> {
     let cover = match survey.cover {
-        None => None,
+        None if pixels.is_empty() => None,
+        None => return Err(unexpected()),
         Some(c) => Some(SurveyedCover {
-            thumbnail: Thumbnail::new(c.width, c.height, c.pixels).ok_or_else(|| {
+            thumbnail: Thumbnail::new(c.width, c.height, pixels).ok_or_else(|| {
                 ReaderError::HelperFailed {
                     detail: "inconsistent cover".into(),
                 }
@@ -289,7 +193,7 @@ fn unexpected() -> ReaderError {
     }
 }
 
-fn from_wire(e: WireError) -> ReaderError {
+pub(crate) fn from_wire(e: WireError) -> ReaderError {
     let mut detail = e.detail;
     scrub(&mut detail);
     match e.kind {
@@ -396,8 +300,9 @@ impl Source {
     }
 }
 
-/// An opened book. Holds no file handle and no helper process: each chapter
-/// read is a fresh, independent sandbox run, so a crashed read loses nothing.
+/// An opened book. Holds one sandboxed helper for its reads, which ends when
+/// the last clone of the book is dropped. A helper that fails is ended and
+/// the next read starts another, so a crashed read loses nothing.
 #[derive(Debug, Clone)]
 pub struct Book {
     reader: Reader,
@@ -405,12 +310,18 @@ pub struct Book {
     metadata: Metadata,
     chapters: Vec<ChapterInfo>,
     toc: Vec<TocEntry>,
+    helper: Arc<Mutex<Option<Session>>>,
 }
 
 impl Book {
     /// The outline came from the helper, which read an untrusted file. Check
     /// it against what this crate promises its callers before handing it on.
-    fn new(reader: Reader, source: Source, outline: BookOutline) -> Result<Book, ReaderError> {
+    fn new(
+        reader: Reader,
+        source: Source,
+        outline: BookOutline,
+        session: Session,
+    ) -> Result<Book, ReaderError> {
         let BookOutline {
             mut metadata,
             mut chapters,
@@ -451,7 +362,47 @@ impl Book {
             metadata,
             chapters,
             toc,
+            helper: Arc::new(Mutex::new(Some(session))),
         })
+    }
+
+    /// Ask the book's helper, starting one if there is none. When a helper
+    /// that had already answered ends, one fresh helper is tried, because
+    /// what ended it may be what the session as a whole used up. `check`
+    /// turns the reply into what the caller gets; a reply it refuses ends the
+    /// helper too.
+    fn ask<T>(
+        &self,
+        request: Request,
+        check: impl FnOnce(Payload, Vec<u8>) -> Result<T, ReaderError>,
+    ) -> Result<T, ReaderError> {
+        if !self.source.unchanged() {
+            return Err(ReaderError::SourceChanged);
+        }
+        let mut slot = self.helper.lock().unwrap_or_else(|p| p.into_inner());
+        let mut tried_fresh = false;
+        let (payload, blob) = loop {
+            let mut session = match slot.take() {
+                Some(session) => session,
+                None => {
+                    tried_fresh = true;
+                    Session::start(&self.reader.inner, Some(&self.source.path))?
+                }
+            };
+            match session.ask(request) {
+                Reply::Kept(answer) => {
+                    *slot = Some(session);
+                    break answer?;
+                }
+                Reply::Lost { error, retry } if !retry || tried_fresh => return Err(error),
+                Reply::Lost { .. } => {}
+            }
+        };
+        let checked = check(*payload, blob);
+        if matches!(checked, Err(ReaderError::HelperFailed { .. })) {
+            *slot = None;
+        }
+        checked
     }
 
     pub fn metadata(&self) -> &Metadata {
@@ -476,18 +427,14 @@ impl Book {
         if index >= count {
             return Err(ReaderError::ChapterOutOfRange { index, count });
         }
-        if !self.source.unchanged() {
-            return Err(ReaderError::SourceChanged);
-        }
-        let n = index.to_string();
-        match self.reader.run(Some(&self.source.path), &["chapter", &n])? {
-            Payload::Chapter(mut chapter) => {
+        self.ask(Request::Chapter(index), |payload, blob| match payload {
+            Payload::Chapter(mut chapter) if blob.is_empty() => {
                 chapter.index = index;
                 self.scrub_chapter(&mut chapter);
                 Ok(chapter)
             }
             _ => Err(unexpected()),
-        }
+        })
     }
 
     /// Read one chapter as markup for a web view: a strict subset of XHTML
@@ -498,12 +445,8 @@ impl Book {
         if index >= count {
             return Err(ReaderError::ChapterOutOfRange { index, count });
         }
-        if !self.source.unchanged() {
-            return Err(ReaderError::SourceChanged);
-        }
-        let n = index.to_string();
-        match self.reader.run(Some(&self.source.path), &["content", &n])? {
-            Payload::Content(mut content) => {
+        self.ask(Request::Content(index), |payload, blob| match payload {
+            Payload::Content(mut content) if blob.is_empty() => {
                 content.index = index;
                 // No style sheet is served yet, so none is named.
                 content.styles.clear();
@@ -525,7 +468,7 @@ impl Book {
                 Ok(content)
             }
             _ => Err(unexpected()),
-        }
+        })
     }
 
     /// Read one picture that a chapter's markup names as `/r/<id>`. The
@@ -533,18 +476,10 @@ impl Book {
     /// A picture that is missing, too large, not a PNG, JPEG, GIF or WebP, or
     /// not what its type says is an error; show its text alternative.
     pub fn read_resource(&self, id: ResourceId) -> Result<Resource, ReaderError> {
-        if !self.source.unchanged() {
-            return Err(ReaderError::SourceChanged);
-        }
-        let n = id.0.to_string();
-        match self
-            .reader
-            .run(Some(&self.source.path), &["resource", &n])?
-        {
+        let max = self.reader.inner.limits.max_resource_bytes;
+        self.ask(Request::Resource(id.0), |payload, bytes| match payload {
             Payload::Resource(wire) => {
-                let bytes = base64_decode(&wire.base64).ok_or_else(unexpected)?;
-                let fits = bytes.len() as u64 <= self.reader.inner.limits.max_resource_bytes;
-                if !fits || ResourceKind::of(&bytes) != Some(wire.kind) {
+                if bytes.len() as u64 > max || ResourceKind::of(&bytes) != Some(wire.kind) {
                     return Err(ReaderError::HelperFailed {
                         detail: "inconsistent reply".into(),
                     });
@@ -555,7 +490,7 @@ impl Book {
                 })
             }
             _ => Err(unexpected()),
-        }
+        })
     }
 
     /// Bring a saved position into this book's chapter range: a chapter past

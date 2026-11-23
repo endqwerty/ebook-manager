@@ -24,17 +24,143 @@ pub enum Payload {
     Resource(WireResource),
 }
 
-/// A resource as the helper sends it. The host checks the bytes against the
-/// kind before it becomes a [`crate::Resource`].
+/// A resource as the helper sends it: its kind in the reply line, its bytes
+/// after it. The host checks the bytes against the kind before they become a
+/// [`crate::Resource`].
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WireResource {
     pub kind: ResourceKind,
-    /// The bytes in base64, which costs a third more than the bytes where a
-    /// JSON array of numbers would cost three times more.
-    pub base64: String,
+    #[serde(skip)]
+    pub bytes: Vec<u8>,
 }
 
-const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// Longest request line, its newline included.
+pub const MAX_REQUEST_BYTES: usize = 32;
+
+/// One thing the host asks of a running helper. On the wire it is one line:
+/// `metadata`, `open`, `survey`, `chapter <n>`, `content <n>` or
+/// `resource <id>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Request {
+    Metadata,
+    Open,
+    Survey,
+    Chapter(u32),
+    Content(u32),
+    Resource(u32),
+}
+
+impl Request {
+    pub fn line(self) -> String {
+        match self {
+            Request::Metadata => "metadata\n".into(),
+            Request::Open => "open\n".into(),
+            Request::Survey => "survey\n".into(),
+            Request::Chapter(n) => format!("chapter {n}\n"),
+            Request::Content(n) => format!("content {n}\n"),
+            Request::Resource(n) => format!("resource {n}\n"),
+        }
+    }
+
+    /// `None` for anything [`Request::line`] does not write.
+    pub fn parse(line: &[u8]) -> Option<Request> {
+        if line.len() > MAX_REQUEST_BYTES {
+            return None;
+        }
+        let text = std::str::from_utf8(line).ok()?;
+        let words = text.strip_suffix('\n')?;
+        let request = match words.split_once(' ') {
+            None => match words {
+                "metadata" => Request::Metadata,
+                "open" => Request::Open,
+                "survey" => Request::Survey,
+                _ => return None,
+            },
+            Some((op, n)) => {
+                let n: u32 = n.parse().ok()?;
+                match op {
+                    "chapter" => Request::Chapter(n),
+                    "content" => Request::Content(n),
+                    "resource" => Request::Resource(n),
+                    _ => return None,
+                }
+            }
+        };
+        (request.line() == text).then_some(request)
+    }
+}
+
+/// Write one reply: the length of the bytes that follow, a space, the reply
+/// as one line of JSON, then the bytes. JSON escapes every newline inside a
+/// string, so the line ends where the reply does.
+pub fn write_frame(
+    out: &mut impl std::io::Write,
+    response: &Response,
+    blob: &[u8],
+) -> std::io::Result<()> {
+    let mut line = format!("{} ", blob.len()).into_bytes();
+    serde_json::to_writer(&mut line, response)?;
+    line.push(b'\n');
+    out.write_all(&line)?;
+    out.write_all(blob)?;
+    out.flush()
+}
+
+/// Why a reply could not be read.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FrameError {
+    /// The stream ended before a reply began.
+    Closed,
+    /// More than the allowance, counting the line and the bytes.
+    TooLarge,
+    /// Anything else, an ending in the middle of a reply included.
+    Malformed,
+}
+
+/// Read one reply written by [`write_frame`], refusing one over `max` bytes
+/// in all, line and bytes together.
+pub fn read_frame(
+    input: &mut impl std::io::BufRead,
+    max: u64,
+) -> Result<(Response, Vec<u8>), FrameError> {
+    use std::io::Read;
+    let mut line = Vec::new();
+    let read = std::io::BufRead::read_until(
+        &mut input.by_ref().take(max.saturating_add(1)),
+        b'\n',
+        &mut line,
+    )
+    .map_err(|_| FrameError::Malformed)?;
+    if read == 0 {
+        return Err(FrameError::Closed);
+    }
+    if line.len() as u64 > max {
+        return Err(FrameError::TooLarge);
+    }
+    let body = line.strip_suffix(b"\n").ok_or(FrameError::Malformed)?;
+    let space = body
+        .iter()
+        .position(|b| *b == b' ')
+        .ok_or(FrameError::Malformed)?;
+    let digits = &body[..space];
+    if digits.is_empty() || digits.len() > 19 || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(FrameError::Malformed);
+    }
+    let len: u64 = std::str::from_utf8(digits)
+        .ok()
+        .and_then(|d| d.parse().ok())
+        .ok_or(FrameError::Malformed)?;
+    if len.saturating_add(line.len() as u64) > max {
+        return Err(FrameError::TooLarge);
+    }
+    let response: Response =
+        serde_json::from_slice(&body[space + 1..]).map_err(|_| FrameError::Malformed)?;
+    let mut blob = vec![0; len as usize];
+    input
+        .read_exact(&mut blob)
+        .map_err(|_| FrameError::Malformed)?;
+    Ok((response, blob))
+}
 
 /// Every element the markup writer writes. The host accepts no other.
 pub const MARKUP_ELEMENTS: [&str; 71] = [
@@ -247,55 +373,6 @@ pub fn markup_text_units(markup: &str) -> Option<u32> {
     Some(units)
 }
 
-pub fn base64_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
-        for (i, shift) in [18u32, 12, 6, 0].into_iter().enumerate() {
-            if i <= chunk.len() {
-                out.push(BASE64[(n >> shift & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
-/// `None` for anything but canonical padded base64.
-pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    let text = text.as_bytes();
-    if !text.len().is_multiple_of(4) {
-        return None;
-    }
-    let value = |c: u8| BASE64.iter().position(|b| *b == c).map(|p| p as u32);
-    let mut out = Vec::with_capacity(text.len() / 4 * 3);
-    let last = text.len() / 4;
-    for (at, chunk) in text.chunks(4).enumerate() {
-        let padding = chunk.iter().rev().take_while(|c| **c == b'=').count();
-        if padding > 2 || (padding > 0 && at + 1 != last) {
-            return None;
-        }
-        let mut n = 0u32;
-        for c in &chunk[..4 - padding] {
-            n = n << 6 | value(*c)?;
-        }
-        n <<= 6 * padding as u32;
-        // The bits padding stands in for are 0 in canonical text.
-        if n & ((1u32 << (8 * padding as u32)) - 1) != 0 {
-            return None;
-        }
-        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
-        out.extend_from_slice(&bytes[..3 - padding]);
-    }
-    Some(out)
-}
-
 /// A survey as the helper sends it. The host checks the cover before it
 /// becomes a [`crate::Thumbnail`].
 #[derive(Debug, Serialize, Deserialize)]
@@ -308,7 +385,8 @@ pub struct WireSurvey {
 pub struct WireCover {
     pub width: u32,
     pub height: u32,
-    /// RGB, row by row.
+    /// RGB, row by row. Sent after the reply line.
+    #[serde(skip)]
     pub pixels: Vec<u8>,
     pub average: Rgb,
     pub spine: Rgb,
@@ -362,21 +440,78 @@ impl WireError {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_decode, base64_encode};
+    use super::{read_frame, write_frame, FrameError, Payload, ProbeReport, Request, Response};
+    use std::io::Cursor;
 
     #[test]
-    fn base64_round_trips_every_length_and_refuses_bad_text() {
-        for len in 0..40usize {
-            let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + 250) as u8).collect();
-            assert_eq!(base64_decode(&base64_encode(&bytes)), Some(bytes));
-        }
-        assert_eq!(base64_encode(b"Man"), "TWFu");
-        assert_eq!(base64_encode(b"Ma"), "TWE=");
-        assert_eq!(base64_encode(b"M"), "TQ==");
-        for bad in [
-            "TWF", "TW=u", "T===", "TQ==TWFu", "TW!u", "TWFu\n", "TR==", "TWF=",
+    fn requests_parse_only_in_the_form_they_are_written() {
+        for request in [
+            Request::Metadata,
+            Request::Open,
+            Request::Survey,
+            Request::Chapter(0),
+            Request::Content(u32::MAX),
+            Request::Resource(17),
         ] {
-            assert_eq!(base64_decode(bad), None, "{bad}");
+            assert_eq!(Request::parse(request.line().as_bytes()), Some(request));
+        }
+        for bad in [
+            "open",
+            "open \n",
+            " open\n",
+            "chapter\n",
+            "chapter 01\n",
+            "chapter -1\n",
+            "chapter +1\n",
+            "chapter 4294967296\n",
+            "content 1 2\n",
+            "probe\n",
+            "OPEN\n",
+            "resource 1\r\n",
+        ] {
+            assert_eq!(Request::parse(bad.as_bytes()), None, "{bad:?}");
+        }
+        assert_eq!(Request::parse(&[b'x'; 64]), None);
+    }
+
+    #[test]
+    fn frames_round_trip_and_refuse_what_does_not_fit() {
+        let ready = Response::Ok(Payload::Probe(ProbeReport { isolated: true }));
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &ready, &[0, b'\n', 255]).unwrap();
+        write_frame(&mut wire, &ready, &[]).unwrap();
+        let mut input = Cursor::new(wire.clone());
+        let (_, blob) = read_frame(&mut input, 1024).unwrap();
+        assert_eq!(blob, [0, b'\n', 255]);
+        let (_, blob) = read_frame(&mut input, 1024).unwrap();
+        assert!(blob.is_empty());
+        assert_eq!(
+            read_frame(&mut input, 1024).unwrap_err(),
+            FrameError::Closed
+        );
+
+        let first = wire.iter().position(|b| *b == b'\n').unwrap() + 1;
+        assert_eq!(
+            read_frame(&mut Cursor::new(&wire[..first + 3]), first as u64 + 2).unwrap_err(),
+            FrameError::TooLarge
+        );
+        assert_eq!(
+            read_frame(&mut Cursor::new(&wire[..first + 2]), 1024).unwrap_err(),
+            FrameError::Malformed
+        );
+        for bad in [
+            &b"{\"Ok\":{\"Probe\":{\"isolated\":true}}}\n"[..],
+            b"x {}\n",
+            b"0 {\"Ok\":{\"Probe\":{\"isolated\":true}}}",
+            b"99999999999999999999 {}\n",
+            b"-1 {}\n",
+        ] {
+            assert_eq!(
+                read_frame(&mut Cursor::new(bad), 1 << 40).unwrap_err(),
+                FrameError::Malformed,
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
         }
     }
 }
