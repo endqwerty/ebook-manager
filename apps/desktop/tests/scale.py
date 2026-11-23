@@ -18,7 +18,7 @@ from smoke import Atspi, GLib, environment, find, focus, key, stop, walk
 BOOKS = 100_000
 # Enough books that the import outlasts the driver's own looks on a fast
 # machine: the check needs four gaps between refreshes it saw.
-IMPORTS = 800
+IMPORTS = 2400
 STARTS = 5
 # LIB-70: the library is shown within this long of starting the process.
 LAUNCH_LIMIT = 2.0
@@ -766,7 +766,8 @@ def run(binary, fixture, root):
         checked, scrolled, last = False, None, count.get_name()
         key("ctrl+shift+o")
         smoke.picker(incoming, "Choose a folder of EPUBs")
-        deadline = time.monotonic() + 600
+        began = time.monotonic()
+        deadline = began + 600
         while last != f"{BOOKS + IMPORTS:,} books":
             now = time.monotonic()
             assert now < deadline, "the import did not finish"
@@ -804,7 +805,8 @@ def run(binary, fixture, root):
                 last, watching = count.get_name(), False
             time.sleep(POLL)
         print(
-            f"import of {IMPORTS} books into {BOOKS:,}: the count was seen to change {len(changes)} times, "
+            f"import of {IMPORTS} books into {BOOKS:,} took {time.monotonic() - began:.1f} s: "
+            f"the count was seen to change {len(changes)} times, "
             f"gaps {min(gaps):.2f} to {max(gaps):.2f} seconds",
             flush=True,
         )
