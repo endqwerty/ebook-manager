@@ -792,7 +792,10 @@ same time.
 4. **The shelf** (implemented on Linux). Behaviour 18. The read thread
    returns the strip with the opened view so the model can place the reader
    as soon as the view has a size. GTK scrolls a viewport over a fixed canvas.
-   The canvas holds the visible rows and one extra at either end.
+   The canvas holds a fixed number of rows: one above the viewport, the most
+   rows a viewport of its height can cross, and one below, shifted inward at
+   either end of the shelf. Scrolling rebinds the row that leaves to the row
+   that enters, so it builds no new spine widgets.
    Cairo lifts the head of the selected spine four units, leaves its foot on
    the board and enlarges its top strip. Projecting the lettering in pixel
    bands made it unreadable. Other renderers use the perspective transform.
@@ -806,9 +809,11 @@ same time.
    clearance for the top edge. The clamped libadwaita spring uses damping
    ratio 1, mass 1 and stiffness 450.
 
-   At 100,000 books the grouped shelf appeared in 0.595 s on the host and
-   0.516 s on Ubuntu 26.04. Both runs counted 186 spine widgets against a
-   bound of 336. On a width change the window waits for the new scroll range
+   At 100,000 books the grouped shelf appeared in 0.56–0.75 s over five runs
+   on two CPUs under Ubuntu 26.04, with 267 spine widgets against a bound of
+   336. Before the row count was fixed the top of the shelf held one row
+   fewer above and below, and the same container counted 186 spines in
+   0.49–0.55 s. On a width change the window waits for the new scroll range
    before placing the first full book. A later move by the reader cancels
    that placement. The window clamps the new position to keep the focused
    spine on screen. During import it resolves the top book by ID and
@@ -827,11 +832,30 @@ same time.
    16.7 ms. Removing each spine's offscreen texture made shadows and grain
    paint again while scrolling. The maximum rose to 51.72 and 38.13 ms.
    The shelf now caches up to 512 cloth surfaces (by colour, dimensions and
-   scale) and up to 128 resting outset-shadow textures (by dimensions, text
-   direction and scale), both rasterised via a CPU `CairoRenderer` so neither
-   Cairo nor GL/Vulkan re-runs per-spine Gaussian blurs or `Overlay` blend
-   passes on scroll, and caches each recycled spine's vertical Pango context
-   while skipping author layout on narrow spines.
+   scale) and up to 128 shadow textures (by dimensions, text direction, scale
+   and the opacity of the raised shadow a tipped spine adds), both rasterised
+   via a CPU `CairoRenderer` so neither Cairo nor GL/Vulkan re-runs per-spine
+   Gaussian blurs or `Overlay` blend passes on scroll, and caches each
+   recycled spine's vertical Pango context while skipping author layout on
+   narrow spines.
+
+   The slowest frames are the ones that bind a new row: about 40 spines are
+   laid out and rendered into their layer textures in one frame. Timing each
+   frame in parts ([#123](https://github.com/endqwerty/ebook-manager/issues/123))
+   found two costs in them that did not need to be there. The pointer rests
+   over the shelf while it scrolls, so spines spring up and back beneath it,
+   and a tipped spine used to skip the shadow cache and blur two shadows on the
+   CPU in every frame of its spring: about 2.5 ms a frame for three spines.
+   And the number of rows the viewport crosses alternates as the offset moves
+   within a row, so the old window destroyed a row and later built a new one
+   with about 40 new cells, 0.84 ms of each frame that bound a row. With both
+   removed, a bind frame on a quiet host spends about 6 ms drawing spines
+   (half of it rasterising text, which the stamped lettering draws twice),
+   1.5 ms in update and layout and 2.5 ms in GTK's own frame. A tipped spine
+   draws the cached texture of its shadow at its height rounded up, so while
+   the pointer rests on one its pixels shift by a fraction of a pixel
+   compared with an exact shadow (a channel difference of at most 27 of 255).
+   Resting and selected spines draw the same pixels as before.
 
    The driver measures the whole GTK frame, from before update through after
    paint, for each frame in which the wheel moved the adjustment, and gates on
@@ -839,9 +863,21 @@ same time.
    under Xvfb with Cairo:
    - Host (Arch): 13.34–15.55 ms maximum, 5.3–6.2 ms median, 0 frames over
      16.7 ms.
-   - Ubuntu 26.04 container on two CPUs: 14.64 ms maximum, 0 frames over
-     16.7 ms (down from 18.6–28.6 ms before shadow caching and the larger cloth
-     cache).
+   - Ubuntu 26.04 container on two CPUs, interleaved in one quiet session,
+     four runs each: 12.32–12.74 ms maximum, 0 frames over 16.7 ms, against
+     15.30–16.50 ms for the earlier shelf and 13.65–14.12 ms with only the
+     tipped shadows cached. Earlier, 14.64 ms before this change, and
+     18.6–28.6 ms before shadow caching and the larger cloth cache.
+   - The same container while other jobs held the host's load average at 13
+     to 25, alternating four runs each: 14.55–20.39 ms maximum (0–4 frames
+     over) against 21.93–27.01 ms (2–6 over) for the earlier shelf. The window
+     thread's CPU time on the slowest frames was within 1.1 ms of their wall
+     time, so a busy host slows the drawing itself rather than making the
+     window wait for a processor. The driver prints that CPU time beside the
+     wall time it gates on.
+   - GitHub's runners before this change: maxima 11.84–19.91 ms, with the
+     runs over the limit having a median near 6.9 ms against 4.0–5.8 ms for
+     those within it.
    - Hardware Vulkan (`GSK_RENDERER=vulkan`, NVIDIA GeForce RTX 3090, under
      Xvfb without DRI3): median 14.59 ms, steady-state 11.5–16.6 ms (down from
      22.3 ms median before caching), with 64.5–150.1 ms cold-upload spikes over
