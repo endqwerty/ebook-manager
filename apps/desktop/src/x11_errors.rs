@@ -94,7 +94,7 @@ fn as_handler(address: usize) -> Option<Handler> {
 pub unsafe extern "C" fn XSetErrorHandler(handler: Option<Handler>) -> Option<Handler> {
     let set = libx11_set_handler()?;
     // One registration at a time, so what each returns is what it replaced.
-    // The filter reads only atomics and never waits on this.
+    // The filter never takes this lock.
     static REGISTERING: Mutex<()> = Mutex::new(());
     let _turn = REGISTERING.lock().unwrap_or_else(|p| p.into_inner());
     let mut first = false;
