@@ -30,3 +30,7 @@ ebook-library = { path = "../../crates/ebook-library", features = ["fixture"] }
 [[test]]
 name = "view"
 harness = false
+
+[[test]]
+name = "x11_errors"
+harness = false
