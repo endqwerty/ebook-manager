@@ -776,6 +776,10 @@ def check_diagnostics(root):
                 for first, last, pattern in EXPECTED
             )
         ]
+    if any("X Window System error" in line for line in unexpected):
+        # GDK names the error and the request on the lines after its warning.
+        text = log.read_text(errors="replace")
+        unexpected += re.findall(r"^.*(?:The error was|\(Details:).*$", text, re.M)
     assert not unexpected, "\n".join(unexpected)
     print("PASS no unexpected GTK warnings or criticals from any app process", flush=True)
 

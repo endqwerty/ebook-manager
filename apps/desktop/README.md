@@ -38,9 +38,10 @@ The reader's web view has tests of its own, which serve it hostile chapters on a
 
 ```sh
 apps/desktop/tests/private-session.sh cargo nextest run -p ebook-manager --test view
+apps/desktop/tests/private-session.sh cargo nextest run -p ebook-manager --test x11_errors
 ```
 
-Where `coredumpctl` exists, that test program fails if any core dump was recorded while it ran.
+Where `coredumpctl` exists, the view tests fail if any core dump was recorded while they ran. The second command checks that a window another program destroys does not end the app ([`src/x11_errors.rs`](src/x11_errors.rs)).
 
 The smoke driver can also end the app one way with a reader open and report what was left: `--ending term`, `int`, `kill`, `abrt` or `display` after the two usual arguments. It is a check made by hand, once per way, when the way the reader ends has changed. It is never run in CI or in a loop, because an ending that crashes something leaves a record the desktop shows its user, and `abrt` always leaves the app's own.
 
