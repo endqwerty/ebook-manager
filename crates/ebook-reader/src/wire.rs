@@ -503,6 +503,10 @@ mod tests {
         );
         // A line that fills the allowance without ending is too large, and
         // nothing past the allowance is read.
+        assert_eq!(
+            read_frame(&mut Cursor::new(wire.clone()), 0).unwrap_err(),
+            FrameError::TooLarge
+        );
         let mut long = Cursor::new(vec![b'7'; 64]);
         assert_eq!(read_frame(&mut long, 16).unwrap_err(), FrameError::TooLarge);
         assert_eq!(long.position(), 16);

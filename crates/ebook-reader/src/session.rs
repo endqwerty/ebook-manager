@@ -72,6 +72,9 @@ impl Session {
         book: Option<&Path>,
         deadline: Instant,
     ) -> Result<Session, ReaderError> {
+        if Instant::now() >= deadline {
+            return Err(ReaderError::Timeout);
+        }
         let (jobs, inbox) = mpsc::channel();
         let (ready, started) = mpsc::channel();
         let inner = inner.clone();
