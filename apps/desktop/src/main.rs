@@ -8,6 +8,7 @@ mod store;
 mod thumbs;
 mod views;
 mod window;
+mod x11_errors;
 
 use anyhow::Result;
 use ebook_library::Book;
@@ -101,10 +102,12 @@ fn main() -> glib::ExitCode {
         .application_id("io.github.endqwerty.EbookManager")
         .build();
     app.connect_startup(|app| {
+        let display = gtk::gdk::Display::default().expect("GTK display");
+        x11_errors::install(&display);
         let css = gtk::CssProvider::new();
         css.load_from_string(include_str!("style.css"));
         gtk::style_context_add_provider_for_display(
-            &gtk::gdk::Display::default().expect("GTK display"),
+            &display,
             &css,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );

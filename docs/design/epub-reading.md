@@ -228,6 +228,17 @@ process.
 | The display goes away | Not saved after the last place held | Gone with the application. No record of its own. |
 | The application itself aborts | Not saved after the last place held | Gone with the application. No record of its own; the application's own crash is recorded. |
 
+In both rows where the library window is destroyed, GTK can still paint
+that window or set a property on it before GDK reads the destroy notice.
+The X server answers with `BadWindow` or `BadDrawable`, and GDK's own
+error handler would end the process with status 1
+([#122](https://github.com/endqwerty/ebook-manager/issues/122)).
+`apps/desktop/src/x11_errors.rs` puts a handler in front of GDK's that
+ignores those two errors when they name one of the app's own toplevel
+windows, and passes every other error to GDK. `tests/x11_errors.rs`
+destroys a window with `xdotool` and sets its title before the main loop
+runs again: without the handler GDK ends the test with status 1.
+
 The last three rows are one trial each, made by hand with
 `smoke.py --ending`, a reader open on a real chapter, and the core-dump
 count read before and 35 seconds after. In each the web process went with

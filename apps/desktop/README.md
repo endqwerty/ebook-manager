@@ -38,7 +38,10 @@ The reader's web view has tests of its own, which serve it hostile chapters on a
 
 ```sh
 apps/desktop/tests/private-session.sh cargo nextest run -p ebook-manager --test view
+apps/desktop/tests/private-session.sh cargo nextest run -p ebook-manager --test x11_errors
 ```
+
+The second checks that a window another program destroys does not end the app ([`src/x11_errors.rs`](src/x11_errors.rs)).
 
 Where `coredumpctl` exists, that test program fails if any core dump was recorded while it ran.
 
