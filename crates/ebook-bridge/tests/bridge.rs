@@ -481,3 +481,115 @@ fn cover_thumbnail_repairs_tampered_cache_and_export_detects_existing_copy() {
     assert_eq!(binding_palette_index("abc".into()), 7);
     assert_eq!(binding_palette_index(String::new()), 2);
 }
+
+fn add_unsurveyed(library: &mut ebook_library::Library, staged: &Path, title: &str) -> String {
+    let meta = ebook_library::ParsedMetadata {
+        title: title.into(),
+        authors: vec!["Mira Field".into()],
+        ..Default::default()
+    };
+    match library
+        .import(
+            staged,
+            staged,
+            &meta,
+            ebook_library::ImportChoice::KeepSeparate,
+        )
+        .unwrap()
+    {
+        ebook_library::ImportOutcome::Added(book) => book.id,
+        other => panic!("expected Added, got {other:?}"),
+    }
+}
+
+fn survey_until_done(library: &Library) -> (u32, Vec<String>) {
+    let mut failed: Vec<String> = Vec::new();
+    let mut surveyed = 0;
+    for _ in 0..16 {
+        let batch = library.survey_unsurveyed(16, failed.clone()).unwrap();
+        if batch.surveyed == 0 && batch.failed.is_empty() {
+            return (surveyed, failed);
+        }
+        surveyed += batch.surveyed;
+        failed.extend(batch.failed);
+    }
+    panic!("survey did not finish");
+}
+
+#[test]
+fn background_survey_passes_failed_books_to_reach_later_ones() {
+    ensure_helper_beside_test_exe();
+    let root = TempDir::new().unwrap();
+    let lib_dir = root.path().join("library");
+    let mut broken = Vec::new();
+    let mut good = Vec::new();
+    {
+        let mut store = ebook_library::Library::open(&lib_dir).unwrap();
+        for i in 0..20 {
+            let path = write_file(
+                root.path(),
+                &format!("broken-{i}.epub"),
+                format!("not an archive {i}").as_bytes(),
+            );
+            broken.push(add_unsurveyed(&mut store, &path, &format!("Broken {i}")));
+        }
+        for (i, uuid) in [
+            "aaaaaaaa-0000-4000-8000-000000000001",
+            "aaaaaaaa-0000-4000-8000-000000000002",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let bytes = synthetic_epub(uuid, &format!("Late {i}"), "Mira Field", "Late book.");
+            let path = write_file(root.path(), &format!("late-{i}.epub"), &bytes);
+            good.push(add_unsurveyed(&mut store, &path, &format!("Late {i}")));
+        }
+    }
+
+    let library = Library::open(lib_dir.to_string_lossy().into_owned()).unwrap();
+    let (surveyed, mut failed) = survey_until_done(&library);
+    assert_eq!(surveyed, 2);
+    failed.sort();
+    broken.sort();
+    assert_eq!(failed, broken);
+    for id in good {
+        let book = library.book(id).unwrap();
+        assert!(book.cover_digest.is_some(), "late book gained its cover");
+        assert!(book.words.is_some(), "late book gained its word count");
+    }
+}
+
+#[test]
+fn background_survey_counts_locally_committed_books_when_publication_is_pending() {
+    ensure_helper_beside_test_exe();
+    let root = TempDir::new().unwrap();
+    let lib_dir = root.path().join("library");
+    let bytes = synthetic_epub(
+        "bbbbbbbb-0000-4000-8000-000000000001",
+        "Pending Shore",
+        "Mira Field",
+        "Pending.",
+    );
+    let path = write_file(root.path(), "pending.epub", &bytes);
+    let id = {
+        let mut store = ebook_library::Library::open(&lib_dir).unwrap();
+        add_unsurveyed(&mut store, &path, "Pending Shore")
+    };
+    let library = Library::open(lib_dir.to_string_lossy().into_owned()).unwrap();
+    let changes = lib_dir.join("portable").join("changes");
+    let away = root.path().join("changes-away");
+    fs::rename(&changes, &away).unwrap();
+    fs::write(&changes, b"occupied").unwrap();
+
+    let batch = library.survey_unsurveyed(16, Vec::new()).unwrap();
+    assert_eq!(batch.surveyed, 1);
+    assert!(batch.failed.is_empty());
+    let again = library.survey_unsurveyed(16, Vec::new()).unwrap();
+    assert_eq!(again.surveyed, 0);
+    assert!(again.failed.is_empty());
+    assert!(library.book(id).unwrap().words.is_some());
+
+    fs::remove_file(&changes).unwrap();
+    fs::rename(&away, &changes).unwrap();
+    library.refresh().unwrap();
+}

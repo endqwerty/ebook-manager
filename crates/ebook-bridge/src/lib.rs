@@ -13,7 +13,7 @@ use ebook_reader::{
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt, fs,
     io::{self, Read},
     os::unix::fs::OpenOptionsExt,
@@ -499,6 +499,15 @@ pub struct ChapterMarkup {
 pub struct BookResource {
     pub media_type: String,
     pub bytes: Vec<u8>,
+}
+
+/// Outcome of one background survey pass.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SurveyBatch {
+    /// Books whose survey is now stored locally, including those whose portable copy is still pending.
+    pub surveyed: u32,
+    /// Books whose survey failed; pass them back as `skip` to reach later books.
+    pub failed: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1041,43 +1050,58 @@ impl Library {
         Ok(out)
     }
 
-    /// Surveys up to `limit` unsurveyed books and stores their word counts and cover thumbnails.
-    pub fn survey_unsurveyed(&self, limit: u32) -> Result<u32, BridgeError> {
+    /// Surveys up to `limit` unsurveyed books not named in `skip`, storing their word counts and cover thumbnails.
+    pub fn survey_unsurveyed(
+        &self,
+        limit: u32,
+        skip: Vec<String>,
+    ) -> Result<SurveyBatch, BridgeError> {
+        let mut batch = SurveyBatch {
+            surveyed: 0,
+            failed: Vec::new(),
+        };
         if limit == 0 {
-            return Ok(0);
+            return Ok(batch);
         }
-        let books =
-            self.with_writer(|lib| lib.unsurveyed(limit).map_err(BridgeError::from_library))?;
+        let skip: HashSet<String> = skip.into_iter().collect();
+        let wanted = limit.saturating_add(u32::try_from(skip.len()).unwrap_or(u32::MAX));
+        let books: Vec<_> = self
+            .with_writer(|lib| lib.unsurveyed(wanted).map_err(BridgeError::from_library))?
+            .into_iter()
+            .filter(|book| !skip.contains(&book.id))
+            .take(limit as usize)
+            .collect();
         if books.is_empty() {
-            return Ok(0);
+            return Ok(batch);
         }
         let reader = Reader::new(self.reader_config.clone()).map_err(BridgeError::from_reader)?;
-        let mut completed = 0;
         for book in books {
-            let Ok(path) = self.with_writer(|lib| {
-                lib.managed_file(&book.id)
-                    .map_err(BridgeError::from_library)
-            }) else {
-                continue;
-            };
-            let Ok(surveyed) = reader.survey(&path) else {
-                continue;
-            };
-            let facts = thumbs::facts(&surveyed);
-            if let (Some(cover), Some(found)) = (&facts.cover, &surveyed.cover) {
-                let _ = thumbs::write(&self.thumbs_dir, &cover.digest, (&found.thumbnail).into());
-            }
-            if self
+            let stored = self
                 .with_writer(|lib| {
-                    lib.set_survey(&book.id, &book.version_id, facts)
+                    lib.managed_file(&book.id)
                         .map_err(BridgeError::from_library)
                 })
-                .is_ok()
-            {
-                completed += 1;
+                .and_then(|path| reader.survey(&path).map_err(BridgeError::from_reader))
+                .and_then(|surveyed| {
+                    let facts = thumbs::facts(&surveyed);
+                    if let (Some(cover), Some(found)) = (&facts.cover, &surveyed.cover) {
+                        let _ = thumbs::write(
+                            &self.thumbs_dir,
+                            &cover.digest,
+                            (&found.thumbnail).into(),
+                        );
+                    }
+                    self.with_writer(|lib| {
+                        lib.set_survey(&book.id, &book.version_id, facts)
+                            .map_err(BridgeError::from_library)
+                    })
+                });
+            match stored {
+                Ok(()) | Err(BridgeError::PublicationPending { .. }) => batch.surveyed += 1,
+                Err(_) => batch.failed.push(book.id),
             }
         }
-        Ok(completed)
+        Ok(batch)
     }
 
     /// Exports a book's managed EPUB to `destination_dir` through `ebook-device`.
