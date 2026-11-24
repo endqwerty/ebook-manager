@@ -48,8 +48,9 @@ pub struct Package {
     pub ncx: Option<String>,
     /// Container paths `META-INF/encryption.xml` lists, whatever their
     /// algorithm, in lower case: the archive finds an entry whichever case
-    /// asks for it.
-    pub encrypted: HashSet<String>,
+    /// asks for it. `None` when the list exists but cannot be read, so any
+    /// path may be encrypted.
+    pub encrypted: Option<HashSet<String>>,
 }
 
 impl Package {
@@ -230,7 +231,7 @@ fn collect<'a>(root: &'a Element, name: &str, out: &mut Vec<&'a Element>) {
 fn protection(
     archive: &mut Archive,
     limits: &Limits,
-) -> Result<(Option<Protection>, HashSet<String>), WireError> {
+) -> Result<(Option<Protection>, Option<HashSet<String>>), WireError> {
     // A marker that cannot be read still says the book is locked.
     let marker = |archive: &mut Archive, path| {
         archive.contains(path).then(|| {
@@ -239,10 +240,14 @@ fn protection(
         })
     };
     let mut encrypted = HashSet::new();
+    let mut unread = false;
     let mut locked = archive.has_encrypted_entries();
     match marker(archive, "META-INF/encryption.xml") {
         None => {}
-        Some(None) => locked = true,
+        Some(None) => {
+            locked = true;
+            unread = true;
+        }
         Some(Some(tree)) => {
             let mut entries = Vec::new();
             collect(&tree, "encrypteddata", &mut entries);
@@ -268,7 +273,7 @@ fn protection(
         || archive.contains("META-INF/license.lcpl")
         || archive.contains("META-INF/sinf.xml");
     if !locked {
-        return Ok((None, encrypted));
+        return Ok((None, Some(encrypted)));
     }
     let adobe = rights.flatten().is_some_and(|tree| {
         tree.elements().next().is_some_and(|root| {
@@ -288,7 +293,7 @@ fn protection(
     } else {
         Protection::Unrecognised
     };
-    Ok((Some(scheme), encrypted))
+    Ok((Some(scheme), (!unread).then_some(encrypted)))
 }
 
 impl Package {
@@ -306,7 +311,7 @@ impl Package {
             cover: None,
             nav: None,
             ncx: None,
-            encrypted: HashSet::new(),
+            encrypted: None,
         }
     }
 }

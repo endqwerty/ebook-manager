@@ -167,6 +167,11 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
                 }
                 .unwrap_or(Protection::Unknown);
                 let id = b.id.clone();
+                // The library may have gone while the file was looked at.
+                if parent_gone.get() || parent_win.surface().is_none_or(|s| s.is_destroyed()) {
+                    orphaned(&parent_win);
+                    return;
+                }
                 refuse_locked(&parent_win, &b.title, protection);
                 // Only the views' lock mark waits on this. Read asks again.
                 let _ = store
