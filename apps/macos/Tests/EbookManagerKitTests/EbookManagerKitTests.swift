@@ -5,6 +5,7 @@ import EbookBridge
 @testable import EbookManagerKit
 import EbookShellCore
 import Foundation
+import SwiftUI
 import XCTest
 
 private final class LocalProbeServer: @unchecked Sendable {
@@ -344,6 +345,43 @@ private func waitUntil(timeout: TimeInterval = 10, _ condition: @MainActor () as
 }
 
 final class EbookManagerKitTests: XCTestCase {
+    @MainActor
+    func testQuickJumpReturnFromSearchFieldOpensBookDetails() async throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let source = scratch.appendingPathComponent("harbor.epub")
+        try StoredZipBuilder.syntheticEPUB(title: "Harbor Watch", extraText: "first").write(to: source)
+        let bridge = BridgeService(directory: scratch.appendingPathComponent("library").path)
+        let imported = try await bridge.importPaths([source.path])
+        guard case let .added(book) = imported.first?.outcome else { return XCTFail("Import result: \(imported)") }
+        let expected = book.id
+        var chosen: String?
+        let sheet = QuickJumpSheet(bridge: bridge, onChooseFilter: { _ in },
+                                   onChooseBookDetails: { chosen = $0 },
+                                   onChooseBookRead: { _ in }, onCancel: {})
+        let host = NSHostingView(rootView: sheet)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 380),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.alphaValue = 0
+        window.orderBack(nil)
+        defer { window.close() }
+        func descendant<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+            if let match = view as? T { return match }
+            return view.subviews.lazy.compactMap { descendant(type, in: $0) }.first
+        }
+        host.layoutSubtreeIfNeeded()
+        let field = try XCTUnwrap(descendant(NSTextField.self, in: host))
+        field.selectText(nil)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.insertText("Harbor", replacementRange: editor.selectedRange())
+        try await waitUntil { (descendant(NSTableView.self, in: host)?.numberOfRows ?? 0) > 0 }
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        try await waitUntil { chosen == expected }
+    }
+
     @MainActor
     func testWKWebViewBlocksBookScriptsAndRemoteRequestsWhileRunningReaderScript() async throws {
         _ = NSApplication.shared

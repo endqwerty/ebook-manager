@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 /// Main single-column library window for macOS.
 public struct LibraryWindowView: View {
     @ObservedObject var model: LibraryViewModel
+    @FocusState private var gridFocused: Bool
 
     public init(model: LibraryViewModel) {
         self.model = model
@@ -359,11 +360,15 @@ public struct LibraryWindowView: View {
                 }
             }
         }
+        .focusable()
+        .focused($gridFocused)
         .onKeyPress(.return) {
+            guard model.selectedIds.count == 1 else { return .ignored }
             model.openSelectedForReading()
             return .handled
         }
         .onKeyPress(.space) {
+            guard model.selectedIds.count == 1 else { return .ignored }
             model.toggleDetailsForSelected()
             return .handled
         }
@@ -425,6 +430,7 @@ public struct LibraryWindowView: View {
         )
         .simultaneousGesture(
             TapGesture(count: 1).onEnded {
+                gridFocused = true
                 if NSEvent.modifierFlags.contains(.command) {
                     if model.selectedIds.contains(row.id) {
                         model.selectedIds.remove(row.id)
@@ -467,6 +473,11 @@ public struct LibraryWindowView: View {
                     }
                 }
                 .listStyle(.inset)
+                .onKeyPress(.return) {
+                    guard model.selectedIds.count == 1 else { return .ignored }
+                    model.openSelectedForReading()
+                    return .handled
+                }
                 .onKeyPress(.space) {
                     guard model.selectedIds.count == 1 else { return .ignored }
                     model.toggleDetailsForSelected()

@@ -15,7 +15,9 @@ The macOS app keeps a local EPUB library in
   second change.
 - The library window shows books in a grid or list. Search finds a book by
   title or author. An edit saves the title, authors, sort title, author
-  sort names and series together and survives reopening the library. Go to searches across books, authors and series. Show Details
+  sort names and series together and survives reopening the library. Go to searches across books, authors and series. Return in its search field
+  activates the selected result. With one book selected in the grid or list, Return
+  opens the reader and Space opens details. Show Details
   displays the selected book and offers Read and Edit. The managed EPUB
   retains its original bytes.
 - A newer search replaces an older search and can page through all its results.

@@ -1,3 +1,4 @@
+import AppKit
 import EbookBridge
 import EbookShellCore
 import SwiftUI
@@ -506,6 +507,9 @@ struct QuickJumpSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             TextField("Go to book, author, or series…", text: $query)
                 .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    if let selection { activate(selection, read: NSEvent.modifierFlags.contains(.shift)) }
+                }
                 .onChange(of: query) { _, newValue in
                     runLookup(newValue)
                 }
@@ -596,20 +600,19 @@ struct QuickJumpSheet: View {
         }
         .onKeyPress(keys: [.return], phases: .down) { press in
             guard let selection else { return .ignored }
-            switch selection {
-            case let .author(name), let .series(name):
-                onChooseFilter(name)
-            case let .book(id):
-                if press.modifiers.contains(.shift) {
-                    onChooseBookRead(id)
-                } else {
-                    onChooseBookDetails(id)
-                }
-            }
+            activate(selection, read: press.modifiers.contains(.shift))
             return .handled
         }
         .padding(16)
         .frame(width: 480, height: 380)
+    }
+
+    private func activate(_ result: ResultID, read: Bool) {
+        switch result {
+        case let .author(name), let .series(name): onChooseFilter(name)
+        case let .book(id):
+            if read { onChooseBookRead(id) } else { onChooseBookDetails(id) }
+        }
     }
 
     private func runLookup(_ text: String) {
