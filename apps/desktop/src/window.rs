@@ -1503,6 +1503,9 @@ pub fn open(app: &adw::Application) {
     let weak = Rc::downgrade(&library);
     leave.connect_key_pressed(move |_, key, _, _| match weak.upgrade() {
         Some(library) if key == gtk::gdk::Key::Down && library.model.n_items() > 0 => {
+            // The search field is outside the books, so the reader moving
+            // into them is counted here.
+            library.moved.set(library.moved.get() + 1);
             // Arriving from the search field selects, as moving between
             // books with the arrow keys does.
             if library.model.selected_count() == 0 {
