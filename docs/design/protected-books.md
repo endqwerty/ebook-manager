@@ -193,39 +193,45 @@ link or instruction, which each pull request's reviewers check in the diff.
 
 1. When a protected EPUB with a readable package is imported, then the library
    holds it with its package metadata and protection, and the import report
-   counts it as added. Test: desktop import unit test with a generated
-   LCP-marked EPUB.
+   counts it as added. Test: the shelf smoke run's locked-books step imports a
+   book with Adobe's rights file (`smoke.py` `locked_books`).
 2. When every entry of an EPUB is ZIP-encrypted, then `inspect` returns
    protection "a password" and import keeps the book under its file name.
-   Test: reader crate test and desktop import unit test.
+   Test: `a_wholly_encrypted_archive_is_inspected_as_locked` in the reader
+   crate, and the same smoke step's "Vault" book.
 3. When the file has `META-INF/license.lcpl`, then its protection is Readium
    LCP; with Adobe's `rights.xml`, Adobe; with `META-INF/sinf.xml`, Apple; with
    an encrypted ZIP entry, a password; with only another encrypted resource or
    another `rights.xml`, an unrecognised scheme. A file with two markers takes
-   the first in the table's order. Test: reader crate tests, one generated file
-   per case.
+   the first in the table's order. Test:
+   `the_protection_scheme_is_named_from_the_container`.
 4. When `encryption.xml` lists only obfuscated fonts, then the book is not
-   protected. Test: the existing reader test for M4 still passes.
+   protected. Test: `protected_books_are_refused_with_a_clear_reason`.
 5. When the cover file of a locked book is not encrypted, then the survey
    returns the cover and no word count; when it is listed in
-   `encryption.xml`, neither. Test: reader crate survey tests.
+   `encryption.xml` or in an encrypted ZIP entry, neither. Test:
+   `a_protected_book_surveys_its_cover_only_when_it_is_not_encrypted`.
 6. When a locked book is shown, then the grid, list, shelf and table names end
    with "Locked by …" and the lock symbol shows in the grid, list and table.
-   Test: unit tests of the shared phrase and of each view's name, and the
-   smoke driver reading the grid's and shelf's accessible names.
+   Test: `a_locked_book_is_said_with_its_lock` for the phrase, and the smoke
+   step reading the shelf's, grid's and table row's accessible names.
 7. When the reader asks to read a locked book, then the alert names the
    scheme and the explanation, has the one response Close, contains no link,
-   and no reader opens. Test: unit test of the alert's text and responses, and
-   a smoke driver step.
+   and no reader opens. Test:
+   `read_on_a_locked_book_says_why_and_offers_only_close`, and the smoke step
+   reading the alert's text and buttons.
 8. When the catalogue on disk has no `protection` column, then opening adds it,
    its books stay unprotected and its source paths are kept, and a locked book
    imported afterwards shows its protection. Test: library crate test that
-   opens a catalogue made by the previous schema.
+   opens a catalogue made by the previous schema
+   (`a_catalogue_without_the_protection_column_gains_it_in_place`).
 10. When `rights.xml` or `encryption.xml` is malformed or ZIP-encrypted, then
    the book is locked (unrecognised, or a password) and its metadata is still
-   read when the package can be. Test: reader crate tests.
+   read when the package can be. Test:
+   `an_unreadable_marker_file_still_names_a_lock`.
 9. When the portable record has no `protection` field, then the book is
-   unprotected. Test: library crate test reading such a record.
+   unprotected, and one naming an unknown scheme is refused. Test:
+   `protection_in_a_record_is_optional_and_checked`.
 
 ## Alternatives
 
@@ -240,37 +246,6 @@ link or instruction, which each pull request's reviewers check in the diff.
 - **Disable Read for a locked book.** Quiet, but a double-click would do
   nothing, and LAW-2 asks the app to say it cannot open the file when the
   reader tries.
-
-## Implementation
-
-- `crates/ebook-reader`: `Protection` in `model.rs` and the wire; scheme
-  detection, encrypted path set and the unreadable-package case in
-  `engine/package.rs`; survey cover in `engine/survey.rs`; `readable()` in
-  `engine/run.rs`; tests in `tests/failures.rs`; README and
-  `specs/epub-reader-mvp.md` (M4, F3, V1 and the per-call unpack list).
-- `crates/ebook-library`: `ParsedMetadata.protection`, the column in
-  `schema.sql` and `project.sql`, the in-place column in `catalogue.rs`,
-  `BrowseRow.protection`; README and `specs/library-mvp.md`.
-- `apps/desktop`: import keeps protected books (`imports.rs`); the lock
-  phrase, mark and names (`views/mod.rs`, `grid.rs`, `list.rs`, `table.rs`,
-  `shelf/spine.rs`); the Read alert (`window.rs` `read()`); smoke steps;
-  `specs/desktop-mvp.md`.
-- `docs/design/interface.md` (Quiet and messages rules),
-  `docs/design/interface-screens.md` (dialogs and messages) and
-  `docs/design/interface-views.md` (the list's trailing slot and the table's
-  Progress column hold the lock): the alert case and the lock mark.
-- `docs/design/library-browsing.md`: a locked book's cover and its column.
-- `README.md` and a new `CONTRIBUTING.md`: the policy.
-- `docs/requirements/02-content-types.md` and `10-constraints.md`: mark
-  FMT-10, FMT-11, LAW-1 and LAW-2 done.
-
-## Tasks
-
-1. Reader: scheme detection, unreadable package, survey cover, with tests
-   (2, 3, 4, 5, 10). Done.
-2. Library: field, column, row, with tests (8, 9). Done.
-3. Desktop: import, views, Read alert, smoke steps (1, 2, 6, 7). Done.
-4. Specs, requirements, READMEs and interface page. Done.
 
 ## Open questions
 
