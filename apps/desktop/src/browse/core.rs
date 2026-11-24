@@ -1358,6 +1358,23 @@ mod tests {
         let tag = another(&mut core, Event::Refresh, &here);
         let effects = core.step(found(tag), &here);
         assert!(effects.iter().any(|e| matches!(e, Effect::Place(_))));
+        // A wheel at the end of the books counts as a move but moves
+        // nothing: in a list or on the shelf, they are placed with the swap.
+        for query in [
+            Query {
+                shelf: true,
+                ..Default::default()
+            },
+            Query::default(),
+        ] {
+            let tag = another(&mut core, Event::Query(query), &here);
+            core.step(found(tag), &here);
+            let tag = another(&mut core, Event::Refresh, &here);
+            at.borrow_mut().moves += 1;
+            let effects = core.step(found(tag), &here);
+            assert!(effects.iter().any(|e| matches!(e, Effect::Place(_))));
+        }
+        *at.borrow_mut() = Anchors::default();
         // They scroll while their place is being found: the stale place
         // is not applied, and where they are now is asked for.
         let tag = another(&mut core, Event::Refresh, &here);
