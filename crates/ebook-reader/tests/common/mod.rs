@@ -10,6 +10,26 @@ use zip::CompressionMethod;
 
 pub const HELPER: &str = env!("CARGO_BIN_EXE_ebook-reader-helper");
 
+/// The system's sandbox launcher, for stand-ins that wrap the real one.
+#[cfg(target_os = "linux")]
+pub const SANDBOX: &str = "/usr/bin/bwrap";
+#[cfg(target_os = "macos")]
+pub const SANDBOX: &str = "/usr/bin/sandbox-exec";
+
+#[cfg(target_os = "linux")]
+pub const SLEEP: &str = "/usr/bin/sleep";
+#[cfg(target_os = "macos")]
+pub const SLEEP: &str = "/bin/sleep";
+
+/// Whether a process with this id exists.
+pub fn alive(pid: &str) -> bool {
+    std::process::Command::new("/bin/kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 pub fn config() -> ReaderConfig {
     ReaderConfig {
         helper_path: Some(PathBuf::from(HELPER)),

@@ -107,3 +107,12 @@ jobs:
           PYTHON
           mainworthy report target/nextest/ci/junit.xml "$RUNNER_TEMP/desktop-checks.xml"
           mainworthy gate
+
+  # The shared core on macOS, where the reader's helper runs under sandbox-exec. Not reported to Mainworthy yet.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the core's tests
+        run: cargo test --release --locked --no-fail-fast -p ebook-reader -p ebook-library -p ebook-device --features ebook-library/fixture

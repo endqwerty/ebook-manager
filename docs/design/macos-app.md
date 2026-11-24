@@ -134,10 +134,12 @@ the profile, which must refuse.
 ### Device export
 
 `ebook-device` keeps its transfer on the chosen directory by using the open
-directory's descriptor. On Linux it names files through `/proc/self/fd`; on
-macOS it asks the system for the descriptor's current path (`F_GETPATH`) when
-the transfer starts. A mount that changes during the copy fails the transfer's
-last step, which is the same outcome.
+directory's descriptor. On Linux it names files through `/proc/self/fd`. macOS
+has no such path, so the export asks the system for the descriptor's current
+path (`F_GETPATH`) when the transfer starts, and after publishing the file
+checks that the path still leads to the open directory. A mount swapped
+during the copy fails that check, and the export reports that the folder
+changed.
 
 ## Behaviour
 

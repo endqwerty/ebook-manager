@@ -403,7 +403,7 @@ fn malformed_content_and_resource_replies_are_refused() {
         let reply = frame(&dir, &format!("{name}.frame"), &reply, &blob);
         let path = stand_in(&dir, name, &[("open", send(&outline)), ("*", send(&reply))]);
         let cfg = ebook_reader::ReaderConfig {
-            bwrap_path: Some(path),
+            sandbox_path: Some(path),
             ..config()
         };
         // A program written a moment ago can be "text file busy" while

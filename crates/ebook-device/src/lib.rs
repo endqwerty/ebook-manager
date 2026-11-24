@@ -1,9 +1,8 @@
-//! Copy a managed EPUB to a user-selected folder on a mounted Linux volume.
+//! Copy a managed EPUB to a user-selected folder on a mounted volume.
 
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -76,6 +75,38 @@ fn compare_existing(
     ))
 }
 
+/// A path that names the open directory. On Linux it goes through the
+/// descriptor, so every operation stays on that directory if its mount point
+/// changes.
+#[cfg(target_os = "linux")]
+fn held(dir: &File) -> io::Result<PathBuf> {
+    use std::os::fd::AsRawFd;
+    Ok(PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd())))
+}
+
+/// macOS has no path through a descriptor, only the directory's path as it
+/// is now. [`still_held`] checks afterwards that it led to the same place.
+#[cfg(target_os = "macos")]
+fn held(dir: &File) -> io::Result<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let path = rustix::fs::getpath(dir)?;
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(
+        path.into_bytes(),
+    )))
+}
+
+fn still_held(dir: &File, root: &Path) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let (held, named) = (dir.metadata()?, std::fs::metadata(root)?);
+    if (held.dev(), held.ino()) == (named.dev(), named.ino()) {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "The device folder changed during the copy. Check the device and send the book again.",
+        ))
+    }
+}
+
 pub fn export_epub(source: &Path, directory: &Path, title: &str) -> io::Result<ExportOutcome> {
     let mut source = regular_file(source)?;
     let dir = File::open(directory)?;
@@ -85,8 +116,7 @@ pub fn export_epub(source: &Path, directory: &Path, title: &str) -> io::Result<E
             "Choose a device folder",
         ));
     }
-    // Keep all filesystem operations on the selected directory if its mount point changes.
-    let root = PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd()));
+    let root = held(&dir)?;
     let name = device_filename(title);
     let expected = digest(&mut source)?;
     let try_name = |source: &mut File, name: &str| {
@@ -142,6 +172,7 @@ fn copy_to(
     }
     match staged.persist_noclobber(target) {
         Ok(_) => {
+            still_held(dir, root)?;
             dir.sync_all()?;
             Ok(ExportOutcome::Copied(display))
         }

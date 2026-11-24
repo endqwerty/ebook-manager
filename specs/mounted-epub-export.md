@@ -1,6 +1,6 @@
 # Export an EPUB to a mounted reader
 
-On Linux the reader export copies an existing managed EPUB into a selected
+The reader export copies an existing managed EPUB into a selected
 directory. For an Xteink X4 Pro running the CrossPoint fork, enable USB Drive
 mode and select a folder on the mounted SD card, or mount the card in a reader.
 CrossPoint documents native EPUB support and browsing folders on that card.

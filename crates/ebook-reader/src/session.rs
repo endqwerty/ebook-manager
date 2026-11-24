@@ -5,10 +5,7 @@
 
 use crate::error::ReaderError;
 use crate::host::{from_wire, Inner};
-use crate::wire::{
-    read_frame, FrameError, Payload, Request, Response, BOOK_IN_SANDBOX, HELPER_IN_SANDBOX,
-};
-use std::ffi::OsString;
+use crate::wire::{read_frame, FrameError, Payload, Request, Response};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -16,8 +13,6 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Read-only system library directories the helper's loader may need.
-const LIBRARY_DIRS: [&str; 4] = ["/usr/lib", "/usr/lib64", "/lib", "/lib64"];
 /// How often an idle session checks that its helper is still running.
 const IDLE_CHECK: Duration = Duration::from_secs(1);
 /// The most of the helper's error stream kept for a failure's detail.
@@ -160,33 +155,8 @@ impl Session {
 }
 
 fn command(inner: &Inner, book: Option<&Path>) -> Command {
-    let mut cmd = Command::new(&inner.bwrap);
-    cmd.args([
-        "--unshare-all",
-        "--unshare-user",
-        "--disable-userns",
-        "--die-with-parent",
-        "--new-session",
-        "--clearenv",
-    ]);
-    cmd.args(["--cap-drop", "ALL"]);
-    for dir in LIBRARY_DIRS {
-        cmd.args(["--ro-bind-try", dir, dir]);
-    }
-    cmd.arg("--ro-bind")
-        .arg(&inner.helper)
-        .arg(HELPER_IN_SANDBOX);
-    if let Some(book) = book {
-        cmd.arg("--ro-bind").arg(book).arg(BOOK_IN_SANDBOX);
-    }
-    cmd.args(["--remount-ro", "/", "--chdir", "/", "--", HELPER_IN_SANDBOX]);
     let cpu = inner.timeout.as_secs().saturating_add(2).to_string();
-    let args: [OsString; 3] = [
-        "session".into(),
-        inner.limits_json.clone().into(),
-        cpu.into(),
-    ];
-    cmd.args(args);
+    let mut cmd = crate::sandbox::command(inner, book, &cpu);
     cmd.env_clear();
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -210,7 +180,7 @@ fn own(
         Ok(child) => child,
         Err(e) => {
             let _ = ready.send(Err(ReaderError::SandboxUnavailable {
-                reason: format!("cannot start bwrap: {e}"),
+                reason: format!("cannot start {}: {e}", crate::sandbox::NAME),
             }));
             return;
         }
