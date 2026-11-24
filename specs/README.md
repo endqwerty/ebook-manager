@@ -7,6 +7,7 @@ the rules it follows and why. Specs are the project's history. The Git log of
 ## Implemented behaviour
 
 - [Desktop shelf, import and reading](desktop-mvp.md)
+- [macOS desktop library and reader](macos-desktop.md)
 - [Library storage and recovery](library-mvp.md)
 - [EPUB reader and helper isolation](epub-reader-mvp.md)
 - [Mounted reader export](mounted-epub-export.md)
