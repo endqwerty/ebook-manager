@@ -229,53 +229,61 @@ fn protection(
     archive: &mut Archive,
     limits: &Limits,
 ) -> Result<(Option<Protection>, HashSet<String>), WireError> {
+    // A marker that cannot be read still says the book is locked.
+    let marker = |archive: &mut Archive, path| {
+        archive
+            .contains(path)
+            .then(|| read_tree(archive, path, limits.max_package_bytes).ok())
+    };
     let mut encrypted = HashSet::new();
     let mut locked = archive.has_encrypted_entries();
-    if archive.contains("META-INF/encryption.xml") {
-        let tree = read_tree(archive, "META-INF/encryption.xml", limits.max_package_bytes)?;
-        let mut entries = Vec::new();
-        collect(&tree, "encrypteddata", &mut entries);
-        for e in entries {
-            let algorithm = e
-                .find("encryptionmethod")
-                .and_then(|m| m.attr_local("algorithm"));
-            if !algorithm.is_some_and(|a| FONT_OBFUSCATION.contains(&a.trim())) {
-                locked = true;
-            }
-            if let Some(local) = e
-                .find("cipherreference")
-                .and_then(|r| r.attr_local("uri"))
-                .and_then(|uri| paths::resolve("", uri))
-            {
-                encrypted.insert(local.path);
+    match marker(archive, "META-INF/encryption.xml") {
+        None => {}
+        Some(None) => locked = true,
+        Some(Some(tree)) => {
+            let mut entries = Vec::new();
+            collect(&tree, "encrypteddata", &mut entries);
+            for e in entries {
+                let algorithm = e
+                    .find("encryptionmethod")
+                    .and_then(|m| m.attr_local("algorithm"));
+                if !algorithm.is_some_and(|a| FONT_OBFUSCATION.contains(&a.trim())) {
+                    locked = true;
+                }
+                if let Some(local) = e
+                    .find("cipherreference")
+                    .and_then(|r| r.attr_local("uri"))
+                    .and_then(|uri| paths::resolve("", uri))
+                {
+                    encrypted.insert(local.path);
+                }
             }
         }
     }
-    let rights = if archive.contains("META-INF/rights.xml") {
-        let tree = read_tree(archive, "META-INF/rights.xml", limits.max_package_bytes)?;
-        let adobe = tree.elements().next().is_some_and(|root| {
+    let rights = marker(archive, "META-INF/rights.xml");
+    locked |= rights.is_some();
+    if !locked {
+        return Ok((None, encrypted));
+    }
+    let adobe = rights.flatten().is_some_and(|tree| {
+        tree.elements().next().is_some_and(|root| {
             root.attrs.iter().any(|(name, value)| {
                 (name == "xmlns" || name.starts_with("xmlns:")) && value.contains("ns.adobe.com")
             })
-        });
-        Some(adobe)
-    } else {
-        None
-    };
+        })
+    });
     let scheme = if archive.contains("META-INF/license.lcpl") {
-        Some(Protection::ReadiumLcp)
-    } else if rights == Some(true) {
-        Some(Protection::Adobe)
+        Protection::ReadiumLcp
+    } else if adobe {
+        Protection::Adobe
     } else if archive.contains("META-INF/sinf.xml") {
-        Some(Protection::Apple)
+        Protection::Apple
     } else if archive.has_encrypted_entries() {
-        Some(Protection::Password)
-    } else if locked || rights.is_some() {
-        Some(Protection::Unrecognised)
+        Protection::Password
     } else {
-        None
+        Protection::Unrecognised
     };
-    Ok((scheme, encrypted))
+    Ok((Some(scheme), encrypted))
 }
 
 impl Package {

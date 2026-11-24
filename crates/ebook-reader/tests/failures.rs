@@ -333,6 +333,35 @@ fn the_protection_scheme_is_named_from_the_container() {
     assert_eq!(m.protection, Some(Protection::Password));
 }
 
+/// M4: a marker file that cannot be read is a lock, not a broken book.
+#[test]
+fn an_unreadable_marker_file_still_names_a_lock() {
+    let dir = Scratch::new();
+    let adobe: &[u8] = br#"<adept:rights xmlns:adept="http://ns.adobe.com/adept"/>"#;
+    for marker in ["META-INF/rights.xml", "META-INF/encryption.xml"] {
+        let body = if marker.ends_with("rights.xml") {
+            adobe
+        } else {
+            LOCKED_CHAPTER
+        };
+        let mut bytes = simple(&["<p>x</p>"], &[(marker, body)]);
+        mark_encrypted(&mut bytes, &[marker]);
+        let m = reader()
+            .inspect(&dir.file("sealed-marker.epub", &bytes))
+            .unwrap();
+        assert_eq!(m.protection, Some(Protection::Password), "{marker}");
+        assert_eq!(m.title.as_deref(), Some("Simple"), "{marker}");
+    }
+    // Over the element limit of a package document.
+    let huge = format!("<rights>{}</rights>", "<a/>".repeat(400_001));
+    let bytes = simple(&["<p>x</p>"], &[("META-INF/rights.xml", huge.as_bytes())]);
+    let m = reader()
+        .inspect(&dir.file("huge-rights.epub", &bytes))
+        .unwrap();
+    assert_eq!(m.protection, Some(Protection::Unrecognised));
+    assert_eq!(m.title.as_deref(), Some("Simple"));
+}
+
 /// M4: an archive whose container file and package are encrypted is still
 /// inspected, as a book locked by a password with nothing else known.
 #[test]
