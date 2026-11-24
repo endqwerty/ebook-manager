@@ -244,7 +244,7 @@ public struct LibraryWindowView: View {
                 Text(message)
             } actions: {
                 Button("Try Again") {
-                    model.reloadBrowse()
+                    model.retryAfterError()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -331,22 +331,32 @@ public struct LibraryWindowView: View {
                 count: metrics.columns
             )
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    screenHeader
-                        .padding(.top, 16)
+            ScrollViewReader { scroller in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        screenHeader
+                            .padding(.top, 16)
 
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: metrics.rowSpacing) {
-                        ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
-                            gridCell(row: row, width: metrics.itemWidth)
-                                .onAppear {
-                                    model.loadMoreIfNeeded(forAppearIndex: index)
-                                }
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: metrics.rowSpacing) {
+                            ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
+                                gridCell(row: row, width: metrics.itemWidth)
+                                    .onAppear {
+                                        model.rowAppeared(index: index, id: row.id)
+                                    }
+                                    .onDisappear {
+                                        model.rowDisappeared(id: row.id)
+                                    }
+                            }
                         }
                     }
+                    .padding(.horizontal, horizontalInset)
+                    .padding(.bottom, 28)
                 }
-                .padding(.horizontal, horizontalInset)
-                .padding(.bottom, 28)
+                .onChange(of: model.scrollRequest) { _, request in
+                    if let request {
+                        scroller.scrollTo(request.rowId, anchor: .top)
+                    }
+                }
             }
         }
         .onKeyPress(.return) {
@@ -440,23 +450,33 @@ public struct LibraryWindowView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 10)
 
-            List(selection: $model.selectedIds) {
-                ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
-                    listRow(row: row)
-                        .tag(row.id)
-                        .onAppear {
-                            model.loadMoreIfNeeded(forAppearIndex: index)
-                        }
-                        .contextMenu {
-                            bookContextMenu(for: row)
-                        }
+            ScrollViewReader { scroller in
+                List(selection: $model.selectedIds) {
+                    ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
+                        listRow(row: row)
+                            .tag(row.id)
+                            .onAppear {
+                                model.rowAppeared(index: index, id: row.id)
+                            }
+                            .onDisappear {
+                                model.rowDisappeared(id: row.id)
+                            }
+                            .contextMenu {
+                                bookContextMenu(for: row)
+                            }
+                    }
                 }
-            }
-            .listStyle(.inset)
-            .contextMenu(forSelectionType: String.self) { _ in
-            } primaryAction: { ids in
-                if let first = ids.first {
-                    model.openBookForReading(bookId: first)
+                .listStyle(.inset)
+                .contextMenu(forSelectionType: String.self) { _ in
+                } primaryAction: { ids in
+                    if let first = ids.first {
+                        model.openBookForReading(bookId: first)
+                    }
+                }
+                .onChange(of: model.scrollRequest) { _, request in
+                    if let request {
+                        scroller.scrollTo(request.rowId, anchor: .top)
+                    }
                 }
             }
         }

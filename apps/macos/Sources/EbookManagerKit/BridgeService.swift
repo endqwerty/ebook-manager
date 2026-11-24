@@ -19,6 +19,8 @@ extension BridgeError {
 public final class BridgeService: @unchecked Sendable {
     private let writeQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.write", qos: .userInitiated)
     private let readQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.read", qos: .userInitiated, attributes: .concurrent)
+    private let coverQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.cover", qos: .utility, attributes: .concurrent)
+    private let surveyQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.survey", qos: .utility)
     private let lock = NSLock()
     private var libraryInstance: Library?
     public let directory: String
@@ -38,9 +40,9 @@ public final class BridgeService: @unchecked Sendable {
         return opened
     }
 
-    private func runWrite<T: Sendable>(_ work: @Sendable @escaping (Library) throws -> T) async throws -> T {
+    private func run<T: Sendable>(on queue: DispatchQueue, _ work: @Sendable @escaping (Library) throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
-            writeQueue.async {
+            queue.async {
                 do {
                     let lib = try self.ensureLibrary()
                     let value = try work(lib)
@@ -52,18 +54,12 @@ public final class BridgeService: @unchecked Sendable {
         }
     }
 
+    private func runWrite<T: Sendable>(_ work: @Sendable @escaping (Library) throws -> T) async throws -> T {
+        try await run(on: writeQueue, work)
+    }
+
     private func runRead<T: Sendable>(_ work: @Sendable @escaping (Library) throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            readQueue.async {
-                do {
-                    let lib = try self.ensureLibrary()
-                    let value = try work(lib)
-                    continuation.resume(returning: value)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+        try await run(on: readQueue, work)
     }
 
     public func browse(query: String, sort: [SortRule]) async throws -> BrowseSnapshot {
@@ -75,6 +71,12 @@ public final class BridgeService: @unchecked Sendable {
     public func browseWindow(viewId: UInt64, start: UInt32, limit: UInt32) async throws -> [BookRow] {
         try await runRead { lib in
             try lib.browseWindow(viewId: viewId, start: start, limit: limit)
+        }
+    }
+
+    public func browseLocate(viewId: UInt64, ids: [String]) async throws -> [UInt32?] {
+        try await runRead { lib in
+            try lib.browseLocate(viewId: viewId, ids: ids)
         }
     }
 
@@ -115,14 +117,14 @@ public final class BridgeService: @unchecked Sendable {
     }
 
     public func coverThumbnail(bookId: String) async throws -> Data? {
-        try await runRead { lib in
+        try await run(on: coverQueue) { lib in
             try lib.coverThumbnail(bookId: bookId)
         }
     }
 
-    public func surveyUnsurveyed(limit: UInt32) async throws -> UInt32 {
-        try await runWrite { lib in
-            try lib.surveyUnsurveyed(limit: limit)
+    public func surveyUnsurveyed(limit: UInt32, skip: [String] = []) async throws -> SurveyBatch {
+        try await run(on: surveyQueue) { lib in
+            try lib.surveyUnsurveyed(limit: limit, skip: skip)
         }
     }
 
