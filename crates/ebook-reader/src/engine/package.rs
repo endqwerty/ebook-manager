@@ -242,7 +242,15 @@ fn protection(
     let mut encrypted = HashSet::new();
     let mut unread = false;
     let mut locked = archive.has_encrypted_entries();
-    match marker(archive, "META-INF/encryption.xml") {
+    // OCF names the list's root element; anything else lists nothing we can
+    // trust, so it reads as unreadable.
+    let list = marker(archive, "META-INF/encryption.xml").map(|tree| {
+        tree.filter(|tree| {
+            let mut roots = tree.elements();
+            roots.next().is_some_and(|root| root.name == "encryption") && roots.next().is_none()
+        })
+    });
+    match list {
         None => {}
         Some(None) => {
             locked = true;
