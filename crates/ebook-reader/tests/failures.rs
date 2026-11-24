@@ -362,6 +362,16 @@ fn an_unreadable_marker_file_still_names_a_lock() {
         assert_eq!(m.protection, Some(Protection::Password), "{marker}");
         assert_eq!(m.title.as_deref(), Some("Simple"), "{marker}");
     }
+    // Cut short: what parsed lists nothing, but the file is not whole.
+    for truncated in [
+        &b"<encryption><"[..],
+        &LOCKED_CHAPTER[..LOCKED_CHAPTER.len() / 2],
+    ] {
+        let bytes = simple(&["<p>x</p>"], &[("META-INF/encryption.xml", truncated)]);
+        let m = reader().inspect(&dir.file("cut.epub", &bytes)).unwrap();
+        assert_eq!(m.protection, Some(Protection::Unrecognised));
+        assert_eq!(m.title.as_deref(), Some("Simple"));
+    }
     // Over the element limit of a package document.
     let huge = format!("<rights>{}</rights>", "<a/>".repeat(400_001));
     let bytes = simple(&["<p>x</p>"], &[("META-INF/rights.xml", huge.as_bytes())]);
@@ -370,6 +380,25 @@ fn an_unreadable_marker_file_still_names_a_lock() {
         .unwrap();
     assert_eq!(m.protection, Some(Protection::Unrecognised));
     assert_eq!(m.title.as_deref(), Some("Simple"));
+}
+
+/// M4: the package is read before the marker files, so a reader whose
+/// unpacking allowance fits the package still gets the book's metadata when
+/// a marker does not fit.
+#[test]
+fn the_package_is_read_before_the_marker_files() {
+    let big = format!(
+        "<adept:rights xmlns:adept=\"http://ns.adobe.com/adept\">{}</adept:rights>",
+        "<a/>".repeat(2000)
+    );
+    let bytes = simple(&["<p>x</p>"], &[("META-INF/rights.xml", big.as_bytes())]);
+    let dir = Scratch::new();
+    let path = dir.file("rights.epub", &bytes);
+    let mut cfg = config();
+    cfg.limits.max_unpacked_bytes = 2048;
+    let m = Reader::new(cfg).unwrap().inspect(&path).unwrap();
+    assert_eq!(m.title.as_deref(), Some("Simple"));
+    assert!(m.protection.is_some());
 }
 
 /// M4: an archive whose container file and package are encrypted is still
@@ -1299,6 +1328,15 @@ fn a_protected_book_surveys_its_cover_only_when_it_is_not_encrypted() {
     let s = survey_with(
         config(),
         &with_cover_and(&png, &[("META-INF/encryption.xml", listed)]),
+    );
+    assert_eq!((s.words, s.cover.is_some()), (None, false));
+
+    // Listed under another case than the package uses: the archive finds
+    // the entry whichever case asks for it.
+    let upper = br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/IMAGES/COVER.PNG"/></enc:CipherData></enc:EncryptedData></encryption>"#;
+    let s = survey_with(
+        config(),
+        &with_cover_and(&png, &[("META-INF/encryption.xml", upper)]),
     );
     assert_eq!((s.words, s.cover.is_some()), (None, false));
 
