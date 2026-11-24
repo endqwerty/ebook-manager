@@ -64,7 +64,18 @@ pub fn confine(cmd: &mut Command) {
                 return Err(io::Error::from_raw_os_error(libc::ESRCH));
             }
             libc::setsid();
-            for fd in 3..end {
+            // The limit is read again here, in the child's own copy, so one
+            // raised by another thread since the listing is covered too.
+            let mut now = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            let under_limit = if libc::getrlimit(libc::RLIMIT_NOFILE, &mut now) == 0 {
+                libc::c_int::try_from(now.rlim_cur.min(MOST)).unwrap_or(libc::c_int::MAX)
+            } else {
+                libc::c_int::MAX
+            };
+            for fd in 3..end.max(under_limit) {
                 let flags = libc::fcntl(fd, libc::F_GETFD);
                 if flags >= 0 && libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) != 0 {
                     return Err(io::Error::last_os_error());
@@ -75,6 +86,11 @@ pub fn confine(cmd: &mut Command) {
     }
 }
 
+/// The most descriptor numbers ever marked, which is more than a process
+/// can hold.
+#[cfg(target_os = "macos")]
+const MOST: u64 = 1 << 20;
+
 /// One past the highest descriptor the child could inherit. Everything
 /// under the descriptor limit is covered, whenever it was opened. A limit
 /// lowered after a file was opened leaves that file open above it, so the
@@ -84,7 +100,6 @@ pub fn confine(cmd: &mut Command) {
 /// every number a process can hold is covered.
 #[cfg(target_os = "macos")]
 fn descriptor_limit() -> libc::c_int {
-    const MOST: u64 = 1 << 20;
     const ROOM: u64 = 256;
     let open = std::fs::read_dir("/dev/fd").ok().and_then(|entries| {
         entries
