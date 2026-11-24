@@ -14,6 +14,13 @@ directory's descriptor, on Linux and macOS alike, so the transfer stays on that
 directory if its path or mount changes. The returned path is the chosen folder
 joined with the filename.
 
+The copy gets its name without replacing anything, by the first way the
+filesystem supports: a rename that refuses to replace, a hard link, or, on FAT
+and exFAT under macOS, which have neither, an empty file created under the name
+only if it is free, which the copy then replaces. In that last case an export
+cut short by a crash can leave the empty file. The next export of that book
+then finds the name taken by different bytes and uses the name with the hash.
+
 Run `cargo test -p ebook-device` from the workspace root. The operation tests use
 temporary directories and check retries, name collisions and filenames derived
 from unusual titles. [Device behaviour](../../specs/mounted-epub-export.md)

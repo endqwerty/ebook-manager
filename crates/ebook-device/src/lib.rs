@@ -1,6 +1,8 @@
 //! Copy a managed EPUB to a user-selected folder on a mounted volume.
 
-use rustix::fs::{linkat, openat, renameat_with, unlinkat, AtFlags, Mode, OFlags, RenameFlags};
+use rustix::fs::{
+    linkat, openat, renameat, renameat_with, unlinkat, AtFlags, Mode, OFlags, RenameFlags,
+};
 use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
@@ -130,20 +132,42 @@ impl<'a> Staged<'a> {
         }
     }
 
-    /// Give the copy its real name unless something already has it. A
-    /// filesystem that can't rename without replacing gets a link instead,
-    /// and the private name is removed here so the caller's directory sync
-    /// covers that too. The book is published either way, so a private name
-    /// that won't go is left for `Drop` to try again.
+    /// Give the copy its real name unless something already has it, by the
+    /// first way the filesystem supports: a rename that refuses to replace;
+    /// a link, with the private name removed here so the caller's directory
+    /// sync covers that too; or, on FAT and exFAT under macOS, which have
+    /// neither, an empty file created under the real name only if it is
+    /// free, which the copy then replaces.
     fn publish(&self, name: &str) -> io::Result<()> {
+        let unsupported = |e: Errno| {
+            [
+                Errno::INVAL,
+                Errno::NOSYS,
+                Errno::NOTSUP,
+                Errno::OPNOTSUPP,
+                Errno::PERM,
+            ]
+            .contains(&e)
+        };
         match renameat_with(self.dir, &self.name, self.dir, name, RenameFlags::NOREPLACE) {
-            Err(Errno::INVAL | Errno::NOSYS | Errno::NOTSUP) => {
-                linkat(self.dir, &self.name, self.dir, name, AtFlags::empty())?;
-                let _ = unlinkat(self.dir, &self.name, AtFlags::empty());
-            }
-            other => other?,
+            Err(e) if unsupported(e) => {}
+            other => return Ok(other?),
         }
-        Ok(())
+        match linkat(self.dir, &self.name, self.dir, name, AtFlags::empty()) {
+            Ok(()) => {
+                let _ = unlinkat(self.dir, &self.name, AtFlags::empty());
+                return Ok(());
+            }
+            Err(e) if unsupported(e) => {}
+            Err(e) => return Err(e.into()),
+        }
+        let flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        drop(openat(self.dir, name, flags, Mode::from_raw_mode(0o600))?);
+        renameat(self.dir, &self.name, self.dir, name).map_err(|e| {
+            let _ = unlinkat(self.dir, name, AtFlags::empty());
+            e.into()
+        })
     }
 }
 

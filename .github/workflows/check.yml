@@ -116,3 +116,10 @@ jobs:
 
       - name: Run the core's tests
         run: cargo test --release --locked --no-fail-fast -p ebook-reader -p ebook-library -p ebook-device --features ebook-library/fixture
+
+      - name: Export to a mounted FAT32 volume
+        run: |
+          hdiutil create -size 16m -fs MS-DOS -volname EBOOKTEST "$RUNNER_TEMP/card.dmg"
+          hdiutil attach "$RUNNER_TEMP/card.dmg"
+          TMPDIR=/Volumes/EBOOKTEST cargo test --release --locked -p ebook-device
+          hdiutil detach /Volumes/EBOOKTEST

@@ -146,7 +146,7 @@ is one implementation and no path to go stale.
 1. When the helper is started without the profile, it replies that it isn't
    isolated and reads nothing. `tests/failures.rs`.
 2. When a book is opened, the helper can't read another file, write, reach the
-   network or start a process. The helper's own check, run at every start.
+   network or start a process. The helper's own check at every start for a missing profile, and `sandbox_sees_only_the_book` for what the profile lets it read.
 3. When the helper needs more memory than its limit, the call fails with an
    error and no crash report appears. `tests/failures.rs`.
 4. When a folder with a book, its duplicate, a revised copy and a broken file

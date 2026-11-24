@@ -237,7 +237,9 @@ What differs from Linux:
   sets its own process limit, so that limit is not what refuses.
 - There is no address-space limit to set. The helper's allocator counts the
   bytes in use and refuses past `Limits::memory_bytes`, which ends the helper
-  with status 4 as running out of memory does on Linux. Memory the system maps
+  with status 4 as running out of memory does on Linux, or, when the request
+  refused was one the unpacker made allowing for failure, refuses the book as
+  damaged. Memory the system maps
   on the helper's behalf, such as its stack and libraries, is outside the
   count.
 - Nothing kills the helper when the application dies. It exits when its input
