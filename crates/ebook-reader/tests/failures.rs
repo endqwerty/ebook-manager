@@ -1340,6 +1340,13 @@ fn a_protected_book_surveys_its_cover_only_when_it_is_not_encrypted() {
     );
     assert_eq!((s.words, s.cover.is_some()), (None, false));
 
+    // An encryption list that cannot be read could list the cover.
+    let s = survey_with(
+        config(),
+        &with_cover_and(&png, &[("META-INF/encryption.xml", b"<encryption><")]),
+    );
+    assert_eq!((s.words, s.cover.is_some()), (None, false));
+
     // In an encrypted ZIP entry.
     let mut sealed = with_cover_and(&png, &[]);
     mark_encrypted(&mut sealed, &["OEBPS/images/cover.png"]);
