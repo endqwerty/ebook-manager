@@ -287,6 +287,16 @@ fn the_protection_scheme_is_named_from_the_container() {
             Some(Protection::Adobe),
         ),
         (
+            "lcp licence alone",
+            vec![("META-INF/license.lcpl", lcp)],
+            Some(Protection::ReadiumLcp),
+        ),
+        (
+            "apple marker alone",
+            vec![("META-INF/sinf.xml", sinf)],
+            Some(Protection::Apple),
+        ),
+        (
             "lcp before adobe",
             vec![
                 enc,
