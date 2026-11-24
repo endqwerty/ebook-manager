@@ -1,0 +1,229 @@
+import EbookBridge
+import Foundation
+
+extension BookDetail: Identifiable {}
+
+extension BridgeError {
+    public var userMessage: String {
+        switch self {
+        case let .Locked(_, _, message),
+             let .PublicationPending(_, message),
+             let .InvalidInput(message),
+             let .Failed(message):
+            return message
+        }
+    }
+}
+
+/// Dispatches all blocking `ebook-bridge` operations onto dedicated background queues off the main actor.
+public final class BridgeService: @unchecked Sendable {
+    private let writeQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.write", qos: .userInitiated)
+    private let readQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.read", qos: .userInitiated, attributes: .concurrent)
+    private let coverQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.cover", qos: .utility, attributes: .concurrent)
+    private let surveyQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.survey", qos: .utility)
+    private let lock = NSLock()
+    private var libraryInstance: Library?
+    public let directory: String
+
+    public init(directory: String) {
+        self.directory = directory
+    }
+
+    private func ensureLibrary() throws -> Library {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = libraryInstance {
+            return existing
+        }
+        let opened = try Library.open(directory: directory)
+        libraryInstance = opened
+        return opened
+    }
+
+    private func run<T: Sendable>(on queue: DispatchQueue, _ work: @Sendable @escaping (Library) throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    let lib = try self.ensureLibrary()
+                    let value = try work(lib)
+                    continuation.resume(returning: value)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func runWrite<T: Sendable>(_ work: @Sendable @escaping (Library) throws -> T) async throws -> T {
+        try await run(on: writeQueue, work)
+    }
+
+    private func runRead<T: Sendable>(_ work: @Sendable @escaping (Library) throws -> T) async throws -> T {
+        try await run(on: readQueue, work)
+    }
+
+    public func browse(query: String, sort: [SortRule]) async throws -> BrowseSnapshot {
+        try await runRead { lib in
+            try lib.browse(query: query, sort: sort)
+        }
+    }
+
+    public func browseWindow(viewId: UInt64, start: UInt32, limit: UInt32) async throws -> [BookRow] {
+        try await runRead { lib in
+            try lib.browseWindow(viewId: viewId, start: start, limit: limit)
+        }
+    }
+
+    public func browseLocate(viewId: UInt64, ids: [String]) async throws -> [UInt32?] {
+        try await runRead { lib in
+            try lib.browseLocate(viewId: viewId, ids: ids)
+        }
+    }
+
+    public func browseChanged() async throws -> Bool {
+        try await runRead { lib in
+            try lib.browseChanged()
+        }
+    }
+
+    public func quickJump(query: String, limit: UInt32 = 8) async throws -> QuickJumpMatches {
+        try await runRead { lib in
+            try lib.quickJump(query: query, limit: limit)
+        }
+    }
+
+    public func importPaths(_ paths: [String]) async throws -> [ImportItemResult] {
+        try await runWrite { lib in
+            lib.importPaths(paths: paths)
+        }
+    }
+
+    public func settleReview(token: String, choice: ReviewChoice) async throws -> ImportItemResult {
+        try await runWrite { lib in
+            try lib.settleReview(reviewToken: token, choice: choice)
+        }
+    }
+
+    public func discardReviews(tokens: [String]) async throws {
+        try await runWrite { lib in
+            lib.discardReviews(reviewTokens: tokens)
+        }
+    }
+
+    public func book(id: String) async throws -> BookDetail {
+        try await runRead { lib in
+            try lib.book(bookId: id)
+        }
+    }
+
+    public func editBook(id: String, edit: BookEdit) async throws -> SavedEdit {
+        try await runWrite { lib in
+            try lib.editBook(bookId: id, edit: edit)
+        }
+    }
+
+    public func coverThumbnail(bookId: String) async throws -> Data? {
+        try await run(on: coverQueue) { lib in
+            try lib.coverThumbnail(bookId: bookId)
+        }
+    }
+
+    public func surveyUnsurveyed(limit: UInt32, skip: [String] = []) async throws -> SurveyBatch {
+        try await run(on: surveyQueue) { lib in
+            try lib.surveyUnsurveyed(limit: limit, skip: skip)
+        }
+    }
+
+    public func exportBook(bookId: String, destinationDir: String) async throws -> ExportStatus {
+        try await runWrite { lib in
+            try lib.exportBook(bookId: bookId, destinationDir: destinationDir)
+        }
+    }
+
+    public func refresh() async throws {
+        try await runWrite { lib in
+            try lib.refresh()
+        }
+    }
+
+    public func openBook(bookId: String) async throws -> OpenBookHandle {
+        let openBook = try await runRead { lib in
+            try lib.openBook(bookId: bookId)
+        }
+        return OpenBookHandle(book: openBook)
+    }
+}
+
+/// Async wrapper around an `OpenBook` session keeping every helper call off the main actor.
+public final class OpenBookHandle: @unchecked Sendable {
+    private let book: OpenBook
+    private let queue = DispatchQueue(label: "io.github.endqwerty.EbookManager.openbook", qos: .userInitiated, attributes: .concurrent)
+    private let saveQueue = DispatchQueue(label: "io.github.endqwerty.EbookManager.openbook.save", qos: .utility)
+
+    public let bookId: String
+    public let versionId: String
+    public let title: String
+    public let chapters: [ChapterSummary]
+    public let toc: [TocItem]
+
+    init(book: OpenBook) {
+        self.book = book
+        self.bookId = book.bookId()
+        self.versionId = book.versionId()
+        self.title = book.title()
+        self.chapters = book.chapters()
+        self.toc = book.toc()
+    }
+
+    public func readContent(chapter: UInt32) async throws -> ChapterMarkup {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    continuation.resume(returning: try self.book.readContent(chapter: chapter))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    public func readResource(id: UInt32) async -> BookResource? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: try? self.book.readResource(id: id))
+            }
+        }
+    }
+
+    public func loadPlace() async throws -> ReadingPlace? {
+        try await withCheckedThrowingContinuation { continuation in
+            saveQueue.async {
+                do {
+                    continuation.resume(returning: try self.book.loadPlace())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    public func enqueueSavePlace(
+        chapter: UInt32, offset: UInt32, page: UInt32, pages: UInt32,
+        onError: @escaping @MainActor (String) -> Void
+    ) {
+        saveQueue.async {
+            do {
+                try self.book.savePlace(chapter: chapter, offset: offset, page: page, pages: pages)
+            } catch {
+                let message = (error as? BridgeError)?.userMessage ?? error.localizedDescription
+                DispatchQueue.main.async { onError(message) }
+            }
+        }
+    }
+
+    public func flushSaveSynchronously(chapter: UInt32, offset: UInt32, page: UInt32, pages: UInt32) throws {
+        try saveQueue.sync {
+            try self.book.savePlace(chapter: chapter, offset: offset, page: page, pages: pages)
+        }
+    }
+}

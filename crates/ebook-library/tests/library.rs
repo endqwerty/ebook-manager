@@ -682,3 +682,88 @@ fn a_lock_found_later_is_kept_for_that_version() -> Result<()> {
     assert_eq!(first_row(&l)?.protection, Some(Protection::Adobe));
     Ok(())
 }
+
+#[test]
+fn edit_book_writes_every_field_in_one_entry_and_a_repeat_only_republishes() -> Result<()> {
+    let d = tempdir()?;
+    let app = d.path().join("app");
+    let stage = d.path().join("stage");
+    fs::write(&stage, b"edit me")?;
+    let mut l = Library::open(&app)?;
+    let b = add(&mut l, &stage)?;
+    let changes_dir = app.join("portable/changes");
+    let entries = || changes_dir.read_dir().map(|d| d.count());
+    let before = entries()?;
+    let changes = BookChanges {
+        title: "Retitled".into(),
+        authors: vec!["Dana".into()],
+        sort_title: Some("Title, Re".into()),
+        author_sorts: Some(vec![Some("D".into())]),
+        series: Some(vec![("Maps".into(), Some("2".into()))]),
+    };
+    let away = d.path().join("away");
+    fs::rename(&changes_dir, &away)?;
+    fs::write(&changes_dir, b"occupied")?;
+    let err = l.edit_book(&b.id, changes.clone()).unwrap_err();
+    let pending = err.downcast_ref::<PublicationPending>().unwrap();
+    assert_eq!(pending.book_id, b.id);
+    assert!(pending.outcome.is_none());
+    let saved = l.book(&b.id)?;
+    assert_eq!(saved.title, "Retitled");
+    assert_eq!(saved.sort_title.as_deref(), Some("Title, Re"));
+    assert_eq!(saved.author_sorts, changes.author_sorts);
+    assert_eq!(saved.series, changes.series);
+    assert!(
+        l.edit_book(&b.id, changes.clone())
+            .unwrap_err()
+            .downcast_ref::<PublicationPending>()
+            .is_some()
+    );
+    fs::remove_file(&changes_dir)?;
+    fs::rename(&away, &changes_dir)?;
+    assert_eq!(l.edit_book(&b.id, changes.clone())?, saved);
+    assert_eq!(entries()?, before + 1);
+    assert!(
+        l.edit_book(
+            &b.id,
+            BookChanges {
+                title: " ".into(),
+                ..changes
+            }
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn a_pending_import_reports_what_it_committed() -> Result<()> {
+    let d = tempdir()?;
+    let app = d.path().join("app");
+    let stage = d.path().join("stage");
+    fs::write(&stage, b"first")?;
+    let mut l = Library::open(&app)?;
+    let dir = app.join("portable/changes");
+    fs::remove_dir(&dir)?;
+    fs::write(&dir, b"occupied")?;
+    let outcome = |e: anyhow::Error| e.downcast::<PublicationPending>().unwrap().outcome;
+    let Some(ImportOutcome::Added(b)) = outcome(
+        l.import(&stage, &stage, &facts(), ImportChoice::Review)
+            .unwrap_err(),
+    ) else {
+        panic!("expected a committed addition");
+    };
+    assert!(matches!(
+        outcome(l.import(&stage, &stage, &facts(), ImportChoice::Review).unwrap_err()),
+        Some(ImportOutcome::Duplicate(found)) if found.id == b.id
+    ));
+    fs::write(&stage, b"second")?;
+    assert!(matches!(
+        outcome(
+            l.import(&stage, &stage, &facts(), ImportChoice::Replace(b.id.clone()))
+                .unwrap_err()
+        ),
+        Some(ImportOutcome::Replaced(found)) if found.id == b.id && found.version_id != b.version_id
+    ));
+    Ok(())
+}

@@ -14,15 +14,21 @@ directory's descriptor, on Linux and macOS alike, so the transfer stays on that
 directory if its path or mount changes. The returned path is the chosen folder
 joined with the filename.
 
-The copy gets its name without replacing anything, by the first way the
-filesystem supports: a rename that refuses to replace, a hard link, or, on FAT
-and exFAT under macOS, which have neither, a file created under the name only
-if it is free. Export frees the temporary copy’s space, copies from the open
-source into the new file, syncs it and checks its digest. That last
-way touches only the file it created, so a file that something else puts under
-the name meanwhile is left alone. An export cut short there leaves an empty or
-partial file under the name. The next export of that book then finds the name
-taken by different bytes and uses the name with the hash.
+Allow space for one copy of the EPUB plus filesystem overhead. Export
+first writes and verifies a hidden staging file. If the volume fills during
+staging, the call returns an error and removes the temporary file when the
+filesystem permits it. Pulling the card or killing the process can leave a
+hidden `.ebook-*.part` file as large as the book. Retries leave it alone.
+If it prevents another export, remove the leftover file after the transfer
+has stopped.
+
+Export publishes the staged file with an exclusive rename or a hard link
+when supported. On macOS FAT and exFAT volumes, it frees the staged space,
+creates the destination exclusively, copies from the open source, syncs the
+new file and verifies its digest. A write or verification error triggers an
+attempt to empty that file. An interrupted export can leave an empty or
+partial EPUB under its final name. A retry preserves that EPUB and tries the
+hash-suffixed name. If both names hold different bytes, choose another folder.
 
 Run `cargo test -p ebook-device` from the workspace root. The operation tests use
 temporary directories and check retries, name collisions and filenames derived

@@ -246,6 +246,8 @@ Mainworthy when a pull request ends.
 - The CLI comes from the public image `ghcr.io/endqwerty/mainworthy:main`.
 - CI runs the Rust workspace with the nextest `ci` profile and reports
   `target/nextest/ci/junit.xml` along with the desktop and mounted FAT32
-  acceptance results. When this workflow reaches the default branch,
+  acceptance results. The macOS job builds the app and tests the core, mounted
+  FAT32 export and Swift integration. The final reporting job sends both
+  platforms’ outcomes to Mainworthy even when one platform fails. When this workflow reaches the default branch,
   set the project policy to `mainworthy policy empty pending` to retire the
   pre-implementation allowance for empty reports.

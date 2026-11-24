@@ -24,9 +24,11 @@ use uuid::Uuid;
 pub type Result<T> = anyhow::Result<T>;
 
 /// Downcast the error to this type to find an already-committed shelf entry.
+/// After an import, `outcome` holds what was committed.
 #[derive(Debug)]
 pub struct PublicationPending {
     pub book_id: String,
+    pub outcome: Option<ImportOutcome>,
 }
 impl std::fmt::Display for PublicationPending {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -43,6 +45,15 @@ pub enum ImportChoice {
     Review,
     KeepSeparate,
     Replace(String),
+}
+/// The user-editable fields of a book. `None` filing fields resume imported values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BookChanges {
+    pub title: String,
+    pub authors: Vec<String>,
+    pub sort_title: Option<String>,
+    pub author_sorts: Option<Vec<Option<String>>>,
+    pub series: Option<Vec<(String, Option<String>)>>,
 }
 #[derive(Debug, Clone)]
 pub enum ImportOutcome {
@@ -277,6 +288,7 @@ impl Library {
             {
                 Some(b)
             }
+            (ImportChoice::Review, _) => exact.iter().find(|b| prev.as_ref() == Some(&b.id)),
             _ => None,
         };
         if let Some(b) = duplicate {
@@ -287,6 +299,7 @@ impl Library {
             )?;
             self.publish().context(PublicationPending {
                 book_id: b.id.clone(),
+                outcome: Some(ImportOutcome::Duplicate(b.clone())),
             })?;
             return Ok(ImportOutcome::Duplicate(b.clone()));
         }
@@ -331,12 +344,20 @@ impl Library {
             book.sha256 = sha;
         }
         self.store_blob(tmp, &book)?;
-        self.commit(Change::Book(Box::new(book.clone())), Some((key, &book.id)))?;
-        Ok(if replaced {
-            ImportOutcome::Replaced(book)
+        let outcome = if replaced {
+            ImportOutcome::Replaced(book.clone())
         } else {
-            ImportOutcome::Added(book)
-        })
+            ImportOutcome::Added(book.clone())
+        };
+        if let Err(mut err) =
+            self.commit(Change::Book(Box::new(book.clone())), Some((key, &book.id)))
+        {
+            if let Some(pending) = err.downcast_mut::<PublicationPending>() {
+                pending.outcome = Some(outcome);
+            }
+            return Err(err);
+        }
+        Ok(outcome)
     }
     fn import_candidates(
         &self,
@@ -372,6 +393,27 @@ impl Library {
         }
         File::open(path.parent().unwrap())?.sync_all()?;
         Ok(())
+    }
+    /// Replaces every user-editable field in one journal entry. Resubmitting the
+    /// current values commits nothing and retries pending publication.
+    pub fn edit_book(&mut self, id: &str, changes: BookChanges) -> Result<Book> {
+        fields(&changes.title, &changes.authors)?;
+        let mut book = self.book(id)?;
+        let before = book.clone();
+        book.title = changes.title;
+        book.authors = changes.authors;
+        book.sort_title = changes.sort_title;
+        book.author_sorts = changes.author_sorts;
+        book.series = changes.series;
+        if book == before {
+            self.publish().context(PublicationPending {
+                book_id: id.into(),
+                outcome: None,
+            })?;
+        } else {
+            self.commit(Change::Book(Box::new(book.clone())), None)?;
+        }
+        Ok(book)
     }
     pub fn edit(&mut self, id: &str, title: &str, authors: &[String]) -> Result<Book> {
         fields(title, authors)?;
@@ -435,9 +477,10 @@ impl Library {
         if self.load_position(id)?.is_some_and(|old| {
             old.chapter == pos.chapter && old.offset == pos.offset && old.fraction == pos.fraction
         }) {
-            return self
-                .publish()
-                .context(PublicationPending { book_id: id.into() });
+            return self.publish().context(PublicationPending {
+                book_id: id.into(),
+                outcome: None,
+            });
         }
         self.commit(
             Change::Position {

@@ -16,21 +16,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
+  linux:
     runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.desktop.outcome }}
+      scale: ${{ steps.scale.outcome }}
+      desktop_scale: ${{ steps.desktop_scale.outcome }}
+      card: ${{ steps.card.outcome }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Put mainworthy on the path
-        run: |
-          image=ghcr.io/endqwerty/mainworthy:main
-          docker pull --quiet "$image"
-          container=$(docker create "$image")
-          mkdir -p "$RUNNER_TEMP/bin"
-          docker cp "$container:/usr/local/bin/mainworthy" "$RUNNER_TEMP/bin/mainworthy"
-          docker rm "$container" >/dev/null
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/bin/mainworthy" version
 
       - name: Install desktop and reader dependencies
         run: |
@@ -77,47 +71,30 @@ jobs:
           cargo build --release --locked -p ebook-library --features fixture --bin fixture
           /usr/bin/python3 apps/desktop/tests/scale.py "$RUNNER_TEMP/ebook-manager/bin/ebook-manager" target/release/fixture
 
-      - name: Report results and read the gate
+      - name: Save Linux workspace test results
         if: always()
-        env:
-          DESKTOP_OUTCOME: ${{ steps.desktop.outcome }}
-          SCALE_OUTCOME: ${{ steps.scale.outcome }}
-          DESKTOP_SCALE_OUTCOME: ${{ steps.desktop_scale.outcome }}
-          CARD_OUTCOME: ${{ steps.card.outcome }}
-          MAINWORTHY_URL: ${{ vars.MAINWORTHY_URL }}
-          MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
-          MAINWORTHY_TOKEN: ${{ secrets.MAINWORTHY_TOKEN }}
-        run: |
-          python3 - "$RUNNER_TEMP/desktop-checks.xml" <<'PYTHON'
-          import os
-          import sys
-          import xml.etree.ElementTree as ET
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
 
-          suite = ET.Element("testsuite", name="Linux integration")
-          for name, outcome in [
-              ("Import, read, restart and export", os.environ["DESKTOP_OUTCOME"]),
-              ("Scale benchmark", os.environ["SCALE_OUTCOME"]),
-              ("Desktop at 100,000 books", os.environ["DESKTOP_SCALE_OUTCOME"]),
-              ("Mounted FAT32 export", os.environ["CARD_OUTCOME"]),
-          ]:
-              case = ET.SubElement(suite, "testcase", name=name)
-              if outcome != "success":
-                  ET.SubElement(case, "failure", message=f"GitHub Actions step: {outcome}")
-          ET.ElementTree(suite).write(sys.argv[1], encoding="utf-8", xml_declaration=True)
-          PYTHON
-          mainworthy report target/nextest/ci/junit.xml "$RUNNER_TEMP/desktop-checks.xml"
-          mainworthy gate
-
-  # The shared core on macOS, where the reader's helper runs under sandbox-exec. Not reported to Mainworthy yet.
   macos:
     runs-on: macos-latest
+    outputs:
+      core: ${{ steps.core.outcome }}
+      card: ${{ steps.card.outcome }}
+      app: ${{ steps.app.outcome }}
+      swift: ${{ steps.swift.outcome }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Run the core's tests
-        run: cargo test --release --locked --no-fail-fast -p ebook-reader -p ebook-library -p ebook-device --features ebook-library/fixture
+        id: core
+        run: cargo test --release --locked --no-fail-fast -p ebook-reader -p ebook-library -p ebook-device -p ebook-bridge --features ebook-library/fixture
 
       - name: Export to a mounted FAT32 volume
+        id: card
         run: |
           hdiutil create -size 64m -fs "MS-DOS FAT32" -volname EBOOKTEST "$RUNNER_TEMP/card.dmg"
           card="$RUNNER_TEMP/card"
@@ -127,3 +104,83 @@ jobs:
           diskutil info "$card" | grep "FAT32"
           TMPDIR="$card" cargo test --release --locked -p ebook-device
           EBOOK_TEST_CARD="$card" cargo test --release --locked -p ebook-device --test export card_with_room_for_one_copy -- --ignored --exact
+
+      - name: Build the macOS application bundle
+        id: app
+        run: apps/macos/build.sh app
+
+      - name: Run Swift bridge and reader integration tests
+        id: swift
+        run: apps/macos/build.sh test
+
+  check:
+    needs: [linux, macos]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Put mainworthy on the path
+        run: |
+          image=ghcr.io/endqwerty/mainworthy:main
+          docker pull --quiet "$image"
+          container=$(docker create "$image")
+          mkdir -p "$RUNNER_TEMP/bin"
+          docker cp "$container:/usr/local/bin/mainworthy" "$RUNNER_TEMP/bin/mainworthy"
+          docker rm "$container" >/dev/null
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/mainworthy" version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-junit
+          path: target/nextest/ci
+
+      - name: Report results and read the gate
+        if: always()
+        env:
+          DESKTOP_OUTCOME: ${{ needs.linux.outputs.desktop }}
+          SCALE_OUTCOME: ${{ needs.linux.outputs.scale }}
+          DESKTOP_SCALE_OUTCOME: ${{ needs.linux.outputs.desktop_scale }}
+          CARD_OUTCOME: ${{ needs.linux.outputs.card }}
+          MACOS_CORE: ${{ needs.macos.outputs.core }}
+          MACOS_CARD: ${{ needs.macos.outputs.card }}
+          MACOS_APP: ${{ needs.macos.outputs.app }}
+          MACOS_SWIFT: ${{ needs.macos.outputs.swift }}
+          LINUX_JOB: ${{ needs.linux.result }}
+          MACOS_JOB: ${{ needs.macos.result }}
+          MAINWORTHY_URL: ${{ vars.MAINWORTHY_URL }}
+          MAINWORTHY_PROJECT: ${{ vars.MAINWORTHY_PROJECT }}
+          MAINWORTHY_TOKEN: ${{ secrets.MAINWORTHY_TOKEN }}
+        run: |
+          python3 - "$RUNNER_TEMP/desktop-checks.xml" <<'PYTHON'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          suites = ET.Element("testsuites")
+          linux = ET.SubElement(suites, "testsuite", name="Linux integration")
+          macos = ET.SubElement(suites, "testsuite", name="macOS integration")
+          for suite, name, outcome in [
+              (linux, "Import, read, restart and export", os.environ["DESKTOP_OUTCOME"]),
+              (linux, "Scale benchmark", os.environ["SCALE_OUTCOME"]),
+              (linux, "Desktop at 100,000 books", os.environ["DESKTOP_SCALE_OUTCOME"]),
+              (linux, "Linux job", os.environ["LINUX_JOB"]),
+              (macos, "macOS job", os.environ["MACOS_JOB"]),
+              (macos, "macOS core tests", os.environ["MACOS_CORE"]),
+              (macos, "macOS FAT32 export", os.environ["MACOS_CARD"]),
+              (macos, "macOS app bundle", os.environ["MACOS_APP"]),
+              (macos, "macOS Swift tests", os.environ["MACOS_SWIFT"]),
+              (linux, "Mounted FAT32 export", os.environ["CARD_OUTCOME"]),
+          ]:
+              case = ET.SubElement(suite, "testcase", name=name)
+              if outcome != "success":
+                  ET.SubElement(case, "failure", message=f"GitHub Actions step: {outcome}")
+          ET.ElementTree(suites).write(sys.argv[1], encoding="utf-8", xml_declaration=True)
+          PYTHON
+          reports=("$RUNNER_TEMP/desktop-checks.xml")
+          if [[ -f target/nextest/ci/junit.xml ]]; then
+            reports+=(target/nextest/ci/junit.xml)
+          fi
+          mainworthy report "${reports[@]}"
+          mainworthy gate

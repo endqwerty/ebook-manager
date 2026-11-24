@@ -1,0 +1,5 @@
+.build/
+build/
+Sources/EbookBridge/ebook_bridge.swift
+Sources/ebook_bridgeFFI/include/ebook_bridgeFFI.h
+Sources/ebook_bridgeFFI/include/module.modulemap
