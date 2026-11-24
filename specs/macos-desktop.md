@@ -18,6 +18,9 @@ The macOS app keeps a local EPUB library in
   sort names and series together and survives reopening the library. Go to searches across books, authors and series. Show Details
   displays the selected book and offers Read and Edit. The managed EPUB
   retains its original bytes.
+- Refreshing the same search or sort keeps the visible book in view. Cover
+  rebuilds have a separate bounded queue. Background surveys continue past
+  unreadable books and retry them after Refresh or Try Again.
 - Read opens a reader window. Its contents list jumps to a chapter, and the
   reader saves the chapter and position for the next session. The isolated
   helper reads EPUB data. The web view renders chapter markup, blocks book

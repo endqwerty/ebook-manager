@@ -64,6 +64,25 @@ public struct LockedAlertModel: Identifiable, Equatable {
     public let body: String
 }
 
+public struct BrowseScrollRequest: Equatable, Sendable {
+    public let rowId: String
+    public let serial: UInt64
+}
+
+/// Rows to load so a reloaded view still holds the row the reader was looking at.
+public enum BrowseRestorePlan {
+    public static func rowsToLoad(anchorRank: UInt32?, previouslyLoaded: Int, total: UInt32, pageSize: UInt32) -> UInt32 {
+        let wanted: UInt32
+        if let anchorRank {
+            wanted = anchorRank + 1
+        } else {
+            wanted = UInt32(clamping: previouslyLoaded)
+        }
+        let pages = (wanted + pageSize - 1) / pageSize
+        return min(total, max(pageSize, pages * pageSize))
+    }
+}
+
 public struct SimpleNoticeModel: Identifiable, Equatable {
     public let id = UUID()
     public let heading: String
@@ -116,6 +135,7 @@ public final class LibraryViewModel: ObservableObject {
     @Published public var showQuickJump = false
     @Published public var lockedAlert: LockedAlertModel?
     @Published public var noticeAlert: SimpleNoticeModel?
+    @Published public private(set) var scrollRequest: BrowseScrollRequest?
 
     public let bridge: BridgeService
     public let coverCache: CoverCache
@@ -127,6 +147,17 @@ public final class LibraryViewModel: ObservableObject {
     private var searchDebounceTask: Task<Void, Never>?
     private var openingBookIds: Set<String> = []
     private var openReaderControllers: [String: ReaderWindowCoordinator] = [:]
+    private var visibleRowIds: Set<String> = []
+    private var shownQuery: (text: String, sort: [SortRule])?
+    private var scrollSerial: UInt64 = 0
+    private var surveyReloadTask: Task<Void, Never>?
+    private lazy var surveyRunner: SurveyRunner = {
+        let service = bridge
+        return SurveyRunner(
+            step: { skip in try await service.surveyUnsurveyed(limit: 16, skip: skip) },
+            onProgress: { [weak self] in self?.scheduleSurveyReload() }
+        )
+    }()
 
     private static let pageSize: UInt32 = 128
 
@@ -142,6 +173,28 @@ public final class LibraryViewModel: ObservableObject {
     public func start() {
         reloadBrowse()
         runBackgroundSurvey()
+    }
+
+    public func retryAfterError() {
+        reloadBrowse()
+        runBackgroundSurvey()
+    }
+
+    public func rowAppeared(index: Int, id: String) {
+        visibleRowIds.insert(id)
+        loadMoreIfNeeded(forAppearIndex: index)
+    }
+
+    public func rowDisappeared(id: String) {
+        visibleRowIds.remove(id)
+    }
+
+    private func topVisibleRow() -> (id: String, index: Int)? {
+        guard !visibleRowIds.isEmpty else { return nil }
+        for (index, row) in rows.enumerated() where visibleRowIds.contains(row.id) {
+            return (row.id, index)
+        }
+        return nil
     }
 
     public func setSort(field: SortField) {
@@ -167,11 +220,16 @@ public final class LibraryViewModel: ObservableObject {
         }
     }
 
-    public func reloadBrowse() {
+    @discardableResult
+    public func reloadBrowse() -> Task<Void, Never> {
         browseSerial &+= 1
         let serial = browseSerial
         let query = searchText
         let rules = [SortRule(field: sortField, descending: sortDescending)]
+        let sameView = shownQuery.map { $0.text == query && $0.sort == rules } ?? false
+        let anchor = sameView ? topVisibleRow() : nil
+        let previouslyLoaded = sameView ? rows.count : 0
+        let selection = Array(selectedIds)
 
         if rows.isEmpty {
             phase = .loading
@@ -184,18 +242,62 @@ public final class LibraryViewModel: ObservableObject {
             }
         }
 
-        Task {
+        return Task {
             do {
                 let snapshot = try await bridge.browse(query: query, sort: rules)
                 guard serial == browseSerial else { return }
+                var loaded = snapshot.rows
+                let complete = snapshot.count <= UInt32(snapshot.rows.count)
+                var goneFromView: Set<String> = []
+                var anchorRank: UInt32?
+                if !complete {
+                    let wanted = (anchor.map { [$0.id] } ?? []) + selection
+                    if !wanted.isEmpty,
+                       let ranks = try? await bridge.browseLocate(viewId: snapshot.viewId, ids: wanted)
+                    {
+                        if anchor != nil {
+                            anchorRank = ranks.first ?? nil
+                        }
+                        let selectionRanks = ranks.dropFirst(anchor == nil ? 0 : 1)
+                        for (id, rank) in zip(selection, selectionRanks) where rank == nil {
+                            goneFromView.insert(id)
+                        }
+                    }
+                    let target = BrowseRestorePlan.rowsToLoad(
+                        anchorRank: anchorRank,
+                        previouslyLoaded: previouslyLoaded,
+                        total: snapshot.count,
+                        pageSize: Self.pageSize
+                    )
+                    while UInt32(loaded.count) < target {
+                        let start = UInt32(loaded.count)
+                        guard let more = try? await bridge.browseWindow(
+                            viewId: snapshot.viewId,
+                            start: start,
+                            limit: min(Self.pageSize, target - start)
+                        ), !more.isEmpty else {
+                            break
+                        }
+                        loaded.append(contentsOf: more)
+                    }
+                    guard serial == browseSerial else { return }
+                }
                 activeViewId = snapshot.viewId
                 totalCount = snapshot.count
-                rows = snapshot.rows
-                loadedPages = [0]
+                let oldIndex = anchor?.index
+                rows = loaded
+                shownQuery = (query, rules)
+                let fullPages = UInt32(loaded.count) / Self.pageSize
+                loadedPages = Set(0 ..< max(1, fullPages))
                 loadingPages.removeAll()
-                let visibleIds = Set(snapshot.rows.map(\.id))
-                if snapshot.count <= Self.pageSize {
-                    selectedIds = selectedIds.intersection(visibleIds)
+                if complete {
+                    selectedIds.formIntersection(loaded.map(\.id))
+                } else {
+                    selectedIds.subtract(goneFromView)
+                }
+                if let anchor, let newIndex = loaded.firstIndex(where: { $0.id == anchor.id }), newIndex != oldIndex {
+                    scrollSerial &+= 1
+                    scrollRequest = BrowseScrollRequest(rowId: anchor.id, serial: scrollSerial)
                 }
                 phase = .showing
                 showLoadingIndicator = false
@@ -203,6 +305,7 @@ public final class LibraryViewModel: ObservableObject {
                 guard serial == browseSerial else { return }
                 rows = []
                 totalCount = 0
+                shownQuery = nil
                 selectedIds.removeAll()
                 phase = .error(error.userMessage)
                 showLoadingIndicator = false
@@ -210,6 +313,7 @@ public final class LibraryViewModel: ObservableObject {
                 guard serial == browseSerial else { return }
                 rows = []
                 totalCount = 0
+                shownQuery = nil
                 selectedIds.removeAll()
                 phase = .error(error.localizedDescription)
                 showLoadingIndicator = false
@@ -239,15 +343,18 @@ public final class LibraryViewModel: ObservableObject {
         }
     }
 
-    private func runBackgroundSurvey() {
-        Task {
-            while true {
-                let count = (try? await bridge.surveyUnsurveyed(limit: 16)) ?? 0
-                if count == 0 {
-                    break
-                }
-                reloadBrowse()
-            }
+    @discardableResult
+    func runBackgroundSurvey() -> Task<Void, Never> {
+        surveyRunner.start()
+    }
+
+    private func scheduleSurveyReload() {
+        guard surveyReloadTask == nil else { return }
+        surveyReloadTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard let self else { return }
+            self.surveyReloadTask = nil
+            self.reloadBrowse()
         }
     }
 
@@ -258,6 +365,7 @@ public final class LibraryViewModel: ObservableObject {
             do {
                 try await bridge.refresh()
                 reloadBrowse()
+                runBackgroundSurvey()
             } catch let err as BridgeError {
                 noticeAlert = SimpleNoticeModel(heading: "Couldn’t Refresh Library", body: err.userMessage)
             } catch {
