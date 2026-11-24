@@ -267,10 +267,10 @@ link or instruction, which each pull request's reviewers check in the diff.
 ## Tasks
 
 1. Reader: scheme detection, unreadable package, survey cover, with tests
-   (2, 3, 4, 5, 10). Done except 10.
-2. Library: field, column, row, with tests (8, 9). Open.
-3. Desktop: import, views, Read alert, smoke steps (1, 2, 6, 7). Open.
-4. Specs, requirements, READMEs and interface page. Open.
+   (2, 3, 4, 5, 10). Done.
+2. Library: field, column, row, with tests (8, 9). Done.
+3. Desktop: import, views, Read alert, smoke steps (1, 2, 6, 7). Done.
+4. Specs, requirements, READMEs and interface page. Done.
 
 ## Open questions
 
