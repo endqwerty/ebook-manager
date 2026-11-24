@@ -124,6 +124,28 @@ pub enum Turn {
     None,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DarkImages {
+    Original,
+    Dimmed,
+    MatchPage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineFocus {
+    Off,
+    One,
+    Three,
+    Five,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusDim {
+    Light,
+    Medium,
+    Strong,
+}
+
 /// Size steps: twelve, from 0.8 to 2.5 times the default.
 pub const SIZES: [f32; 12] = [0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5, 1.7, 1.9, 2.1, 2.3, 2.5];
 pub const WEIGHTS: [(u16, &str); 4] = [
@@ -160,6 +182,9 @@ pub struct Settings {
     pub hyphenate: bool,
     pub two_columns: bool,
     pub turn: Turn,
+    pub dark_images: DarkImages,
+    pub line_focus: LineFocus,
+    pub focus_dim: FocusDim,
 }
 
 impl Default for Settings {
@@ -178,6 +203,9 @@ impl Default for Settings {
             hyphenate: false,
             two_columns: false,
             turn: Turn::Slide,
+            dark_images: DarkImages::Original,
+            line_focus: LineFocus::Off,
+            focus_dim: FocusDim::Medium,
         }
     }
 }
@@ -278,6 +306,42 @@ impl Settings {
                 }
                 .to_owned(),
             ),
+            (
+                "--dark-images",
+                if more_contrast || page.page.luminance() >= 0.2 {
+                    "original"
+                } else {
+                    match self.dark_images {
+                        DarkImages::Original => "original",
+                        DarkImages::Dimmed => "dimmed",
+                        DarkImages::MatchPage => "match",
+                    }
+                }
+                .to_owned(),
+            ),
+            (
+                "--line-focus",
+                match self.line_focus {
+                    LineFocus::Off => "0",
+                    LineFocus::One => "1",
+                    LineFocus::Three => "3",
+                    LineFocus::Five => "5",
+                }
+                .to_owned(),
+            ),
+            (
+                "--focus-dim",
+                if more_contrast {
+                    "contrast"
+                } else {
+                    match self.focus_dim {
+                        FocusDim::Light => "0.35",
+                        FocusDim::Medium => "0.55",
+                        FocusDim::Strong => "0.72",
+                    }
+                }
+                .to_owned(),
+            ),
         ]
     }
 
@@ -301,8 +365,24 @@ impl Settings {
             Turn::Fade => "fade",
             Turn::None => "none",
         };
+        let dark_images = match self.dark_images {
+            DarkImages::Original => "original",
+            DarkImages::Dimmed => "dimmed",
+            DarkImages::MatchPage => "match",
+        };
+        let line_focus = match self.line_focus {
+            LineFocus::Off => "off",
+            LineFocus::One => "1",
+            LineFocus::Three => "3",
+            LineFocus::Five => "5",
+        };
+        let focus_dim = match self.focus_dim {
+            FocusDim::Light => "light",
+            FocusDim::Medium => "medium",
+            FocusDim::Strong => "strong",
+        };
         format!(
-            "colour={colour}\ncustom-page={}\ncustom-text={}\nface={}\nsize={}\nweight={}\nline={}\nletter={}\nword={}\nmargin={margin}\njustify={}\nhyphenate={}\ntwo-columns={}\nturn={turn}\n",
+            "colour={colour}\ncustom-page={}\ncustom-text={}\nface={}\nsize={}\nweight={}\nline={}\nletter={}\nword={}\nmargin={margin}\njustify={}\nhyphenate={}\ntwo-columns={}\nturn={turn}\ndark-images={dark_images}\nline-focus={line_focus}\nfocus-dim={focus_dim}\n",
             self.custom.0.hex(),
             self.custom.1.hex(),
             self.face.as_deref().unwrap_or(""),
@@ -366,6 +446,28 @@ impl Settings {
                         "fade" => Turn::Fade,
                         "none" => Turn::None,
                         _ => Turn::Slide,
+                    }
+                }
+                "dark-images" => {
+                    s.dark_images = match value {
+                        "dimmed" => DarkImages::Dimmed,
+                        "match" => DarkImages::MatchPage,
+                        _ => DarkImages::Original,
+                    }
+                }
+                "line-focus" => {
+                    s.line_focus = match value {
+                        "1" => LineFocus::One,
+                        "3" => LineFocus::Three,
+                        "5" => LineFocus::Five,
+                        _ => LineFocus::Off,
+                    }
+                }
+                "focus-dim" => {
+                    s.focus_dim = match value {
+                        "light" => FocusDim::Light,
+                        "strong" => FocusDim::Strong,
+                        _ => FocusDim::Medium,
                     }
                 }
                 _ => {}
@@ -654,5 +756,48 @@ mod tests {
             }
         );
         assert!(!s.to_text().contains("scrolling"));
+    }
+
+    #[test]
+    fn dark_images_and_line_focus_properties_and_roundtrip() {
+        let mut s = Settings::default();
+        assert_eq!(
+            value(&s.properties(true, false, "serif"), "--dark-images"),
+            "original"
+        );
+        assert_eq!(
+            value(&s.properties(true, false, "serif"), "--line-focus"),
+            "0"
+        );
+        s.dark_images = DarkImages::MatchPage;
+        s.line_focus = LineFocus::Three;
+        s.focus_dim = FocusDim::Strong;
+        // Light page keeps images original; dark page applies MatchPage.
+        assert_eq!(
+            value(&s.properties(false, false, "serif"), "--dark-images"),
+            "original"
+        );
+        assert_eq!(
+            value(&s.properties(true, false, "serif"), "--dark-images"),
+            "match"
+        );
+        assert_eq!(
+            value(&s.properties(true, false, "serif"), "--line-focus"),
+            "3"
+        );
+        assert_eq!(
+            value(&s.properties(true, false, "serif"), "--focus-dim"),
+            "0.72"
+        );
+        // More contrast forces images original and ruler to outline mode.
+        assert_eq!(
+            value(&s.properties(true, true, "serif"), "--dark-images"),
+            "original"
+        );
+        assert_eq!(
+            value(&s.properties(true, true, "serif"), "--focus-dim"),
+            "contrast"
+        );
+        assert_eq!(Settings::from_text(&s.to_text()), s);
     }
 }

@@ -8,8 +8,8 @@ pages build on it:
 - [The ways to show books](interface-views.md): home, list, table, a shelf of
   spines, and the author and series indexes.
 - [The other screens](interface-screens.md): search, adding books, editing,
-  devices, highlights, settings and dialogs.
-- [The reader](interface-reader.md).
+  devices, highlights, reading log, settings and dialogs.
+- [The reader](interface-reader.md) and [the PDF reader](interface-reader-pdf.md).
 
 Someone opening the app should feel they are in a library: quiet, ordered and
 warm, with the books as the thing they notice. The app should also look like it
@@ -71,12 +71,13 @@ and not the interface. See [Covers](#covers).
 
 - On a wide window the sidebar lists places in four groups, in this order.
   Library: Home, All books, Reading now, Unread, Finished, and Needs attention
-  when it is not empty. Browse: Authors, Series, Highlights. Then Collections,
-  then Devices. A count sits at the trailing edge of each row that holds books.
+  when it is not empty. Browse: Authors, Series, Highlights, Reading log. Then
+  Collections, then Devices. A count sits at the trailing edge of each row that
+  holds books.
 - On a phone the platform's bar has four destinations: Home, Library,
   Collections and Devices. In Library, Reading now, Unread and Finished become a
-  filter at the top, and Authors, Series and Highlights are in a Browse menu
-  beside it.
+  filter at the top, and Authors, Series, Highlights and Reading log are in a
+  Browse menu beside it.
 - The screen's title names the place selected, with the number of books beside
   it. Where the platform's bar shows a large title that collapses on scroll, the
   bar owns the title. Elsewhere it sits at the top of the content at the leading
@@ -89,11 +90,23 @@ and not the interface. See [Covers](#covers).
   context menu.
 - Book details put the cover at the leading edge, 160 wide, and the rest beside
   it in this order: the title, the author, the series with the book's number in
-  it, the prominent action with Send to device after it, then the facts. The
-  facts are Published, Language, Length, Format with file size, Added, and
-  Accessibility, which gives the book's own accessibility metadata in plain
-  words, such as "Has image descriptions. No flashing content." Leave out a fact
-  the book lacks.
+  it, the prominent action with Send to device after it, the facts, and the
+  book's description. Each author and the series are plain buttons in the label
+  colour (never the accent colour), underlined on hover and focus on pointer
+  platforms, with accessible names stating the destination ("Show books by
+  Herman Melville") and full touch targets; navigating back restores the
+  originating selection and scroll position. The facts are Published, Language,
+  Length, Format with file size, Added, Accessibility (the book's own
+  accessibility metadata in plain words, such as "Has image descriptions. No
+  flashing content."), Collections, Tags, and Highlights (when the book has
+  highlights, notes or bookmarks, such as "12 highlights, 3 notes" or "1
+  bookmark", opening Highlights filtered to the book). Collections and Tags
+  render as wrapping plain buttons (never comma-run links or coloured badges),
+  capping visible tags at five with "and N more" to expand. The description sits
+  after the facts table in the UI body style, clamped to about six lines with
+  the platform's disclosure ("Show more" / "Show less"), exposing the full text
+  to assistive technology and skipping clamping at text scale 1.5 or more. Leave
+  out any fact or description the book lacks.
 - When the details area is under 480 wide, the cover moves above the title and
   stays at the leading edge, 40% of the width and no wider than 160. The order
   below it is unchanged. The screen has no heading of its own, because the
@@ -219,6 +232,10 @@ A cover is the one thing in the window drawn as a physical object.
 A book with no usable cover image gets a binding set in type. It is 2:3, a flat
 colour, with padding of 12% of its width. The title is at the top in the serif,
 semibold, at 11% of the cover's width, on up to four lines and then an ellipsis.
+When the cover is 160 units wide or more and the catalogue stores an explicit
+subtitle field (`subtitle` title kind), set the subtitle below the title in the
+serif at regular weight and 85% of the title size, counting toward the four-line
+limit and dropping the subtitle first; never split a single title by punctuation.
 A hairline rule in the text colour follows it. The author is at the bottom in the
 UI font at 9% of the width, on up to two lines. Leave the author out when it is
 unknown or when the cover is under 110 units wide, where the type would be too
@@ -481,7 +498,9 @@ GTK 4.22 and libadwaita 1.9 or later, as tested on Ubuntu 26.04.
 - Colours come from libadwaita's CSS variables. The app follows the system accent
   and dark style, which is the default behaviour, and sets no accent of its own.
 - Use the type classes: `.title-1` for the screen title and the book's title with
-  the bundled serif as the family, `.caption` for the author line, `.numeric` for
+  the bundled serif as the family and `font-weight: 600` (semibold, overriding
+  `.title-1`'s default weight 800, while still stepping up one weight under Bold
+  text), `.caption` for the author line, `.numeric` for
   counts, and `.dimmed` for secondary text. They are relative sizes and follow
   the user's font setting.
 - Write the cover's CSS for `prefers-contrast: more` and for dark appearance.
@@ -551,7 +570,7 @@ Each was the default taken to finish this page. Any can change.
    proportions, with tops at different heights like books on a shelf, was the
    first version. It was turned down because it made the grid look uneven for
    no reason a reader of digital books would recognise. The cost is a crop of
-   up to 6% a side on covers close to 2:3.
+   up to 8.5% a side across the 0.56–0.80 band, and under 6% on most covers.
 4. **A faint spine shade stays.** It is the only drawn hint that a cover is a
    book. Remove it if it reads as decoration on real covers.
 5. **Bundle one serif on GNOME and Android.** Neither guarantees a serif. Literata

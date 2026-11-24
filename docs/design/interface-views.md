@@ -262,6 +262,22 @@ edge, 32 wide each, then the collection's name in the emphasised body style and
 its number of books in the secondary colour. A smart collection has the
 platform's gear or filter symbol after its name.
 
+### Smart collections and nested tags
+
+- **Save this search and rule builder:** Any search can be saved directly as a
+  smart collection. Creating or editing a smart collection opens a
+  platform-native popover or sheet matching the sort editor's pattern (stacked
+  rule rows on phones): a name field, `Match [All / Any] of the following`, and
+  rule rows of `[Field] [Operator] [Value]` with `+` and `−` buttons whose
+  accessible names identify their rule ("Remove rule 2: Author is Melville").
+  A quiet footer shows `"Matches 42 books"` in tabular figures as a debounced
+  polite live region, with no separate Preview step.
+- **Nested tags:** Hierarchy uses explicit parent relationships (or `/` only as
+  a separator—never `.`, so tags like "U.S. history" or "2.0" stay intact). In
+  the Filter popover and tag lists, nested tags render as a standard platform
+  disclosure tree with expand/collapse state announced. Parent counts show the
+  number of **distinct** books in the subtree.
+
 ## How each view maps to a platform
 
 | View | Mac | iPhone and iPad | Windows 11 | GNOME | Android |

@@ -590,6 +590,31 @@ impl View {
         );
     }
 
+    /// Move the reading ruler by `by` lines. `done` hears `Some(true)` if the
+    /// band moved within the page, `Some(false)` at the page's top/bottom edge,
+    /// or `None` if line focus is off.
+    pub fn step_ruler(&self, by: i32, done: impl FnOnce(Option<bool>) + 'static) {
+        let arguments = glib::VariantDict::new(None);
+        arguments.insert("by", by);
+        self.call("return __reader.stepRuler(by)", arguments, move |value| {
+            let state = value
+                .filter(|v| v.is_string())
+                .and_then(|v| match v.to_str().as_str() {
+                    "moved" => Some(true),
+                    "edge" => Some(false),
+                    _ => None,
+                });
+            done(state);
+        });
+    }
+
+    /// Place the reading ruler at the start or end of the current page.
+    pub fn reset_ruler(&self, end: bool) {
+        let arguments = glib::VariantDict::new(None);
+        arguments.insert("edge", if end { "end" } else { "start" });
+        self.call("return __reader.resetRuler(edge)", arguments, |_| {});
+    }
+
     /// Tell the shell a place a page reported, with the record of the load
     /// it reported it for, if it is inside that load's chapter.
     fn place(
