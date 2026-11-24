@@ -66,8 +66,11 @@ first that matches names the scheme.
 | A password | Any ZIP entry with the ZIP encryption flag set | ZIP format |
 | Not recognised | `rights.xml` of another kind, or `encryption.xml` listing a resource with an algorithm other than font obfuscation | OCF |
 
-A book with only obfuscated fonts in `encryption.xml` is not protected, as
-today ([reader spec M4](../../specs/epub-reader-mvp.md)).
+Any of the three marker files makes a book locked even when nothing else is
+listed as encrypted: Readium LCP forbids encrypting its licence so that a
+protected publication can be recognised by it, and the other two exist only to
+carry rights. A book with only obfuscated fonts in `encryption.xml` and none of
+the markers is not protected, as today ([reader spec M4](../../specs/epub-reader-mvp.md)).
 
 The reader helper's `Metadata.protected: bool` becomes
 `Metadata.protection: Option<Protection>`, an enum of the five kinds. The

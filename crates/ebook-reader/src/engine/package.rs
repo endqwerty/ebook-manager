@@ -261,7 +261,9 @@ fn protection(
         }
     }
     let rights = marker(archive, "META-INF/rights.xml");
-    locked |= rights.is_some();
+    locked |= rights.is_some()
+        || archive.contains("META-INF/license.lcpl")
+        || archive.contains("META-INF/sinf.xml");
     if !locked {
         return Ok((None, encrypted));
     }

@@ -80,8 +80,9 @@ and media-overlay books, and every platform other than native Linux packages.
   lower-case scheme taken from the scheme attribute or a `urn:` or `isbn:`
   prefix, and a flag for the package's unique identifier.
 - **M3** The result depends only on the file's bytes, not its name or location.
-- **M4** A book that declares encrypted content other than obfuscated fonts, or
-  has a ZIP-encrypted entry, is reported as protected, with the scheme its
+- **M4** A book that declares encrypted content other than obfuscated fonts,
+  has a ZIP-encrypted entry, or carries `META-INF/license.lcpl`,
+  `META-INF/rights.xml` or `META-INF/sinf.xml`, is reported as protected, with the scheme its
   container declares: Readium LCP for `META-INF/license.lcpl`, Adobe for a
   `META-INF/rights.xml` whose root element declares a namespace on
   `ns.adobe.com`, Apple for `META-INF/sinf.xml`, a password for a ZIP-encrypted
