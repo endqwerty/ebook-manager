@@ -68,8 +68,16 @@ Four are built in. The reader can add their own.
   the time of day, with sunset to sunrise or two times they set.
 - Links in the text are the text colour with an underline. They are never the
   accent colour, which would pull the eye across the page.
-- An image in the book is shown as it is on every page colour. It is never
-  inverted.
+- An image in the book is shown as it is on every page colour by default. It is
+  never changed unless the reader opts in via **Images on dark pages** in Text
+  settings → More: a segmented control with **As they are** (default),
+  **Dimmed**, and **Match the page**. **Match the page** remaps only
+  monochrome line art (SVG or low-chroma two-tone rasters) to the page's text
+  and background colours; photographs and colour illustrations are never
+  inverted. Every image offers a context-menu action **Show original** to
+  override a misclassified image in one step. The setting follows the `READ-5`
+  scope line at the top of Text settings and is forced to **As they are** under
+  More contrast.
 - Under More contrast, White becomes `#ffffff` with `#000000` and Black becomes
   `#000000` with `#ffffff`, and Paper and Grey are replaced by them.
 
@@ -151,9 +159,10 @@ The first level has four rows and nothing else.
 
 The second level has font weight, line spacing, letter and word spacing,
 margins, justification, hyphenation, columns, paged or scrolling, the page turn,
-the foot line, when the page colour changes by itself, and Use the book's own
-styles. After the four swatches on the first level a fifth, marked with a plus,
-makes a page colour of the reader's own.
+the foot line, when the page colour changes by itself, images on dark pages,
+line focus (the reading ruler), and Use the book's own styles. After the four
+swatches on the first level a fifth, marked with a plus, makes a page colour of
+the reader's own.
 
 - At the top of both levels a line in the secondary colour says what the
   settings apply to, such as "For this book" or "For every book", with a menu to
@@ -271,13 +280,33 @@ makes a page colour of the reader's own.
   checked: the [SIL Open Font License 1.1](../requirements/10-constraints.md#licences-of-parts),
   with no reserved font name.
 
+## Reading ruler and line focus
+
+Line focus is an opt-in reading aid ([READ-14](../requirements/04-reading.md#text),
+[READ-75](../requirements/04-reading.md#access)) controlled from **Text settings
+→ More** and a keyboard shortcut.
+
+- **Band and dim strength:** Off by default. Choose a focus band of 1, 3 or 5
+  lines (or paragraph focus) and dim strength in three steps (Light, Medium,
+  Strong).
+- **Neutral mask:** Lines outside the band are dimmed with a translucent mask in
+  the page's own background colour (never a coloured bar), working on White,
+  Paper, Grey, Black and custom page colours. Under More contrast the dim mask
+  is replaced by a 1-unit outline around the band in the text colour.
+- **Navigation in paged mode:** Down and Up arrows and a tap or click on a line
+  move the band. The band never follows pointer hover. Moving Down past the last
+  line of a page turns to the next page and places the band on the first line;
+  Up at the top line turns back to the last line. The band stays anchored to its
+  text across window resizes and font-size changes.
+- **Motion and screen readers:** Moves instantly when the system asks for less
+  motion, and is invisible to assistive technology so it adds no announcements.
+
 ## Not designed yet
 
-- PDF pages. The direction is the page shown whole on a neutral backdrop in the
-  platform's secondary fill, with the cover's two-layer shadow under it, since a
-  fixed page is an object in the way a cover is.
+- [PDF pages](interface-reader-pdf.md) now have their own companion page.
+- Two books side by side is decided as **Open in new window** (above), letting
+  the platform tile windows.
 - Comics and manga, including panel view.
 - The audio player and its place in the library window.
 - Read aloud with highlighting.
-- Two books side by side in one window.
-- The reading ruler and line focus.
+- Pinned reference / endnote side pane.

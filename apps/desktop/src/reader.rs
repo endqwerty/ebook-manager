@@ -810,6 +810,16 @@ impl Reading {
         match key {
             Key::Right | Key::KP_Right => self.turn(towards_end),
             Key::Left | Key::KP_Left => self.turn(-towards_end),
+            Key::Down | Key::KP_Down
+                if reading && self.settings.borrow().line_focus != settings::LineFocus::Off =>
+            {
+                self.step_ruler(1);
+            }
+            Key::Up | Key::KP_Up
+                if reading && self.settings.borrow().line_focus != settings::LineFocus::Off =>
+            {
+                self.step_ruler(-1);
+            }
             Key::Page_Down | Key::KP_Page_Down => self.turn(1),
             Key::Page_Up | Key::KP_Page_Up => self.turn(-1),
             Key::space if reading && back => self.turn(-1),
@@ -817,6 +827,47 @@ impl Reading {
             _ => return false,
         }
         true
+    }
+
+    fn step_ruler(self: &Rc<Self>, by: i32) {
+        let weak = Rc::downgrade(self);
+        self.view.step_ruler(by, move |state| {
+            let Some(reading) = weak.upgrade() else {
+                return;
+            };
+            if state == Some(false) {
+                reading.turn_with_ruler(by);
+            }
+        });
+    }
+
+    fn turn_with_ruler(self: &Rc<Self>, by: i32) {
+        let Some((place, load)) = self.keeper.borrow().displayed() else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        self.view.turn(by, true, move |moved| {
+            let Some(reading) = weak.upgrade() else {
+                return;
+            };
+            let keeper = reading.keeper.borrow();
+            let same = keeper.displayed().is_some_and(|(_, shown)| shown == load) && !keeper.gone();
+            drop(keeper);
+            if !same {
+                return;
+            }
+            if moved {
+                reading.view.reset_ruler(by < 0);
+                return;
+            }
+            let chapters = reading.book.chapters().len() as u32;
+            if by > 0 && place.chapter + 1 < chapters {
+                reading.load(place.chapter + 1, Landing::Start);
+            } else if by < 0 && place.chapter > 0 {
+                // `Landing::End` places the ruler on the last line after landing.
+                reading.load(place.chapter - 1, Landing::End);
+            }
+        });
     }
 
     fn right_to_left(&self) -> bool {

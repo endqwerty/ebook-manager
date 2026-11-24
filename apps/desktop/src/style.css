@@ -2,7 +2,7 @@
    No serif is bundled yet, so these use the system's. */
 .screen-title,
 .library-state .title {
-  font-family: serif;
+  font-family: "Literata", serif;
   font-weight: 600;
 }
 /* The serif's letters reach a pixel past the box the renderer repaints
@@ -42,3 +42,6 @@ gridview.books > child {
 .shelf-contrast .shelf-board, .shelf-contrast .shelf-shadow { background: var(--window-bg-color); }
 .shelf-contrast .shelf-board { border: 1px solid currentColor; }
 .shelf-contrast .standing-shade { background: none; }
+.details-pane { border-left: 1px solid var(--border-color); }
+button.details-link { padding: 2px 0; min-height: 24px; color: var(--window-fg-color); opacity: 0.78; font-weight: 400; }
+button.details-link:hover, button.details-link:focus-visible { text-decoration: underline; opacity: 1; }

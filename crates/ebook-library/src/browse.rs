@@ -144,6 +144,14 @@ pub struct ShelfStrip {
     pub thickness: Box<[u8]>,
     pub groups: Box<[(u32, String)]>,
 }
+
+/// Capped quick-jump matches across authors, series and books (#131).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QuickJump {
+    pub authors: Vec<(String, u32)>,
+    pub series: Vec<(String, u32)>,
+    pub books: Vec<(String, String, String)>,
+}
 struct View {
     token: ViewToken,
     /// The catalogue file the view was read from.
@@ -347,6 +355,82 @@ impl BrowseReader {
     pub fn shelf(&mut self, token: ViewToken) -> Result<ShelfStrip> {
         self.read(token, |db, v| shelf_rows(db, v, &self.keys))
     }
+    /// Capped quick-jump search across authors, series and books, designed to
+    /// run off the UI thread and stay fast at 100,000 books (#131).
+    pub fn quick_jump(&mut self, text: &str, limit: usize, cancel: &Cancel) -> Result<QuickJump> {
+        cancel.check()?;
+        self.same_file()?;
+        let folded = sortkey::fold(text);
+        let words: Vec<&str> = folded.split_whitespace().collect();
+        if words.is_empty() || limit == 0 {
+            return Ok(QuickJump::default());
+        }
+        let tx = self.db.unchecked_transaction()?;
+        let mut book_ns = Vec::with_capacity(limit);
+        let mut author_counts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        let mut series_counts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt = tx.prepare_cached(
+                "SELECT s.n, s.folded, b.authors, b.series FROM search s JOIN book b ON b.n = s.n ORDER BY b.title_key, b.n",
+            )?;
+            let mut rows = stmt.query([])?;
+            let mut checked = 0u32;
+            while let Some(r) = rows.next()? {
+                checked = checked.wrapping_add(1);
+                if checked.is_multiple_of(512) {
+                    cancel.check()?;
+                }
+                let hay = r.get_ref(1)?.as_str()?;
+                if !words.iter().all(|w| hay.contains(w)) {
+                    continue;
+                }
+                if book_ns.len() < limit {
+                    book_ns.push(r.get::<_, u32>(0)?);
+                }
+                let authors = r.get_ref(2)?.as_str()?;
+                if !authors.is_empty() {
+                    let a_folded = sortkey::fold(authors);
+                    if words.iter().all(|w| a_folded.contains(w)) {
+                        *author_counts.entry(authors.to_owned()).or_insert(0) += 1;
+                    }
+                }
+                if let Some(series) = r.get_ref(3)?.as_str_or_null()?
+                    && !series.is_empty()
+                {
+                    let s_folded = sortkey::fold(series);
+                    if words.iter().all(|w| s_folded.contains(w)) {
+                        *series_counts.entry(series.to_owned()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        cancel.check()?;
+        let mut books = Vec::with_capacity(book_ns.len());
+        {
+            let mut stmt = tx.prepare_cached("SELECT id, title, authors FROM book WHERE n = ?")?;
+            for n in book_ns {
+                if let Some(row) = stmt
+                    .query_row([n], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                    .optional()?
+                {
+                    books.push(row);
+                }
+            }
+        }
+        let mut authors: Vec<(String, u32)> = author_counts.into_iter().collect();
+        authors.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        authors.truncate(limit.min(6));
+        let mut series: Vec<(String, u32)> = series_counts.into_iter().collect();
+        series.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        series.truncate(limit.min(6));
+        Ok(QuickJump {
+            authors,
+            series,
+            books,
+        })
+    }
     pub fn ids(&mut self, token: ViewToken, ranks: &[u32]) -> Result<Vec<String>> {
         self.read(token, |db, v| {
             let mut out = Vec::with_capacity(ranks.len());
@@ -484,5 +568,18 @@ mod tests {
             .unwrap();
         assert!(reader.ids(view.token, &[0]).is_err());
         assert!(!reader.ids(newer.token, &[0]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn quick_jump_returns_capped_authors_series_and_books() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture::generate(dir.path(), 200).unwrap();
+        let lib = Library::open(dir.path()).unwrap();
+        let mut reader = lib.browse_reader().unwrap();
+        let empty = reader.quick_jump("   ", 8, &Cancel::default()).unwrap();
+        assert!(empty.books.is_empty() && empty.authors.is_empty() && empty.series.is_empty());
+        let found = reader.quick_jump("atlas", 5, &Cancel::default()).unwrap();
+        assert!(!found.books.is_empty());
+        assert!(found.books.len() <= 5);
     }
 }
