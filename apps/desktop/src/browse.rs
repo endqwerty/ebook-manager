@@ -58,6 +58,20 @@ pub struct Anchors {
     pub shelf_focus: Option<String>,
     /// A book holds the keyboard focus.
     pub focused: bool,
+    /// How many times the reader has scrolled, clicked or pressed a key in
+    /// the books.
+    pub moves: u64,
+}
+
+impl Anchors {
+    /// Whether the reader is at the same place in the books, however many
+    /// times they moved in between.
+    pub fn same_place(&self, other: &Self) -> bool {
+        Self {
+            moves: other.moves,
+            ..self.clone()
+        } == *other
+    }
 }
 
 /// Why the open needs to place the reader.

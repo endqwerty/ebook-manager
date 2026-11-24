@@ -113,13 +113,14 @@ enum Locating {
     /// A view has opened, and will be shown when this is answered.
     Place { serial: u64 },
     /// The reader moved while their place was being found. The view is
-    /// shown, and this is where they had moved to. `since` is where the
-    /// new view stood when it was asked.
+    /// shown, and this is where they had moved to. `since` is how many
+    /// times the reader had moved when the new view went on screen. The
+    /// view's own layout changes what is on screen without them moving.
     Follow {
         token: ViewToken,
         anchors: Anchors,
         /// Unknown until the new view is on screen.
-        since: Option<Anchors>,
+        since: Option<u64>,
         reason: Placement,
     },
     /// Which of the selected books the view holds at all.
@@ -328,10 +329,10 @@ impl Core {
                 _ => effects.push(Effect::Gone),
             },
             Event::Swapped => {
-                let now = anchors();
+                let moves = anchors().moves;
                 for why in self.locating.values_mut() {
                     if let Locating::Follow { since, .. } = why {
-                        since.get_or_insert_with(|| now.clone());
+                        since.get_or_insert(moves);
                     }
                 }
             }
@@ -503,7 +504,7 @@ impl Core {
                     && opening.reason == Placement::Refresh
                     && opening.query.shelf
                     && let Some((view, _, asked)) = &mut opening.arrived
-                    && *asked != now
+                    && !asked.same_place(&now)
                 {
                     // Keep showing the old books while the thread prepares
                     // the viewport the reader actually moved to.
@@ -563,7 +564,7 @@ impl Core {
                     },
                 });
                 match ranks {
-                    Ok(ranks) if now == asked => effects.push(Effect::Place(Placed {
+                    Ok(ranks) if now.same_place(&asked) => effects.push(Effect::Place(Placed {
                         anchors: asked,
                         current: ranks.first().copied().flatten(),
                         top: ranks.get(1).copied().flatten(),
@@ -593,7 +594,7 @@ impl Core {
             }) => {
                 if let Ok(ranks) = ranks
                     && self.showing(token)
-                    && since.is_some_and(|since| anchors() == since)
+                    && since == Some(anchors().moves)
                 {
                     effects.push(Effect::Place(Placed {
                         anchors: was,
@@ -921,6 +922,7 @@ mod tests {
             if was_opened && self.random(6) == 0 {
                 let current = fixture::id(self.random(u64::from(BOOKS)) as u32);
                 let top_offset = -(self.random(40) as f32);
+                let moves = self.anchors.borrow().moves + 1;
                 *self.anchors.borrow_mut() = Anchors {
                     shelf: Some(super::super::ShelfViewport {
                         first: self.random(BOOKS as u64) as u32,
@@ -931,6 +933,7 @@ mod tests {
                     top: Some(current),
                     top_offset,
                     focused: true,
+                    moves,
                 };
             }
         }
@@ -1038,6 +1041,7 @@ mod tests {
                 _ => {
                     let current = fixture::id(self.random(u64::from(BOOKS)) as u32);
                     let top_offset = -(self.random(40) as f32);
+                    let moves = self.anchors.borrow().moves + 1;
                     *self.anchors.borrow_mut() = Anchors {
                         shelf: Some(super::super::ShelfViewport {
                             first: self.random(BOOKS as u64) as u32,
@@ -1048,6 +1052,7 @@ mod tests {
                         top: Some(current),
                         top_offset,
                         focused: true,
+                        moves,
                     };
                 }
             }
@@ -1340,10 +1345,36 @@ mod tests {
                 pages: vec![],
             })
         };
+        let located_again = |effects: Vec<Effect>| {
+            effects
+                .iter()
+                .find_map(|e| match e {
+                    Effect::Send(Request::Locate { tag, .. }) => Some(*tag),
+                    _ => None,
+                })
+                .expect("one more look for the reader's place")
+        };
         // The reader does not move: they are placed with the swap.
         let tag = another(&mut core, Event::Refresh, &here);
         let effects = core.step(found(tag), &here);
         assert!(effects.iter().any(|e| matches!(e, Effect::Place(_))));
+        // A wheel at the end of the books counts as a move but moves
+        // nothing: in a list or on the shelf, they are placed with the swap.
+        for query in [
+            Query {
+                shelf: true,
+                ..Default::default()
+            },
+            Query::default(),
+        ] {
+            let tag = another(&mut core, Event::Query(query), &here);
+            core.step(found(tag), &here);
+            let tag = another(&mut core, Event::Refresh, &here);
+            at.borrow_mut().moves += 1;
+            let effects = core.step(found(tag), &here);
+            assert!(effects.iter().any(|e| matches!(e, Effect::Place(_))));
+        }
+        *at.borrow_mut() = Anchors::default();
         // They scroll while their place is being found: the stale place
         // is not applied, and where they are now is asked for.
         let tag = another(&mut core, Event::Refresh, &here);
@@ -1362,21 +1393,30 @@ mod tests {
         core.step(Event::Swapped, &here);
         let effects = core.step(found(follow), &here);
         assert!(matches!(&effects[..], [Effect::Place(placed)] if placed.anchors == moved(-10.0)));
+        // The new view's own layout changes what is on screen before the
+        // answer, but the reader does nothing: they are still placed.
+        let tag = another(&mut core, Event::Refresh, &here);
+        *at.borrow_mut() = moved(-10.0);
+        let follow = located_again(core.step(found(tag), &here));
+        *at.borrow_mut() = moved(0.0);
+        core.step(Event::Swapped, &here);
+        *at.borrow_mut() = Anchors {
+            top: Some("laid out".into()),
+            ..moved(0.0)
+        };
+        let effects = core.step(found(follow), &here);
+        assert!(matches!(&effects[..], [Effect::Place(placed)] if placed.anchors == moved(-10.0)));
         // The same, but they move again before the answer: nothing is
         // applied and nothing more is asked.
         let tag = another(&mut core, Event::Layout(Query::default()), &here);
         *at.borrow_mut() = moved(-10.0);
-        let effects = core.step(found(tag), &here);
-        let follow = effects
-            .iter()
-            .find_map(|e| match e {
-                Effect::Send(Request::Locate { tag, .. }) => Some(*tag),
-                _ => None,
-            })
-            .unwrap();
+        let follow = located_again(core.step(found(tag), &here));
         *at.borrow_mut() = moved(0.0);
         core.step(Event::Swapped, &here);
-        *at.borrow_mut() = moved(-25.0);
+        *at.borrow_mut() = Anchors {
+            moves: 1,
+            ..moved(-25.0)
+        };
         assert!(core.step(found(follow), &here).is_empty());
         let tag = another(
             &mut core,
