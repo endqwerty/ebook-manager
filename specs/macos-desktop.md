@@ -9,7 +9,9 @@ The macOS app keeps a local EPUB library in
   skipped, kept as a separate book or used to replace the selected book's file.
 - The library window shows books in a grid or list. Search finds a book by
   title or author. An edit to the catalogue title or authors survives reopening
-  the library. The managed EPUB retains its original bytes.
+  the library. Go to searches across books, authors and series. Show Details
+  displays the selected book and offers Read and Edit. The managed EPUB
+  retains its original bytes.
 - Read opens a reader window. Its contents list jumps to a chapter, and the
   reader saves the chapter and position for the next session. The isolated
   helper reads EPUB data. The web view renders chapter markup, blocks book
@@ -18,6 +20,9 @@ The macOS app keeps a local EPUB library in
   the catalogue title. Repeating the export recognises an identical copy.
   See [mounted reader export](mounted-epub-export.md) for collisions, space
   requirements and interrupted transfers.
+
+- Opening a library restored from its portable folder and choosing Refresh
+  Library reconstructs the catalogue, including edits and reading position.
 
 [Library storage and recovery](library-mvp.md) describes the shared library.
 [Building and testing the macOS app](../apps/macos/README.md) gives the bundle

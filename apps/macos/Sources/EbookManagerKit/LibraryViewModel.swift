@@ -275,13 +275,6 @@ public final class LibraryViewModel: ObservableObject {
         }
     }
 
-    public func importURLsForSnapshot(_ urls: [URL]) async {
-        let paths = urls.map(\.path).filter { !$0.isEmpty }
-        guard !paths.isEmpty else { return }
-        _ = try? await bridge.importPaths(paths)
-        reloadBrowse()
-    }
-
     public func importURLs(_ urls: [URL]) {
         let paths = urls.map(\.path).filter { !$0.isEmpty }
         guard !paths.isEmpty else { return }

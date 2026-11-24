@@ -466,5 +466,31 @@ final class EbookManagerKitTests: XCTestCase {
 
         let export2 = try await reopened.exportBook(bookId: bookId, destinationDir: exportDir.path)
         XCTAssertEqual(export2, .alreadyPresent(destination: writtenPath))
+
+        let occupied = URL(fileURLWithPath: writtenPath)
+        try originalBytes.write(to: occupied)
+        let collision = try await reopened.exportBook(bookId: bookId, destinationDir: exportDir.path)
+        guard case let .copied(alternate) = collision else {
+            return XCTFail("Expected a separate destination for the revised book")
+        }
+        XCTAssertNotEqual(alternate, writtenPath)
+        XCTAssertEqual(try Data(contentsOf: occupied), originalBytes)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: alternate)), revisedBytes)
+
+        let restoredRoot = scratch.appendingPathComponent("restored", isDirectory: true)
+        try FileManager.default.createDirectory(at: restoredRoot, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: URL(fileURLWithPath: libDir).appendingPathComponent("portable"),
+            to: restoredRoot.appendingPathComponent("portable")
+        )
+        let recovered = BridgeService(directory: restoredRoot.path)
+        try await recovered.refresh()
+        let recoveredRows = try await recovered.browse(query: "Clara Vance", sort: [])
+        XCTAssertEqual(recoveredRows.rows.map(\.id), [bookId])
+        XCTAssertEqual(recoveredRows.rows.first?.title, "The Coastal Lantern")
+        let recoveredBook = try await recovered.openBook(bookId: bookId)
+        let recoveredPlace = try await recoveredBook.loadPlace()
+        XCTAssertEqual(recoveredPlace?.offset, savedOffset)
+        XCTAssertEqual(recoveredPlace?.chapter, 1)
     }
 }
