@@ -28,6 +28,8 @@ final class ReaderWindowViewModel: ObservableObject {
     @Published var statusError: String?
     @Published var paletteChoice: ReaderPaletteChoice = .automatic
     @Published var sizeStepIndex: Int = 2
+    @Published var darkImagesMode: String = "original"
+    @Published var lineFocusBands: Int = 0
     @Published var showContents = false
     @Published var pendingExternalURL: URL?
 
@@ -64,6 +66,8 @@ final class ReaderWindowViewModel: ObservableObject {
         let palette = resolvedPalette
         let scale = ReaderTheme.sizeSteps[sizeStepIndex]
         let motion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? "none" : "full"
+        let effectiveDarkImages = isHighContrast ? "original" : darkImagesMode
+        let focusDim = isHighContrast ? "contrast" : "0.55"
         return [
             ("--page", palette.pageHex),
             ("--ink", palette.inkHex),
@@ -72,6 +76,9 @@ final class ReaderWindowViewModel: ObservableObject {
             ("--size", String(format: "%.2f", scale)),
             ("--turn", "slide"),
             ("--motion", motion),
+            ("--dark-images", effectiveDarkImages),
+            ("--line-focus", "\(lineFocusBands)"),
+            ("--focus-dim", focusDim),
         ]
     }
 
@@ -113,6 +120,33 @@ final class ReaderWindowViewModel: ObservableObject {
         if next != sizeStepIndex {
             sizeStepIndex = next
             webController?.setStyles(cssVariables)
+        }
+    }
+
+    func setDarkImagesMode(_ mode: String) {
+        darkImagesMode = mode
+        webController?.setStyles(cssVariables)
+    }
+
+    func setLineFocusBands(_ lines: Int) {
+        lineFocusBands = lines
+        webController?.setStyles(cssVariables)
+    }
+
+    func moveLineFocus(by delta: Int) {
+        guard lineFocusBands > 0, let controller = webController else { return }
+        Task { @MainActor [weak self] in
+            let outcome = await controller.stepRuler(by: delta)
+            guard let self, outcome == false else { return }
+            let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            let turned = await controller.turn(by: delta > 0 ? 1 : -1, animate: animate)
+            if turned {
+                controller.resetRuler(atEnd: delta < 0)
+            } else if delta > 0, Int(self.currentChapterIndex) + 1 < self.handle.chapters.count {
+                self.openChapter(index: self.currentChapterIndex + 1, landing: .start)
+            } else if delta < 0, self.currentChapterIndex > 0 {
+                self.openChapter(index: self.currentChapterIndex - 1, landing: .end)
+            }
         }
     }
 
@@ -484,9 +518,32 @@ struct ReaderWindowView: View {
                 .disabled(model.sizeStepIndex >= ReaderTheme.sizeSteps.count - 1)
                 .accessibilityLabel("Larger Text")
             }
+
+            Picker("Line Focus", selection: Binding(
+                get: { model.lineFocusBands },
+                set: { model.setLineFocusBands($0) }
+            )) {
+                Text("Off").tag(0)
+                Text("1").tag(1)
+                Text("3").tag(3)
+                Text("5").tag(5)
+            }
+            .pickerStyle(.segmented)
+
+            if contrast != .increased {
+                Picker("Dark Images", selection: Binding(
+                    get: { model.darkImagesMode },
+                    set: { model.setDarkImagesMode($0) }
+                )) {
+                    Text("As Is").tag("original")
+                    Text("Dimmed").tag("dimmed")
+                    Text("Match").tag("match")
+                }
+                .pickerStyle(.segmented)
+            }
         }
         .padding(16)
-        .frame(width: 240)
+        .frame(width: 260)
     }
 }
 
@@ -592,6 +649,12 @@ final class ReaderWindowCoordinator: NSObject, NSWindowDelegate {
             return true
         case 116:
             viewModel.turnBackward()
+            return true
+        case 125 where viewModel.lineFocusBands > 0 && !viewModel.showContents:
+            viewModel.moveLineFocus(by: 1)
+            return true
+        case 126 where viewModel.lineFocusBands > 0 && !viewModel.showContents:
+            viewModel.moveLineFocus(by: -1)
             return true
         case 49:
             if flags.contains(.shift) {

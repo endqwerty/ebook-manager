@@ -176,8 +176,5 @@ is one implementation and no path to go stale.
 
 ## Open questions
 
-- Whether WKWebView holds the reader's origin separation and request blocking
-  the way WebKitGTK does. Assumed yes; the app's tests must show a blocked
-  remote image and a blocked script before the reader is called done.
 - Universal binaries. Assumed: build for the host's architecture now, both
   with `lipo` in the release work.

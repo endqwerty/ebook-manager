@@ -345,3 +345,260 @@ struct BookEditSheet: View {
         .frame(minWidth: 560, minHeight: 540)
     }
 }
+
+struct BookDetailsSheet: View {
+    let book: BookDetail
+    let progress: Float?
+    @ObservedObject var cache: CoverCache
+    let onRead: () -> Void
+    let onSend: () -> Void
+    let onEdit: () -> Void
+    let onFilter: (String) -> Void
+    let onClose: () -> Void
+
+    private var readActionTitle: String {
+        guard let progress else { return "Read" }
+        if progress >= 1.0 { return "Read Again" }
+        if progress > 0 { return "Continue Reading" }
+        return "Read"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top, spacing: 24) {
+                BookCoverView(
+                    bookId: book.id,
+                    title: book.title,
+                    authors: book.authors.joined(separator: ", "),
+                    hasCover: book.hasCover,
+                    coverDigest: book.coverDigest,
+                    coverRGB: book.coverRgb,
+                    rightToLeft: book.rightToLeft,
+                    progress: nil,
+                    width: 160,
+                    kind: .detail,
+                    cache: cache
+                )
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(book.title)
+                        .font(.system(.title, design: .serif).weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !book.authors.isEmpty {
+                        HStack(spacing: 8) {
+                            ForEach(book.authors, id: \.self) { author in
+                                Button {
+                                    onFilter(author)
+                                } label: {
+                                    Text(author)
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                        .underline()
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Show books by \(author)")
+                            }
+                        }
+                    }
+
+                    if let primarySeries = book.series.first {
+                        let seriesLabel = primarySeries.position.map { "\(primarySeries.name) #\($0)" } ?? primarySeries.name
+                        Button {
+                            onFilter(primarySeries.name)
+                        } label: {
+                            Text(seriesLabel)
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show series \(primarySeries.name)")
+                    }
+
+                    HStack(spacing: 10) {
+                        Button(readActionTitle) {
+                            onRead()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+
+                        Button("Send to Device…") {
+                            onSend()
+                        }
+
+                        Button("Edit…") {
+                            onEdit()
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 16, verticalSpacing: 6) {
+                        if let published = book.published {
+                            GridRow {
+                                Text("Published").foregroundStyle(.secondary)
+                                Text(published)
+                            }
+                        }
+                        if let language = book.language {
+                            GridRow {
+                                Text("Language").foregroundStyle(.secondary)
+                                Text(language)
+                            }
+                        }
+                        if let words = book.words {
+                            GridRow {
+                                Text("Length").foregroundStyle(.secondary)
+                                Text("\(words.formatted()) words").monospacedDigit()
+                            }
+                        }
+                        GridRow {
+                            Text("Format").foregroundStyle(.secondary)
+                            Text("EPUB")
+                        }
+                        if let added = book.added {
+                            GridRow {
+                                Text("Added").foregroundStyle(.secondary)
+                                Text(Date(timeIntervalSince1970: TimeInterval(added)).formatted(date: .abbreviated, time: .omitted))
+                                    .monospacedDigit()
+                            }
+                        }
+                    }
+                    .font(.body)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack {
+                Spacer()
+                Button("Close") {
+                    onClose()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 580)
+    }
+}
+
+struct QuickJumpSheet: View {
+    let bridge: BridgeService
+    let onChooseFilter: (String) -> Void
+    let onChooseBookDetails: (String) -> Void
+    let onChooseBookRead: (String) -> Void
+    let onCancel: () -> Void
+
+    @State private var query = ""
+    @State private var matches = QuickJumpMatches(authors: [], series: [], books: [])
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("Go to book, author, or series…", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: query) { _, newValue in
+                    runLookup(newValue)
+                }
+
+            List {
+                if !matches.authors.isEmpty {
+                    Section("Authors") {
+                        ForEach(matches.authors, id: \.name) { item in
+                            Button {
+                                onChooseFilter(item.name)
+                            } label: {
+                                HStack {
+                                    Text(item.name)
+                                    Spacer()
+                                    Text("\(item.count)")
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Author, \(item.name), \(item.count) books")
+                        }
+                    }
+                }
+
+                if !matches.series.isEmpty {
+                    Section("Series") {
+                        ForEach(matches.series, id: \.name) { item in
+                            Button {
+                                onChooseFilter(item.name)
+                            } label: {
+                                HStack {
+                                    Text(item.name)
+                                    Spacer()
+                                    Text("\(item.count)")
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Series, \(item.name), \(item.count) books")
+                        }
+                    }
+                }
+
+                if !matches.books.isEmpty {
+                    Section("Books") {
+                        ForEach(matches.books, id: \.id) { book in
+                            HStack {
+                                Button {
+                                    onChooseBookDetails(book.id)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(book.title)
+                                            .font(.body.weight(.medium))
+                                        if !book.authors.isEmpty {
+                                            Text(book.authors)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+
+                                Button("Read") {
+                                    onChooseBookRead(book.id)
+                                }
+                                .controlSize(.small)
+                            }
+                            .accessibilityLabel("Book, \(book.title), \(book.authors)")
+                        }
+                    }
+                }
+            }
+            .listStyle(.inset)
+
+            HStack {
+                Spacer()
+                Button("Close") {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 480, height: 380)
+    }
+
+    private func runLookup(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            matches = QuickJumpMatches(authors: [], series: [], books: [])
+            return
+        }
+        Task {
+            if let found = try? await bridge.quickJump(query: trimmed, limit: 8),
+               query.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed
+            {
+                await MainActor.run {
+                    matches = found
+                }
+            }
+        }
+    }
+}

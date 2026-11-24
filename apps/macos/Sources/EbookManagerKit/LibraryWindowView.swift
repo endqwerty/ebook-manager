@@ -117,6 +117,54 @@ public struct LibraryWindowView: View {
                 }
             }
         }
+        .sheet(item: $model.inspectingBook) { book in
+            BookDetailsSheet(
+                book: book,
+                progress: model.progressForBook(id: book.id),
+                cache: model.coverCache,
+                onRead: {
+                    let id = book.id
+                    model.inspectingBook = nil
+                    model.openBookForReading(bookId: id)
+                },
+                onSend: {
+                    let id = book.id
+                    model.inspectingBook = nil
+                    model.exportBooks(ids: [id])
+                },
+                onEdit: {
+                    model.inspectingBook = nil
+                    model.editingBook = book
+                },
+                onFilter: { query in
+                    model.filterByQuery(query)
+                },
+                onClose: {
+                    model.inspectingBook = nil
+                }
+            )
+        }
+        .sheet(isPresented: $model.showQuickJump) {
+            QuickJumpSheet(
+                bridge: model.bridge,
+                onChooseFilter: { query in
+                    model.filterByQuery(query)
+                },
+                onChooseBookDetails: { id in
+                    model.showQuickJump = false
+                    model.selectedIds = [id]
+                    model.openDetails(forBookId: id)
+                },
+                onChooseBookRead: { id in
+                    model.showQuickJump = false
+                    model.selectedIds = [id]
+                    model.openBookForReading(bookId: id)
+                },
+                onCancel: {
+                    model.showQuickJump = false
+                }
+            )
+        }
         .sheet(item: $model.editingBook) { book in
             BookEditSheet(
                 book: book,
@@ -303,6 +351,10 @@ public struct LibraryWindowView: View {
         }
         .onKeyPress(.return) {
             model.openSelectedForReading()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            model.toggleDetailsForSelected()
             return .handled
         }
     }
@@ -516,6 +568,9 @@ public struct LibraryWindowView: View {
                 model.openBookForReading(bookId: row.id)
             }
             Divider()
+            Button("Show Details") {
+                model.openDetails(forBookId: row.id)
+            }
             Button("Edit Book…") {
                 model.openEdit(forBookId: row.id)
             }

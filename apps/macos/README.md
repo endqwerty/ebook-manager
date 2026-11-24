@@ -30,32 +30,41 @@ are handled in `ReaderWebController` around those unchanged files:
 
 1. Setting `WKWebpagePreferences.allowsContentJavaScript = false` in `WKWebView`
    also disables `WKUserScript` in isolated `WKContentWorld`s (unlike WebKitGTK's
-   `enable-javascript-markup = false`). Instead, every `ebook:` chapter response
-   includes a `Content-Security-Policy` (`default-src 'none'; img-src ebook:;
-   style-src ebook: 'unsafe-inline'; form-action 'none'; base-uri 'none'`) both
-   in its HTTP header and `<meta http-equiv="Content-Security-Policy">`, which
-   blocks all inline `<script>` elements, event-handler attributes and external
-   scripts in the page world while `reader.js` runs in its own `WKContentWorld`.
+   `enable-javascript-markup = false`). Instead, `ReaderWebController` leaves
+   `allowsContentJavaScript = true` so `reader.js` can run in its isolated
+   `WKContentWorld`, while every `ebook:` chapter response carries a
+   `Content-Security-Policy` (`default-src 'none'; img-src ebook:; style-src
+   ebook: 'unsafe-inline'; form-action 'none'; base-uri 'none'`) in both its
+   HTTP response header and `<meta http-equiv="Content-Security-Policy">`,
+   blocking all inline `<script>` elements, event-handler attributes and external
+   scripts in the page world.
 2. `WKWebView` has no public `WKUserStyleSheet` API, so `/s/reader.css` is served
-   on the per-view `ebook:` scheme and linked from the wrapper `<head>`. Also,
-   when a Mac runs headless or with its display asleep, WebKit pauses
-   `requestAnimationFrame`; a small `.atDocumentStart` shim in the reader's
-   `WKContentWorld` falls back to a 32 ms timer when `requestAnimationFrame` does
-   not fire, so `reader.js` never stalls on headless runners.
+   on the per-view `ebook:` scheme and linked from the wrapper `<head>`. During
+   `swift test` (outside an `.app` bundle), `ReaderAssets` reads `reader.js` and
+   `reader.css` directly from `apps/desktop/src/reader/`. When a Mac runs
+   headless or with its display asleep, WebKit pauses `requestAnimationFrame`; a
+   small `.atDocumentStart` shim in the reader's `WKContentWorld` falls back to a
+   32 ms timer when `requestAnimationFrame` does not fire, so `reader.js` never
+   stalls on headless runners. `ReaderWindowViewModel` and `ReaderWebController`
+   also pass `--dark-images`, `--line-focus` and `--focus-dim` and call
+   `__reader.stepRuler` / `__reader.resetRuler` added on `main`.
 
 ## What callers and users can rely on
 
-- **All bridge calls run off the main actor.** `LibraryActor` dispatches every
-  synchronous `ebook-bridge` call on its own background executor.
+- **All bridge calls run off the main actor.** `BridgeService` and
+  `OpenBookHandle` dispatch every synchronous `ebook-bridge` call onto dedicated
+  background `DispatchQueue`s, separating catalogue reads from writes.
 - **Sandboxed helper beside the executable.** `build.sh` places
   `ebook-reader-helper` next to `EbookManager` inside `Contents/MacOS` and
   signs both ad hoc (`codesign -s -`).
 - **Locked-down reader web view.** `ReaderWebController` uses a non-persistent
-  data store, sets `allowsContentJavaScript = false` for book markup, injects
-  `reader.js` in a separate `WKContentWorld`, compiles a `WKContentRuleList`
-  that blocks every URL outside `ebook:`, enforces a strict
-  `Content-Security-Policy` on `ebook:` `application/xhtml+xml` responses, and
-  permits only the navigation URL just requested for the active load.
+  `WKWebsiteDataStore`, keeps `allowsContentJavaScript = true` solely so WebKit
+  executes `WKUserScript`s in the isolated `ebook-reader` `WKContentWorld`,
+  blocks all book-markup scripts and inline handlers via the `ebook:`
+  `Content-Security-Policy` (`default-src 'none'`), compiles a
+  `WKContentRuleList` that blocks every URL outside `ebook:`, serves resources
+  only for the view's own random host token, and permits only the single
+  navigation URL just requested for the active chapter load.
 
 ## Side effects
 
