@@ -161,7 +161,7 @@ private final class EbookSchemeHandler: NSObject, WKURLSchemeHandler {
                     )
                 } catch {
                     guard self?.activeTasks.removeValue(forKey: id) != nil else { return }
-                    let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    let message = (error as? BridgeError)?.userMessage ?? error.localizedDescription
                     owner?.reportImmediateFailure(message)
                     self?.failNotFound(urlSchemeTask)
                 }

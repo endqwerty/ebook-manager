@@ -489,6 +489,13 @@ struct QuickJumpSheet: View {
     let onChooseBookRead: (String) -> Void
     let onCancel: () -> Void
 
+    private enum ResultID: Hashable {
+        case author(String)
+        case series(String)
+        case book(String)
+    }
+
+    @State private var selection: ResultID?
     @State private var query = ""
     @State private var matches = QuickJumpMatches(authors: [], series: [], books: [])
 
@@ -500,7 +507,7 @@ struct QuickJumpSheet: View {
                     runLookup(newValue)
                 }
 
-            List {
+            List(selection: $selection) {
                 if !matches.authors.isEmpty {
                     Section("Authors") {
                         ForEach(matches.authors, id: \.name) { item in
@@ -517,6 +524,7 @@ struct QuickJumpSheet: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Author, \(item.name), \(item.count) books")
+                            .tag(ResultID.author(item.name))
                         }
                     }
                 }
@@ -537,6 +545,7 @@ struct QuickJumpSheet: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Series, \(item.name), \(item.count) books")
+                            .tag(ResultID.series(item.name))
                         }
                     }
                 }
@@ -567,6 +576,7 @@ struct QuickJumpSheet: View {
                                 .controlSize(.small)
                             }
                             .accessibilityLabel("Book, \(book.title), \(book.authors)")
+                            .tag(ResultID.book(book.id))
                         }
                     }
                 }
@@ -581,11 +591,26 @@ struct QuickJumpSheet: View {
                 .keyboardShortcut(.cancelAction)
             }
         }
+        .onKeyPress(keys: [.return], phases: .down) { press in
+            guard let selection else { return .ignored }
+            switch selection {
+            case let .author(name), let .series(name):
+                onChooseFilter(name)
+            case let .book(id):
+                if press.modifiers.contains(.shift) {
+                    onChooseBookRead(id)
+                } else {
+                    onChooseBookDetails(id)
+                }
+            }
+            return .handled
+        }
         .padding(16)
         .frame(width: 480, height: 380)
     }
 
     private func runLookup(_ text: String) {
+        selection = nil
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             matches = QuickJumpMatches(authors: [], series: [], books: [])
@@ -597,6 +622,9 @@ struct QuickJumpSheet: View {
             {
                 await MainActor.run {
                     matches = found
+                    selection = found.authors.first.map { .author($0.name) }
+                        ?? found.series.first.map { .series($0.name) }
+                        ?? found.books.first.map { .book($0.id) }
                 }
             }
         }

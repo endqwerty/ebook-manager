@@ -333,7 +333,8 @@ final class EbookManagerKitTests: XCTestCase {
             }
             bookId = book.id
             let handle = try await service.openBook(bookId: book.id)
-            await handle.savePlace(chapter: 1, offset: 7, page: 0, pages: 2)
+            handle.enqueueSavePlace(chapter: 0, offset: 0, page: 0, pages: 1) { XCTFail($0) }
+            try handle.flushSaveSynchronously(chapter: 1, offset: 7, page: 0, pages: 2)
         }
 
         let reopenedService = BridgeService(directory: libDir)
@@ -436,7 +437,7 @@ final class EbookManagerKitTests: XCTestCase {
             _ = await web.turn(by: 1, animate: false)
             let finalPlace = try XCTUnwrap(latestReport)
             savedOffset = finalPlace.offset
-            await handle.savePlace(
+            try handle.flushSaveSynchronously(
                 chapter: 1,
                 offset: finalPlace.offset,
                 page: finalPlace.page,

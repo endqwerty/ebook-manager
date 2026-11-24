@@ -397,7 +397,7 @@ public struct LibraryWindowView: View {
             }
             .frame(width: width, height: 54, alignment: .topLeading)
         }
-        .padding(6)
+        .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
@@ -453,6 +453,11 @@ public struct LibraryWindowView: View {
                 }
             }
             .listStyle(.inset)
+            .onKeyPress(.space) {
+                guard model.selectedIds.count == 1 else { return .ignored }
+                model.toggleDetailsForSelected()
+                return .handled
+            }
             .contextMenu(forSelectionType: String.self) { _ in
             } primaryAction: { ids in
                 if let first = ids.first {

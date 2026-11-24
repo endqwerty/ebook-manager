@@ -199,18 +199,23 @@ public final class OpenBookHandle: @unchecked Sendable {
         }
     }
 
-    public func savePlace(chapter: UInt32, offset: UInt32, page: UInt32, pages: UInt32) async {
-        await withCheckedContinuation { continuation in
-            saveQueue.async {
-                try? self.book.savePlace(chapter: chapter, offset: offset, page: page, pages: pages)
-                continuation.resume()
+    public func enqueueSavePlace(
+        chapter: UInt32, offset: UInt32, page: UInt32, pages: UInt32,
+        onError: @escaping @MainActor (String) -> Void
+    ) {
+        saveQueue.async {
+            do {
+                try self.book.savePlace(chapter: chapter, offset: offset, page: page, pages: pages)
+            } catch {
+                let message = (error as? BridgeError)?.userMessage ?? error.localizedDescription
+                DispatchQueue.main.async { onError(message) }
             }
         }
     }
 
-    public func flushSaveSynchronously(chapter: UInt32, offset: UInt32, page: UInt32, pages: UInt32) {
-        saveQueue.sync {
-            try? self.book.savePlace(chapter: chapter, offset: offset, page: page, pages: pages)
+    public func flushSaveSynchronously(chapter: UInt32, offset: UInt32, page: UInt32, pages: UInt32) throws {
+        try saveQueue.sync {
+            try self.book.savePlace(chapter: chapter, offset: offset, page: page, pages: pages)
         }
     }
 }

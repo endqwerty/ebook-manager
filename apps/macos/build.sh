@@ -21,7 +21,7 @@ mkdir -p "$RUST_LIB_DIR" "$FFI_INCLUDE_DIR" "$BRIDGE_SWIFT_DIR" "$BINDGEN_TMP"
 generate_bindings() {
     local staticlib="$1"
     cp "$staticlib" "$RUST_LIB_DIR/libebook_bridge.a"
-    cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -p ebook-bridge --features cli --bin uniffi-bindgen -- \
+    cargo run --locked --manifest-path "$REPO_ROOT/Cargo.toml" -p ebook-bridge --features cli --bin uniffi-bindgen -- \
         generate --library "$staticlib" --language swift --out-dir "$BINDGEN_TMP"
     cp "$BINDGEN_TMP/ebook_bridgeFFI.h" "$FFI_INCLUDE_DIR/ebook_bridgeFFI.h"
     cp "$BINDGEN_TMP/ebook_bridgeFFI.modulemap" "$FFI_INCLUDE_DIR/module.modulemap"
@@ -30,8 +30,8 @@ generate_bindings() {
 
 case "$MODE" in
     app)
-        cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --release -p ebook-bridge
-        cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --release -p ebook-reader --bin ebook-reader-helper
+        cargo build --locked --manifest-path "$REPO_ROOT/Cargo.toml" --release -p ebook-bridge
+        cargo build --locked --manifest-path "$REPO_ROOT/Cargo.toml" --release -p ebook-reader --bin ebook-reader-helper
         generate_bindings "$REPO_ROOT/target/release/libebook_bridge.a"
 
         swift build -c release --package-path "$SCRIPT_DIR"
@@ -54,16 +54,17 @@ case "$MODE" in
         codesign --force -s - "$APP_DIR"
         echo "Built $APP_DIR"
         ;;
-    test)
-        cargo build --manifest-path "$REPO_ROOT/Cargo.toml" -p ebook-bridge
-        cargo build --manifest-path "$REPO_ROOT/Cargo.toml" -p ebook-reader --bin ebook-reader-helper
+    test|unit-test)
+        cargo build --locked --manifest-path "$REPO_ROOT/Cargo.toml" -p ebook-bridge
+        cargo build --locked --manifest-path "$REPO_ROOT/Cargo.toml" -p ebook-reader --bin ebook-reader-helper
         generate_bindings "$REPO_ROOT/target/debug/libebook_bridge.a"
 
+        if [[ "$MODE" == unit-test ]]; then
+            swift test --package-path "$SCRIPT_DIR" --filter EbookShellCoreTests
+            exit
+        fi
         EBOOK_READER_HELPER="$REPO_ROOT/target/debug/ebook-reader-helper" \
             swift test --package-path "$SCRIPT_DIR"
-        ;;
-    unit-test)
-        swift test --package-path "$SCRIPT_DIR" --filter EbookShellCoreTests
         ;;
     *)
         echo "Usage: $0 [app|test|unit-test]" >&2

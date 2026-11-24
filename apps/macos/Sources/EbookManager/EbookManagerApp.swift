@@ -76,7 +76,6 @@ struct EbookManagerApp: App {
                 Button("Read Book") {
                     model.openSelectedForReading()
                 }
-                .keyboardShortcut(.return, modifiers: [])
                 .disabled(model.selectedIds.count != 1)
 
                 Button("Show Details") {

@@ -33,13 +33,15 @@ final class ReaderWindowViewModel: ObservableObject {
     @Published var showContents = false
     @Published var pendingExternalURL: URL?
 
+    private let onSaveError: @MainActor (String) -> Void
     private var keeper = PlaceKeeper()
     private var saveTimerTask: Task<Void, Never>?
     private var turnInFlight = false
     private var isDarkAppearance = false
     private var isHighContrast = false
 
-    init(handle: OpenBookHandle, initialPlace: ReadingPlace?) {
+    init(handle: OpenBookHandle, initialPlace: ReadingPlace?, onSaveError: @escaping @MainActor (String) -> Void) {
+        self.onSaveError = onSaveError
         self.handle = handle
         let landing: ChapterLanding
         if let initialPlace {
@@ -96,6 +98,7 @@ final class ReaderWindowViewModel: ObservableObject {
                 return
             }
             webController = controller
+            controller.setStyles(cssVariables)
             openChapter(index: initialChapter, landing: landing)
         } catch {
             statusError = error.localizedDescription
@@ -244,15 +247,13 @@ final class ReaderWindowViewModel: ObservableObject {
                 saveTimerTask?.cancel()
                 saveTimerTask = nil
             case let .submit(place):
-                let bookHandle = handle
-                Task {
-                    await bookHandle.savePlace(
-                        chapter: place.chapter,
-                        offset: place.offset,
-                        page: place.page,
-                        pages: place.pages
-                    )
-                }
+                handle.enqueueSavePlace(
+                    chapter: place.chapter,
+                    offset: place.offset,
+                    page: place.page,
+                    pages: place.pages,
+                    onError: onSaveError
+                )
             case .awaitLibrary:
                 break
             case .endPage:
@@ -268,12 +269,13 @@ final class ReaderWindowViewModel: ObservableObject {
         saveTimerTask = nil
         for effect in effects {
             if case let .submit(place) = effect {
-                handle.flushSaveSynchronously(
-                    chapter: place.chapter,
-                    offset: place.offset,
-                    page: place.page,
-                    pages: place.pages
-                )
+                do {
+                    try handle.flushSaveSynchronously(
+                        chapter: place.chapter, offset: place.offset, page: place.page, pages: place.pages
+                    )
+                } catch {
+                    onSaveError((error as? BridgeError)?.userMessage ?? error.localizedDescription)
+                }
             }
         }
         webController?.shutDown()
@@ -560,10 +562,11 @@ final class ReaderWindowCoordinator: NSObject, NSWindowDelegate {
     init(
         handle: OpenBookHandle,
         initialPlace: ReadingPlace?,
+        onSaveError: @escaping @MainActor (String) -> Void,
         onClosed: @escaping (String) -> Void
     ) {
         self.bookId = handle.bookId
-        self.viewModel = ReaderWindowViewModel(handle: handle, initialPlace: initialPlace)
+        self.viewModel = ReaderWindowViewModel(handle: handle, initialPlace: initialPlace, onSaveError: onSaveError)
         self.onClosed = onClosed
         super.init()
     }
@@ -630,6 +633,14 @@ final class ReaderWindowCoordinator: NSObject, NSWindowDelegate {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command) || flags.contains(.control) || flags.contains(.option) {
             return false
+        }
+        if event.keyCode != 53 {
+            guard !viewModel.showContents, window?.attachedSheet == nil else { return false }
+            if let focused = window?.firstResponder as? NSView {
+                guard let web = viewModel.webController?.webView,
+                      focused === web || focused.isDescendant(of: web)
+                else { return false }
+            }
         }
         switch event.keyCode {
         case 53:

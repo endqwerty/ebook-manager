@@ -113,6 +113,7 @@ public final class LibraryViewModel: ObservableObject {
     private var loadingPages: Set<UInt32> = []
     private var browseSerial: UInt64 = 0
     private var searchDebounceTask: Task<Void, Never>?
+    private var openingBookIds: Set<String> = []
     private var openReaderControllers: [String: ReaderWindowCoordinator] = [:]
 
     private static let pageSize: UInt32 = 128
@@ -368,14 +369,20 @@ public final class LibraryViewModel: ObservableObject {
             lockedAlert = LockedAlertModel(heading: notice.heading, body: notice.body)
             return
         }
+        guard openingBookIds.insert(bookId).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
+            defer { self.openingBookIds.remove(bookId) }
             do {
                 let handle = try await self.bridge.openBook(bookId: bookId)
                 let saved = try? await handle.loadPlace()
+                guard self.openingBookIds.contains(bookId) else { return }
                 let coordinator = ReaderWindowCoordinator(
                     handle: handle,
                     initialPlace: saved,
+                    onSaveError: { [weak self] message in
+                        self?.noticeAlert = SimpleNoticeModel(heading: "Reading Position", body: message)
+                    },
                     onClosed: { [weak self] closedId in
                         self?.openReaderControllers.removeValue(forKey: closedId)
                         self?.reloadBrowse()
@@ -542,6 +549,7 @@ public final class LibraryViewModel: ObservableObject {
     }
 
     public func flushAndCloseAllReaders() {
+        openingBookIds.removeAll()
         let controllers = Array(openReaderControllers.values)
         openReaderControllers.removeAll()
         for controller in controllers {

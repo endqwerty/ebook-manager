@@ -91,7 +91,7 @@ jobs:
 
       - name: Run the core's tests
         id: core
-        run: cargo test --release --locked --no-fail-fast -p ebook-reader -p ebook-library -p ebook-device --features ebook-library/fixture
+        run: cargo test --release --locked --no-fail-fast -p ebook-reader -p ebook-library -p ebook-device -p ebook-bridge --features ebook-library/fixture
 
       - name: Export to a mounted FAT32 volume
         id: card
