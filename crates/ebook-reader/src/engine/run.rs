@@ -13,11 +13,12 @@ use crate::model::{
 };
 use crate::wire::{
     write_frame, BookOutline, Payload, ProbeReport, Request, Response, WireError, WireErrorKind,
-    BOOK_IN_SANDBOX, MAX_REQUEST_BYTES,
+    MAX_REQUEST_BYTES,
 };
 use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
 use std::fs::File;
 use std::io::{BufRead, Read};
+use std::path::PathBuf;
 
 /// Run the helper. `args` excludes the program name: `session <limits>
 /// <cpu-seconds>`. The first reply says the sandbox holds; then each line on
@@ -36,7 +37,11 @@ pub fn main(args: &[String]) -> i32 {
     if reply(&mut out, ready, &[]) != 0 {
         return 3;
     }
-    let mut session = Session { limits, book: None };
+    let mut session = Session {
+        limits,
+        source: book_path(args),
+        book: None,
+    };
     let stdin = std::io::stdin();
     requests(&mut stdin.lock(), &mut out, &mut session)
 }
@@ -92,9 +97,31 @@ fn start(args: &[String]) -> Result<Limits, WireError> {
         None => Limits::default(),
     };
     let cpu = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
-    restrict(&limits, cpu)?;
-    isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why))?;
+    let verify =
+        || isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why));
+    // On Linux the process limit is what stops a new process, so it is set
+    // before the check. On macOS the profile is, and the limit would hide a
+    // profile that allowed one, so the check comes first.
+    if cfg!(target_os = "macos") {
+        verify()?;
+        restrict(&limits, cpu)?;
+    } else {
+        restrict(&limits, cpu)?;
+        verify()?;
+    }
     Ok(limits)
+}
+
+/// Linux takes any value for a limit.
+#[cfg(target_os = "linux")]
+fn settable(value: u64) -> u64 {
+    value
+}
+
+/// macOS refuses a value above this one, which itself means no limit.
+#[cfg(target_os = "macos")]
+fn settable(value: u64) -> u64 {
+    value.min(i64::MAX as u64)
 }
 
 /// Lower this process's own limits. Hard and soft are set together, so they
@@ -107,7 +134,7 @@ fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
         let value = [inherited.current, inherited.maximum]
             .into_iter()
             .flatten()
-            .fold(value, u64::min);
+            .fold(settable(value), u64::min);
         setrlimit(
             resource,
             Rlimit {
@@ -122,7 +149,7 @@ fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
             )
         })
     };
-    set(Resource::As, limits.memory_bytes)?;
+    bound_memory(limits, &set)?;
     set(Resource::Cpu, cpu_seconds.max(1))?;
     set(Resource::Core, 0)?;
     // The helper is one process with one thread. With this, it cannot become
@@ -131,12 +158,50 @@ fn restrict(limits: &Limits, cpu_seconds: u64) -> Result<(), WireError> {
     set(Resource::Nofile, 32)
 }
 
+#[cfg(target_os = "linux")]
+fn bound_memory(
+    limits: &Limits,
+    set: &impl Fn(Resource, u64) -> Result<(), WireError>,
+) -> Result<(), WireError> {
+    set(Resource::As, limits.memory_bytes)
+}
+
+/// macOS refuses an address-space limit below what the process already
+/// maps, so the helper's own allocator keeps the count.
+#[cfg(target_os = "macos")]
+fn bound_memory(
+    limits: &Limits,
+    _: &impl Fn(Resource, u64) -> Result<(), WireError>,
+) -> Result<(), WireError> {
+    if super::memory::limit(limits.memory_bytes) {
+        Ok(())
+    } else {
+        Err(WireError::new(
+            WireErrorKind::NotIsolated,
+            "the helper was built without its memory limit",
+        ))
+    }
+}
+
+/// Where the sandbox shows the book: a fixed place on Linux, the path the
+/// host names on macOS.
+#[cfg(target_os = "linux")]
+fn book_path(_: &[String]) -> Option<PathBuf> {
+    Some(crate::wire::BOOK_IN_SANDBOX.into())
+}
+
+#[cfg(target_os = "macos")]
+fn book_path(args: &[String]) -> Option<PathBuf> {
+    args.get(3).map(PathBuf::from)
+}
+
 /// What one helper keeps between requests: the book's archive and package,
 /// read on the first request that needs them, and its contents once read.
 /// Each request is charged for what it uses as if it had read it itself, so
 /// a request gets the same answer here as in a helper of its own.
 struct Session {
     limits: Limits,
+    source: Option<PathBuf>,
     book: Option<Result<Loaded, WireError>>,
 }
 
@@ -172,8 +237,10 @@ impl Session {
     fn serve(&mut self, request: Request) -> Result<(Payload, Vec<u8>), WireError> {
         let limits = &self.limits;
         let loaded_before = self.book.is_some();
+        let source = self.source.as_deref();
         let book = self.book.get_or_insert_with(|| {
-            let file = File::open(BOOK_IN_SANDBOX)
+            let source = source.ok_or_else(|| WireError::invalid("no book was given"))?;
+            let file = File::open(source)
                 .map_err(|e| WireError::invalid(format!("cannot open the book: {e}")))?;
             let mut archive = Archive::open(file, limits)?;
             let package = package::load(&mut archive, limits)?;
@@ -472,6 +539,7 @@ mod tests {
     fn replies(input: &[u8]) -> (i32, Vec<Response>) {
         let mut session = Session {
             limits: Limits::default(),
+            source: None,
             book: None,
         };
         let mut out = Vec::new();

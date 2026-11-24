@@ -1,6 +1,6 @@
 # Export an EPUB to a mounted reader
 
-On Linux the reader export copies an existing managed EPUB into a selected
+The reader export copies an existing managed EPUB into a selected
 directory. For an Xteink X4 Pro running the CrossPoint fork, enable USB Drive
 mode and select a folder on the mounted SD card, or mount the card in a reader.
 CrossPoint documents native EPUB support and browsing folders on that card.
@@ -14,9 +14,12 @@ CrossPoint documents native EPUB support and browsing folders on that card.
   first 16 hex digits of the incoming EPUB's SHA-256 to the new filename. A
   retry recognises that copy too. If both names contain different bytes, the
   user chooses another folder.
-- A partial write stays under a temporary name. A complete write is synced and
-  its digest checked before publishing the EPUB name. An abrupt disconnection can
-  leave a hidden temporary file. Safely eject the volume after the transfer.
+- Export syncs and checks a temporary copy before publishing it. On macOS FAT
+  and exFAT volumes, it frees the temporary space and copies from the original
+  into an exclusively created destination file, then verifies the digest again. Disconnecting during that write can leave an empty or partial EPUB under
+  the final name. A retry preserves that file and tries the hash-suffixed name.
+  An interrupted transfer can also leave a hidden temporary file. Safely eject
+  the volume after the transfer.
 
 
 CrossPoint can display the title embedded in the EPUB instead of the filename.

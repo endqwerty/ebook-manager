@@ -1,11 +1,14 @@
-//! Copy a managed EPUB to a user-selected folder on a mounted Linux volume.
+//! Copy a managed EPUB to a user-selected folder on a mounted volume.
 
+use rustix::fs::{linkat, openat, renameat_with, unlinkat, AtFlags, Mode, OFlags, RenameFlags};
+use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExportOutcome {
@@ -76,6 +79,118 @@ fn compare_existing(
     ))
 }
 
+/// Open a regular file by name inside the open directory. Every operation
+/// on the device goes through that directory's descriptor, so the transfer
+/// stays on it if its path or mount point changes.
+fn open_in(dir: &File, name: &str) -> io::Result<File> {
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let file = File::from(openat(dir, name, flags, Mode::empty())?);
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Expected a regular book file",
+        ));
+    }
+    Ok(file)
+}
+
+/// A partly written copy under a private name. Dropping it removes that
+/// name, which is already gone once the copy has been published by renaming.
+struct Staged<'a> {
+    dir: &'a File,
+    name: String,
+    file: File,
+}
+
+impl<'a> Staged<'a> {
+    fn create(dir: &'a File) -> io::Result<Self> {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let flags =
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        loop {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos());
+            let name = format!(
+                ".ebook-{}-{}-{nanos}.part",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            );
+            match openat(dir, &name, flags, Mode::from_raw_mode(0o600)) {
+                Ok(fd) => {
+                    return Ok(Staged {
+                        dir,
+                        name,
+                        file: File::from(fd),
+                    })
+                }
+                Err(Errno::EXIST) => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Give the copy its real name unless something already has it, by the
+    /// first way the filesystem supports: a rename that refuses to replace;
+    /// a link, with the private name removed here so the caller's directory
+    /// sync covers that too; or, on FAT and exFAT under macOS, which have
+    /// neither, a second copy written into a file created under the real
+    /// name only if it is free.
+    fn publish(&mut self, name: &str, source: &mut File, expected: [u8; 32]) -> io::Result<()> {
+        let unsupported = |e: Errno| {
+            [
+                Errno::INVAL,
+                Errno::NOSYS,
+                Errno::NOTSUP,
+                Errno::OPNOTSUPP,
+                Errno::PERM,
+            ]
+            .contains(&e)
+        };
+        match renameat_with(self.dir, &self.name, self.dir, name, RenameFlags::NOREPLACE) {
+            Err(e) if unsupported(e) => {}
+            other => return Ok(other?),
+        }
+        match linkat(self.dir, &self.name, self.dir, name, AtFlags::empty()) {
+            Ok(()) => {
+                let _ = unlinkat(self.dir, &self.name, AtFlags::empty());
+                return Ok(());
+            }
+            Err(e) if unsupported(e) => {}
+            Err(e) => return Err(e.into()),
+        }
+        let flags =
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        source.rewind()?;
+        self.file.set_len(0)?;
+        let mut claimed = File::from(openat(self.dir, name, flags, Mode::from_raw_mode(0o600))?);
+        // From here only the file this call created is touched, through its
+        // descriptor, so whatever else takes the name meanwhile is left as
+        // it is. A copy that fails is emptied, not removed by name.
+        let written = (|| {
+            io::copy(source, &mut claimed)?;
+            claimed.sync_all()?;
+            claimed.rewind()?;
+            if digest(&mut claimed)? != expected {
+                return Err(io::Error::other(
+                    "The copy on the device did not match the original",
+                ));
+            }
+            Ok(())
+        })();
+        if written.is_err() {
+            let _ = claimed.set_len(0);
+        }
+        written
+    }
+}
+
+impl Drop for Staged<'_> {
+    fn drop(&mut self) {
+        let _ = unlinkat(self.dir, &self.name, AtFlags::empty());
+    }
+}
+
 pub fn export_epub(source: &Path, directory: &Path, title: &str) -> io::Result<ExportOutcome> {
     let mut source = regular_file(source)?;
     let dir = File::open(directory)?;
@@ -85,20 +200,10 @@ pub fn export_epub(source: &Path, directory: &Path, title: &str) -> io::Result<E
             "Choose a device folder",
         ));
     }
-    // Keep all filesystem operations on the selected directory if its mount point changes.
-    let root = PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd()));
     let name = device_filename(title);
     let expected = digest(&mut source)?;
-    let try_name = |source: &mut File, name: &str| {
-        copy_to(
-            source,
-            &dir,
-            &root,
-            &root.join(name),
-            directory.join(name),
-            expected,
-        )
-    };
+    let try_name =
+        |source: &mut File, name: &str| copy_to(source, &dir, name, directory.join(name), expected);
     match try_name(&mut source, &name) {
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
             let suffix: String = expected[..8]
@@ -117,37 +222,33 @@ pub fn export_epub(source: &Path, directory: &Path, title: &str) -> io::Result<E
 fn copy_to(
     source: &mut File,
     dir: &File,
-    root: &Path,
-    target: &Path,
+    name: &str,
     display: PathBuf,
     expected: [u8; 32],
 ) -> io::Result<ExportOutcome> {
-    match regular_file(target) {
+    match open_in(dir, name) {
         Ok(existing) => return compare_existing(existing, expected, display),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    let mut staged = tempfile::Builder::new()
-        .prefix(".ebook-")
-        .suffix(".part")
-        .tempfile_in(root)?;
+    let mut staged = Staged::create(dir)?;
     source.rewind()?;
-    io::copy(source, staged.as_file_mut())?;
-    staged.as_file().sync_all()?;
-    staged.as_file_mut().rewind()?;
-    if digest(staged.as_file_mut())? != expected {
+    io::copy(source, &mut staged.file)?;
+    staged.file.sync_all()?;
+    staged.file.rewind()?;
+    if digest(&mut staged.file)? != expected {
         return Err(io::Error::other(
             "The copy on the device did not match the original",
         ));
     }
-    match staged.persist_noclobber(target) {
-        Ok(_) => {
+    match staged.publish(name, source, expected) {
+        Ok(()) => {
             dir.sync_all()?;
             Ok(ExportOutcome::Copied(display))
         }
-        Err(e) if e.error.kind() == io::ErrorKind::AlreadyExists => {
-            compare_existing(regular_file(target)?, expected, display)
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            compare_existing(open_in(dir, name)?, expected, display)
         }
-        Err(e) => Err(e.error),
+        Err(e) => Err(e),
     }
 }

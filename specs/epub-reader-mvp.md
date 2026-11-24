@@ -1,12 +1,13 @@
 # EPUB reader (MVP)
 
-The `ebook-reader` crate opens a DRM-free EPUB 2 or EPUB 3 file on Linux and
+The `ebook-reader` crate opens a DRM-free EPUB 2 or EPUB 3 file on Linux or macOS and
 gives the desktop interface what it needs to import, browse and read it: title,
 authors, identifiers, series, date and page direction; a word count and a small
 cover picture; the chapters in reading order; the table of contents; and each
 chapter as blocks of styled text or as sanitised markup with its pictures.
 Book files are untrusted, so all parsing and image decoding happens in a
-helper process inside a bubblewrap sandbox with no network. The interface
+helper process inside a sandbox with no network: bubblewrap on Linux,
+`sandbox-exec` on macOS ([S7](#sandbox-on-macos)). The interface
 receives text, flags and checked thumbnail pixels, and, from the two content
 calls alone, markup the helper wrote and undecoded picture bytes for a web
 view. When the sandbox cannot be set up,
@@ -18,7 +19,8 @@ from) and `SEC-1` to `SEC-5` for EPUB text, and the helper's part of
 [browsing a large library](../docs/design/library-browsing.md). Not covered
 yet: pictures inside chapters, style sheets and fonts,
 pagination, search, positions finer than a block, footnote pop-ups, fixed-layout
-and media-overlay books, and every platform other than native Linux packages.
+and media-overlay books, and every platform other than native Linux packages
+and an unsandboxed macOS application.
 
 ## Sandbox
 
@@ -66,6 +68,49 @@ and media-overlay books, and every platform other than native Linux packages.
   brought into range, a chapter with more blocks than the limit is cut and
   flagged, links other than the kinds in R4 are removed, and control
   characters are stripped from every string.
+
+## Sandbox on macOS
+
+S1, S4, S5 and S6 hold on macOS as written, with `/usr/bin/sandbox-exec` in
+the place of `bwrap`. S2 and S3 read as follows.
+
+- **S7** The host starts the helper through `sandbox-exec` with a fixed
+  profile that denies everything except running and reading the helper,
+  reading the one book, reading the system's shared library cache and
+  `/usr/lib`, listing the root directory and reading system settings
+  (`sysctl`). The helper and the book are named to the profile as parameters
+  by their resolved paths. The helper has no network, no other host files, no
+  writable storage, an empty environment, a session of its own and none of
+  the application's descriptors beyond its three standard streams, within the bounds S9 gives.
+- **S8** The helper refuses to open a book when a lookup of `/Users`,
+  `/etc`, `/tmp`, `/var`, `/private`, `/Library`, `/Applications`,
+  `/Volumes`, `/dev`, `/bin`, `/opt` or `/System/Library/CoreServices`
+  succeeds, when it can create a file under `/private/tmp` or
+  `/private/var/tmp`, has a network route, or can start another process.
+  It makes that last check before it sets its own process limit, so that
+  limit is not what refuses. These checks are a tripwire for a missing
+  profile, not a proof of the whole profile; `sandbox_sees_only_the_book`
+  in `tests/failures.rs` checks what the profile lets the helper read.
+- **S9** macOS has no parent-death signal. The helper ends when the
+  application's end closes its input. A call in progress then runs until it
+  finishes or its CPU limit (F7) stops it. To mark inherited descriptors close-on-exec, the launcher scans from
+  descriptor 3 to the greater of the observed limit and the highest descriptor
+  listed before launch plus 256 (exclusive). It also covers the child’s soft
+  limit at startup. These bounds are capped at 1,048,576 when the limit query
+  succeeds. A descriptor opened beyond the scan after listing can escape if
+  the limit is lowered below it before the fork. The application does not
+  change that limit.
+- **S10** macOS refuses an address-space limit below what a process already
+  maps, so F7's memory bound is kept by the helper's allocator: it counts the
+  bytes of every allocation in use and refuses one that would pass
+  `Limits::memory_bytes`. The helper then stops as F7 describes, or, when
+  the refused request was one the unpacker made allowing for failure, refuses
+  the book as damaged and carries on. The bound
+  covers what the helper's own code allocates through that allocator. The
+  allocator's bookkeeping, the stack, which the system caps at 8 MiB, and
+  the system libraries mapped into it are outside the count. A helper built
+  without that allocator counts as not isolated. An inherited address-space
+  limit plays no part.
 
 ## Import metadata
 

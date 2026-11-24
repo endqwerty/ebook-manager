@@ -4,7 +4,7 @@ Opens a reader's own DRM-free EPUB 2 or EPUB 3 file and returns plain data an
 interface can draw: import metadata, a word count and cover thumbnail for
 browsing, the reading order, the table of contents and each chapter as blocks
 of styled text. The behaviour is specified in
-[specs/epub-reader-mvp.md](../../specs/epub-reader-mvp.md). Linux only for now.
+[specs/epub-reader-mvp.md](../../specs/epub-reader-mvp.md). Linux and macOS.
 
 ## Entry point
 
@@ -97,12 +97,13 @@ made.
 ## What callers can rely on
 
 - **No book byte is parsed in the calling process.** The library starts
-  `ebook-reader-helper` under bubblewrap (`bwrap`), one for each opened book
+  `ebook-reader-helper` under the system's sandbox launcher (bubblewrap, or
+  `sandbox-exec` on macOS), one for each opened book
   and one for each `inspect` or `survey`, and reads back size-capped replies:
   a line of JSON, followed by a picture's bytes or a cover's pixels as they
   are.
-- **Fail closed.** `Reader::new` returns an error when the helper or `bwrap` is
-  missing, or when the helper's isolation check fails inside the sandbox. There
+- **Fail closed.** `Reader::new` returns an error when the helper or the
+  launcher is missing, or when the helper's isolation check fails inside the sandbox. There
   is no unsandboxed fallback. The helper also refuses to read a book when run
   outside a sandbox.
 - **Inert output, with two exceptions.** Results hold text, style flags,
@@ -185,7 +186,7 @@ this crate builds the helper itself and installs it by rule 2 or 3:
 cargo build --release --manifest-path crates/ebook-reader/Cargo.toml --bin ebook-reader-helper
 ```
 
-`bwrap` is taken from `ReaderConfig::bwrap_path`, else `/usr/bin/bwrap`, else
+`bwrap` is taken from `ReaderConfig::sandbox_path`, else `/usr/bin/bwrap`, else
 `/bin/bwrap`. It must be bubblewrap 0.8.0 or later (for `--disable-userns`),
 on Linux 5.11 or later. Older systems get `SandboxUnavailable`.
 
@@ -194,7 +195,8 @@ on Linux 5.11 or later. Older systems get `SandboxUnavailable`.
 Before bubblewrap starts, the child process marks every descriptor above
 stderr close-on-exec and asks the kernel to kill it when the application
 exits, so no open file, socket or process handle of the application reaches
-the sandbox. This is the crate's only `unsafe` block, in `src/spawn.rs`. The
+the sandbox. That and the macOS allocator (`src/engine/memory.rs`) are the
+crate's only `unsafe` code. The
 kill-on-exit request follows the thread that starts the child, so each helper
 is started by a thread of its own that lives until the helper is collected
 (`src/session.rs`).
@@ -218,6 +220,41 @@ the sandbox when either is passed. The CPU-time limit counts the helper's
 whole life, which is why a book's call is tried once more in a fresh helper. Defaults are in `Limits` and
 `ReaderConfig::default()`.
 
+### On macOS
+
+The launcher is `/usr/bin/sandbox-exec`, or `ReaderConfig::sandbox_path`, with
+a fixed deny-by-default profile (`src/sandbox.rs`). The profile allows running
+and reading the helper, reading the one book, reading `/usr/lib` and the
+system's shared library cache, listing `/` and reading `sysctl` values, and
+nothing else: no other file, no write, no network, no new process. The helper
+and book are passed to the profile as parameters by their resolved paths.
+
+What differs from Linux:
+
+- The helper sees the host's real paths, so it finds the book from its fourth
+  argument and checks that a lookup of `/Users`, `/etc`, `/tmp`, `/Library`
+  and their like fails. It checks that it can't start a process before it
+  sets its own process limit, so that limit is not what refuses.
+- There is no address-space limit to set. The helper's allocator counts the
+  bytes in use and refuses past `Limits::memory_bytes`, which ends the helper
+  with status 4 as running out of memory does on Linux, or, when the request
+  refused was one the unpacker made allowing for failure, refuses the book as
+  damaged. Memory the system maps
+  on the helper's behalf, such as its stack and libraries, is outside the
+  count.
+- Nothing kills the helper when the application dies. It exits when its input
+  closes, and a call in progress ends by its CPU limit at the latest.
+- Descriptors above stderr are marked close-on-exec one by one: every number
+  under the descriptor limit, and past it up to the highest the application
+  has open.
+- `sandbox-exec` is marked deprecated by Apple. If it goes, `Reader::new`
+  returns `SandboxUnavailable`; see
+  [the design](../../docs/design/macos-app.md#the-helper-on-macos). It can't be
+  used from inside the App Sandbox.
+
+The helper's `visible-probe` argument is a test hook: it reports which of the
+paths it is given it can see, read or write, and reads no book.
+
 Not yet in place, in the order worth closing:
 
 1. A seccomp system-call filter. The helper can still make any system call an
@@ -232,9 +269,9 @@ Not yet in place, in the order worth closing:
 
 ## Side effects
 
-One `bwrap` and helper process for each open `Book`, ended with it, and one
+One launcher and helper process for each open `Book`, ended with it, and one
 short-lived pair for each `inspect` and `survey`. `Reader::new` starts one to
-prove the sandbox, once per helper, `bwrap` and limits in a process. Nothing
+prove the sandbox, once per helper, launcher and limits in a process. Nothing
 is written to disk and no network connection is made.
 
 ## Checking it
@@ -262,7 +299,7 @@ The content statements (C1 to C8) are checked in `tests/content.rs`, which
 parses every returned chapter as strict XML, and in the unit tests of
 `src/engine/markup.rs`.
 
-The end-to-end tests need a working `bwrap` with unprivileged user namespaces
+On Linux the end-to-end tests need a working `bwrap` with unprivileged user namespaces
 and fail without one. On GitHub's `ubuntu-latest` runners the distribution's
 `bubblewrap` package is enough.
 

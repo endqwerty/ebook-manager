@@ -107,3 +107,23 @@ jobs:
           PYTHON
           mainworthy report target/nextest/ci/junit.xml "$RUNNER_TEMP/desktop-checks.xml"
           mainworthy gate
+
+  # The shared core on macOS, where the reader's helper runs under sandbox-exec. Not reported to Mainworthy yet.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the core's tests
+        run: cargo test --release --locked --no-fail-fast -p ebook-reader -p ebook-library -p ebook-device --features ebook-library/fixture
+
+      - name: Export to a mounted FAT32 volume
+        run: |
+          hdiutil create -size 64m -fs "MS-DOS FAT32" -volname EBOOKTEST "$RUNNER_TEMP/card.dmg"
+          card="$RUNNER_TEMP/card"
+          mkdir "$card"
+          hdiutil attach -mountpoint "$card" "$RUNNER_TEMP/card.dmg"
+          trap 'hdiutil detach "$card"' EXIT
+          diskutil info "$card" | grep "FAT32"
+          TMPDIR="$card" cargo test --release --locked -p ebook-device
+          EBOOK_TEST_CARD="$card" cargo test --release --locked -p ebook-device --test export card_with_room_for_one_copy -- --ignored --exact

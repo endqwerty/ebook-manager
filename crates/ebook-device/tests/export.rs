@@ -95,3 +95,20 @@ fn concurrent_exports_preserve_both_books_and_refuse_an_occupied_fallback() -> i
     assert_eq!(fs::read_dir(card.path())?.count(), 2);
     Ok(())
 }
+
+#[test]
+#[ignore = "requires EBOOK_TEST_CARD on a fresh 64 MiB FAT32 image"]
+fn card_with_room_for_one_copy() -> io::Result<()> {
+    let home = tempdir()?;
+    let card = tempfile::tempdir_in(std::env::var_os("EBOOK_TEST_CARD").expect("test card"))?;
+    let source = home.path().join("original");
+    let bytes = vec![0x51; 40 * 1024 * 1024];
+    fs::write(&source, &bytes)?;
+    let destination = card.path().join("Harbour.epub");
+    assert_eq!(
+        export_epub(&source, card.path(), "Harbour")?,
+        ExportOutcome::Copied(destination.clone())
+    );
+    assert_eq!(fs::read(destination)?, bytes);
+    Ok(())
+}

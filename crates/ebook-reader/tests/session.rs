@@ -37,11 +37,11 @@ fn executable(dir: &Scratch, name: &str, script: &str) -> PathBuf {
 /// The real bubblewrap, noting each start in `log`.
 fn counted_bwrap(dir: &Scratch, log: &Path) -> ReaderConfig {
     let script = format!(
-        "#!/bin/sh\necho start >> '{}'\nexec /usr/bin/bwrap \"$@\"\n",
+        "#!/bin/sh\necho start >> '{}'\nexec {SANDBOX} \"$@\"\n",
         log.display()
     );
     ReaderConfig {
-        bwrap_path: Some(executable(dir, "counted-bwrap", &script)),
+        sandbox_path: Some(executable(dir, "counted-bwrap", &script)),
         ..config()
     }
 }
@@ -122,7 +122,7 @@ fn numbered(dir: &Scratch, name: &str, count: &Path, content: &str) -> ReaderCon
         open = send(&outline_frame(dir)),
     );
     ReaderConfig {
-        bwrap_path: Some(executable(dir, name, &script)),
+        sandbox_path: Some(executable(dir, name, &script)),
         timeout: Duration::from_millis(500),
         ..config()
     }
@@ -220,7 +220,7 @@ fn a_read_past_its_deadline_is_not_tried_again() {
     let dir = Scratch::new();
     let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
     let count = dir.0.join("count");
-    let cfg = numbered(&dir, "stuck", &count, "exec /usr/bin/sleep 30");
+    let cfg = numbered(&dir, "stuck", &count, &format!("exec {SLEEP} 30"));
     let book = reader_over(&cfg).open(&book_path).unwrap();
     let first = number(&count);
     let started = Instant::now();
@@ -241,7 +241,7 @@ fn dropping_a_book_ends_its_helper() {
         open = send(&outline_frame(&dir)),
     );
     let cfg = ReaderConfig {
-        bwrap_path: Some(executable(&dir, "pid-bwrap", &script)),
+        sandbox_path: Some(executable(&dir, "pid-bwrap", &script)),
         ..config()
     };
     let book = reader_over(&cfg).open(&book_path).unwrap();
@@ -252,7 +252,7 @@ fn dropping_a_book_ends_its_helper() {
         .last()
         .unwrap()
         .to_owned();
-    let alive = || Path::new(&format!("/proc/{pid}")).exists();
+    let alive = || alive(&pid);
     drop(book);
     std::thread::sleep(Duration::from_millis(100));
     assert!(alive(), "a copy of the book still holds the helper");
@@ -282,7 +282,7 @@ fn replies_nobody_asked_for_are_not_read_ahead() {
         written = written.display(),
     );
     let cfg = ReaderConfig {
-        bwrap_path: Some(executable(&dir, "flood-bwrap", &script)),
+        sandbox_path: Some(executable(&dir, "flood-bwrap", &script)),
         ..config()
     };
     let book = reader_over(&cfg).open(&book_path).unwrap();
@@ -397,7 +397,12 @@ fn a_helper_that_goes_quiet_is_not_tried_again() {
     let dir = Scratch::new();
     let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
     let count = dir.0.join("count");
-    let cfg = numbered(&dir, "quiet", &count, "exec 1>&-; exec /usr/bin/sleep 30");
+    let cfg = numbered(
+        &dir,
+        "quiet",
+        &count,
+        &format!("exec 1>&-; exec {SLEEP} 30"),
+    );
     let book = reader_over(&cfg).open(&book_path).unwrap();
     let first = number(&count);
     let started = Instant::now();
@@ -412,32 +417,32 @@ fn a_helper_that_goes_quiet_is_not_tried_again() {
 fn a_helper_that_stops_reading_requests_is_ended() {
     let dir = Scratch::new();
     let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
-    let flood = content_frame(&dir);
+    let reply = std::fs::read(content_frame(&dir)).unwrap();
+    let flood = dir.file("replies", &reply.repeat(256));
     let script = format!(
         "#!/bin/sh\necho '0 {{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}'\nread -r request\n{open}\nwhile cat '{flood}'; do :; done\n",
         open = send(&outline_frame(&dir)),
         flood = flood.display(),
     );
     let cfg = ReaderConfig {
-        bwrap_path: Some(executable(&dir, "deaf-bwrap", &script)),
+        sandbox_path: Some(executable(&dir, "deaf-bwrap", &script)),
         timeout: Duration::from_secs(2),
         ..config()
     };
     let book = reader_over(&cfg).open(&book_path).unwrap();
-    let started = Instant::now();
-    // Each read takes a reply already waiting and leaves a request unread.
-    let ended = (0..20_000).find_map(|_| book.read_content(0).err());
+    let ended = (0..20_000).find_map(|_| {
+        let started = Instant::now();
+        book.read_content(0)
+            .err()
+            .map(|error| (error, started.elapsed()))
+    });
     match ended {
-        Some(ReaderError::HelperFailed { detail }) => {
-            assert!(detail.contains("stopped reading"), "{detail}")
+        Some((ReaderError::HelperFailed { detail }, elapsed)) => {
+            assert!(detail.contains("stopped reading"), "{detail}");
+            assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
         }
         other => panic!("{other:?}"),
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(20),
-        "{:?}",
-        started.elapsed()
-    );
 }
 
 /// S5: however many calls find a book's helper busy, at most four run in
@@ -452,7 +457,7 @@ fn a_book_runs_at_most_four_spare_helpers() {
         &dir,
         "stuck-all",
         &count,
-        &format!("echo x >> '{}'; exec /usr/bin/sleep 30", asked.display()),
+        &format!("echo x >> '{}'; exec {SLEEP} 30", asked.display()),
     );
     cfg.timeout = Duration::from_secs(2);
     let book = reader_over(&cfg).open(&book_path).unwrap();
