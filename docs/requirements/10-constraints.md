@@ -10,9 +10,13 @@ not legal advice.
   protection from a book. Its documentation, issue tracker and any list of
   extensions refuse them too. United States law exempts certain acts of
   circumvention for certain people, such as readers with print disabilities, and
-  does not exempt distributing tools.
+  does not exempt distributing tools. Done: the app has none, and the
+  [contributing guide](../../CONTRIBUTING.md) and [README](../../README.md#project)
+  state the refusal for the documentation and the issue tracker. The app has no
+  extension list yet.
 - `LAW-2` (core) When a user opens a file protected by a scheme the app does not
   support, the app names the scheme, says it cannot open it, keeps the book in the library, and offers no workaround.
+  Done for EPUB on Linux: see [protected books](../design/protected-books.md).
 - `LAW-3` (later) Readium LCP is the only scheme found with a published route for an
   independent reader to support it. Other schemes were not researched. It needs a signed agreement with EDRLab, a yearly
   fee, a yearly conformity check, and a confidential production module. The

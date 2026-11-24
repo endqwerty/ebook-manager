@@ -10,6 +10,7 @@ use crate::{
     views::{self, BookCell, Shared, View, grid, list, table},
 };
 use ebook_device::ExportOutcome;
+use ebook_library::Protection;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -541,7 +542,10 @@ impl Library {
             match library.store.run(move |lib| lib.book(&id)).await {
                 Ok(book) => {
                     library.close_context_menu();
-                    reader::open_in(&library.window, &library.store, &Rc::new(book));
+                    match book.imported.protection {
+                        Some(protection) => locked(&library.window, &book.title, protection),
+                        None => reader::open_in(&library.window, &library.store, &Rc::new(book)),
+                    }
                 }
                 Err(e) => notice(
                     &library.window,
@@ -1570,4 +1574,62 @@ pub fn open(app: &adw::Application) {
     });
     model.set_query(query);
     window.present();
+}
+
+/// The answer to Read for a locked book: what cannot be done and why, and
+/// its one response. Nothing else is offered.
+fn locked_alert(title: &str, protection: Protection) -> (String, String, [&'static str; 1]) {
+    let lock = views::locked_by(protection);
+    (
+        format!("Can\u{2019}t open {title}"),
+        format!(
+            "It is {}{}. {}",
+            lock[..1].to_lowercase(),
+            &lock[1..],
+            views::LOCK_MEANS
+        ),
+        ["Close"],
+    )
+}
+
+fn locked(window: &impl IsA<gtk::Window>, title: &str, protection: Protection) {
+    let (message, detail, buttons) = locked_alert(title, protection);
+    gtk::AlertDialog::builder()
+        .message(message)
+        .detail(detail)
+        .buttons(buttons)
+        .default_button(0)
+        .cancel_button(0)
+        .modal(true)
+        .build()
+        .show(Some(window));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_on_a_locked_book_says_why_and_offers_only_close() {
+        let (message, detail, buttons) = locked_alert("Moby-Dick", Protection::Adobe);
+        assert_eq!(message, "Can\u{2019}t open Moby-Dick");
+        assert_eq!(
+            detail,
+            "It is locked by Adobe. Ebook Manager can't read, convert or change the text of \
+             books locked this way."
+        );
+        assert_eq!(buttons, ["Close"]);
+        for protection in [
+            Protection::Lcp,
+            Protection::Apple,
+            Protection::Password,
+            Protection::Unknown,
+        ] {
+            let (_, detail, _) = locked_alert("T", protection);
+            assert!(
+                !detail.contains("http") && !detail.contains("www"),
+                "{detail}"
+            );
+        }
+    }
 }

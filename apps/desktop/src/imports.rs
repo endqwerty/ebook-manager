@@ -1,6 +1,6 @@
 use super::*;
 use anyhow::{Context, ensure};
-use ebook_library::{ImportChoice, ImportOutcome, ParsedMetadata};
+use ebook_library::{ImportChoice, ImportOutcome, ParsedMetadata, Protection};
 use ebook_reader::{Reader, ReaderConfig};
 use std::{
     cell::Cell,
@@ -28,10 +28,6 @@ fn stage(source: PathBuf, thumbnails: &Path) -> Result<Candidate> {
     ensure!(bytes <= max, "EPUB exceeds the reader’s file size limit");
     let reader = Reader::new(ReaderConfig::default())?;
     let m = reader.inspect(staged.path())?;
-    ensure!(
-        m.protection.is_none(),
-        "This EPUB is protected. Choose a DRM-free book."
-    );
     // A survey that fails leaves the book unsurveyed, to be asked again at
     // the next start. A thumbnail that cannot be written is made again when
     // the cover is first shown.
@@ -65,13 +61,24 @@ fn stage(source: PathBuf, thumbnails: &Path) -> Result<Candidate> {
             let scheme = i.scheme.unwrap_or_default();
             format!("{}:{scheme}{}", scheme.len(), i.value)
         }),
-        protection: None,
+        protection: m.protection.map(protection),
     };
     Ok(Candidate {
         staged,
         source,
         metadata,
     })
+}
+
+/// The library's name for the scheme the reader helper found.
+fn protection(found: ebook_reader::Protection) -> Protection {
+    match found {
+        ebook_reader::Protection::ReadiumLcp => Protection::Lcp,
+        ebook_reader::Protection::Adobe => Protection::Adobe,
+        ebook_reader::Protection::Apple => Protection::Apple,
+        ebook_reader::Protection::Password => Protection::Password,
+        ebook_reader::Protection::Unrecognised => Protection::Unknown,
+    }
 }
 
 fn discover(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
