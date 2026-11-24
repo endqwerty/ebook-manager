@@ -114,6 +114,7 @@ mod tests {
             cover_rgb: None,
             spine_rgb: None,
             right_to_left: false,
+            protection: None,
         }
     }
 

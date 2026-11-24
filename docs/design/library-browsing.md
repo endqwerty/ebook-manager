@@ -84,6 +84,7 @@ folder restores them without opening any EPUB.
 | Survey version | The library, when the helper's word count and cover facts were last asked for. See [Covers](#covers). | No |
 | Length in words | The helper, counting the text of linear spine documents. Unknown if any chapter was skipped or truncated. | No |
 | Cover facts: average colour, spine colour, digest of the thumbnail | The helper. See [Covers](#covers). | No |
+| Protection scheme, when the file is locked | The helper. See [Protected books](protected-books.md). | No |
 
 Helper-supplied values live in `Book.imported` as today, and the reader's
 edits in the fields beside it. Every new field is optional and is left out of
@@ -118,7 +119,8 @@ book(n INTEGER PRIMARY KEY,        -- private row number, never shown or exporte
      title, authors, series, position,                -- display text
      title_key BLOB, author_key BLOB, series_key BLOB, position_key BLOB,
      added INTEGER, published TEXT, last_read INTEGER, progress REAL,
-     words INTEGER, language TEXT, spine_rgb INTEGER, cover_rgb INTEGER, cover_digest TEXT)
+     words INTEGER, language TEXT, spine_rgb INTEGER, cover_rgb INTEGER, cover_digest TEXT,
+     protection TEXT)                                 -- added in place to older catalogues
 search(n INTEGER PRIMARY KEY, folded TEXT)   -- title, authors, series names
 positions, sources, journal                  -- as today
 meta(key PRIMARY KEY, value)                 -- change counter, key profile, published tip
@@ -210,7 +212,7 @@ pub struct BrowseRow {            // everything a grid cell, list row, table row
     pub series: Option<(String, String)>, pub added: Option<i64>, pub published: Option<String>,
     pub last_read: Option<i64>, pub progress: Option<f32>,
     pub cover: Option<CoverRef>, pub cover_rgb: Option<u32>, pub spine_rgb: Option<u32>,
-    pub right_to_left: bool,
+    pub right_to_left: bool, pub protection: Option<Protection>,
 }
 pub struct ShelfStrip {
     pub thickness: Box<[u8]>,          // one per book, in view order
@@ -374,7 +376,8 @@ the helper's sandbox.
   as its text alternative, as it reads. The cover is read first and the text
   takes what remains of the call's 64 MiB unpacking allowance, so a book whose
   cover and text exceed it has an unknown count. A protected book surveys as
-  an unknown count and no cover, a result, so it is not asked again. A helper that times out, crashes or cannot start is an error
+  an unknown count, with its cover only when the cover's file is not
+  encrypted, a result, so it is not asked again. A helper that times out, crashes or cannot start is an error
   and not a result.
 - Import runs the survey after the metadata request and passes its facts in
   with the metadata. The record stores the survey version that ran, 1 for

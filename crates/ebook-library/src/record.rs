@@ -16,6 +16,44 @@ pub struct ParsedMetadata {
     pub right_to_left: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub survey: Option<SurveyFacts>,
+    /// The scheme that locks the file, absent when nothing does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protection: Option<Protection>,
+}
+
+/// A protection scheme a book's file declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protection {
+    Lcp,
+    Adobe,
+    Apple,
+    Password,
+    Unknown,
+}
+
+impl Protection {
+    /// The stable name kept in records and the catalogue.
+    pub fn name(self) -> &'static str {
+        match self {
+            Protection::Lcp => "lcp",
+            Protection::Adobe => "adobe",
+            Protection::Apple => "apple",
+            Protection::Password => "password",
+            Protection::Unknown => "unknown",
+        }
+    }
+    pub fn from_name(name: &str) -> Option<Protection> {
+        [
+            Protection::Lcp,
+            Protection::Adobe,
+            Protection::Apple,
+            Protection::Password,
+            Protection::Unknown,
+        ]
+        .into_iter()
+        .find(|p| p.name() == name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

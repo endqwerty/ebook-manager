@@ -573,3 +573,95 @@ fn survey_applies_only_to_the_version_examined() -> Result<()> {
     assert_eq!(lib.book(&b.id)?.imported.survey, Some(facts));
     Ok(())
 }
+
+fn first_row(l: &Library) -> Result<BrowseRow> {
+    let mut reader = l.browse_reader()?;
+    let view = reader.open(&BrowseQuery::default(), &Cancel::default())?;
+    Ok(reader.window(view.token, 0, 1)?.remove(0))
+}
+
+/// A locked book keeps its scheme in its record and shows it in browse rows.
+#[test]
+fn a_locked_book_carries_its_scheme_to_the_browse_row() -> Result<()> {
+    let d = tempdir()?;
+    let staged = d.path().join("stage");
+    fs::write(&staged, b"locked package")?;
+    let mut l = Library::open(&d.path().join("app"))?;
+    let meta = ParsedMetadata {
+        protection: Some(Protection::Adobe),
+        ..facts()
+    };
+    let ImportOutcome::Added(b) = l.import(&staged, &staged, &meta, ImportChoice::Review)? else {
+        panic!("expected import");
+    };
+    assert_eq!(l.book(&b.id)?.imported.protection, Some(Protection::Adobe));
+    assert_eq!(first_row(&l)?.protection, Some(Protection::Adobe));
+    Ok(())
+}
+
+/// A record written before the field existed is unprotected, and a record
+/// naming a scheme the app does not know is refused.
+#[test]
+fn protection_in_a_record_is_optional_and_checked() {
+    let old: ParsedMetadata =
+        serde_json::from_str(r#"{"title":"Old","authors":[],"identifier":null}"#).unwrap();
+    assert_eq!(old.protection, None);
+    let named: ParsedMetadata =
+        serde_json::from_str(r#"{"title":"T","authors":[],"identifier":null,"protection":"lcp"}"#)
+            .unwrap();
+    assert_eq!(named.protection, Some(Protection::Lcp));
+    assert!(
+        serde_json::from_str::<ParsedMetadata>(
+            r#"{"title":"T","authors":[],"identifier":null,"protection":"rot13"}"#
+        )
+        .is_err()
+    );
+}
+
+/// A catalogue made before the column existed gains it in place: its books
+/// stay unprotected, its source paths stay, and later books show their scheme.
+#[test]
+fn a_catalogue_without_the_protection_column_gains_it_in_place() -> Result<()> {
+    let d = tempdir()?;
+    let app = d.path().join("app");
+    let staged = d.path().join("stage");
+    fs::write(&staged, b"open package")?;
+    {
+        let mut l = Library::open(&app)?;
+        add(&mut l, &staged)?;
+    }
+    {
+        let db = rusqlite::Connection::open(app.join("library.sqlite"))?;
+        db.execute_batch("ALTER TABLE book DROP COLUMN protection")?;
+    }
+    let sources = |app: &Path| -> Result<i64> {
+        let db = rusqlite::Connection::open(app.join("library.sqlite"))?;
+        Ok(db.query_row("SELECT count(*) FROM sources", [], |r| r.get(0))?)
+    };
+    let before = sources(&app)?;
+    assert!(before > 0);
+    let mut l = Library::open(&app)?;
+    assert_eq!(first_row(&l)?.protection, None);
+    let locked = d.path().join("locked");
+    fs::write(&locked, b"locked package")?;
+    let meta = ParsedMetadata {
+        title: "Locked".into(),
+        identifier: None,
+        protection: Some(Protection::Password),
+        ..facts()
+    };
+    l.import(&locked, &locked, &meta, ImportChoice::Review)?;
+    drop(l);
+    assert_eq!(sources(&app)?, before + 1);
+    let l = Library::open(&app)?;
+    let mut reader = l.browse_reader()?;
+    let view = reader.open(&BrowseQuery::default(), &Cancel::default())?;
+    let rows = reader.window(view.token, 0, view.count)?;
+    let schemes: Vec<_> = rows
+        .iter()
+        .map(|r| (r.title.as_str(), r.protection))
+        .collect();
+    assert!(schemes.contains(&("Locked", Some(Protection::Password))));
+    assert!(schemes.contains(&("A Small Atlas", None)));
+    Ok(())
+}
