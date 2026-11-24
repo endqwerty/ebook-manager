@@ -1,6 +1,6 @@
 PRAGMA trusted_schema=OFF; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
 BEGIN;
-CREATE TABLE IF NOT EXISTS book(n INTEGER PRIMARY KEY,id TEXT UNIQUE,sha256 TEXT,identifier TEXT,data TEXT,title TEXT,authors TEXT,author_sort TEXT,series TEXT,position TEXT,title_key BLOB,author_key BLOB,series_key BLOB,position_key BLOB,added INTEGER,published TEXT,last_read INTEGER,progress REAL,words INTEGER,language TEXT,spine_rgb INTEGER,cover_rgb INTEGER,cover_digest TEXT,version_id TEXT,rtl INTEGER,survey_version INTEGER);
+CREATE TABLE IF NOT EXISTS book(n INTEGER PRIMARY KEY,id TEXT UNIQUE,sha256 TEXT,identifier TEXT,data TEXT,title TEXT,authors TEXT,author_sort TEXT,series TEXT,position TEXT,title_key BLOB,author_key BLOB,series_key BLOB,position_key BLOB,added INTEGER,published TEXT,last_read INTEGER,progress REAL,words INTEGER,language TEXT,spine_rgb INTEGER,cover_rgb INTEGER,cover_digest TEXT,version_id TEXT,rtl INTEGER,survey_version INTEGER,protection TEXT);
 CREATE INDEX IF NOT EXISTS digest ON book(sha256);
 CREATE INDEX IF NOT EXISTS package ON book(identifier);
 CREATE TABLE IF NOT EXISTS search(n INTEGER PRIMARY KEY,folded TEXT NOT NULL);

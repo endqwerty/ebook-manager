@@ -299,6 +299,12 @@ about them is designed here beyond their order and words.
   It says what happened, what the choices are, and stays until answered.
 - A problem with one book shows on that book: in the list's third line, in book
   details under the title, and in Needs attention. It does not raise a dialog.
+- A request the app cannot carry out at all gets the platform's alert, because
+  otherwise the reader's action would seem ignored. Its title says what cannot
+  be done and names the thing: "Can’t open Moby-Dick". Its message says why and
+  what the app cannot do. Its one button is Close, the default for Return and
+  Escape. It offers nothing else, so a locked book's alert has no link and no
+  way around the lock.
 
 ## First run
 

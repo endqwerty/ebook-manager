@@ -60,6 +60,9 @@ then open a book to check your edits and reading position.
 ## Project
 
 It is written independently of calibre and contains none of calibre's code.
+It keeps books locked by a protection scheme in the library and says why they
+cannot be opened. The project does not ship, link to, host or describe a way
+to remove protection, and closes issues and pull requests that ask for one.
 Contributors and coding agents must follow the clean-room rule in
 [AGENTS.md](AGENTS.md#rule-1-never-look-at-calibres-source-code).
 
@@ -79,4 +82,5 @@ first sync transport. The [platform plan](docs/design/platforms.md) records the
 shared core, native shells and distribution choices. The [model roadmap](docs/design/model-roadmap.md)
 lists the fixtures to run before committing to the rest of the schema.
 [Reading an EPUB](docs/design/epub-reading.md) says how a chapter is drawn and
-where untrusted book content stops.
+where untrusted book content stops. [Protected books](docs/design/protected-books.md)
+says how a locked EPUB is recognised, kept and explained.

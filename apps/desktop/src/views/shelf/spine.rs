@@ -43,7 +43,9 @@ glib::wrapper! {
 }
 
 pub(crate) fn state_label(book: &BrowseRow) -> String {
-    if super::super::finished(book.progress) {
+    if let Some(protection) = book.protection {
+        super::super::locked_by(protection).into()
+    } else if super::super::finished(book.progress) {
         "Finished".into()
     } else {
         super::super::percent(book.progress)

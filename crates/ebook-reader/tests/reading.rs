@@ -41,7 +41,7 @@ fn inspect_returns_import_metadata_for_epub3() {
     );
     assert_eq!(m.languages, ["en"]);
     assert_eq!(m.epub_version.as_deref(), Some("3.0"));
-    assert!(!m.protected);
+    assert_eq!(m.protection, None);
 }
 
 /// M1, M2: the same from an EPUB 2 package with `opf:` attributes.

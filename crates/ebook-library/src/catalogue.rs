@@ -17,6 +17,16 @@ pub(crate) fn open(path: &Path) -> Result<Connection> {
             )?
         {
             db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL")?;
+            // Every book in a catalogue made before the column was imported
+            // before locked books could be, so an empty column is right.
+            let has_protection: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('book') WHERE name='protection')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_protection {
+                db.execute_batch("ALTER TABLE book ADD COLUMN protection TEXT")?;
+            }
             identify(&db)?;
             return Ok(db);
         }
@@ -102,7 +112,8 @@ pub(crate) fn project(db: &Connection, b: &Book, keys: &sortkey::Keys) -> Result
             cover.map(|c| &c.digest),
             b.version_id,
             m.right_to_left,
-            survey.map(|s| s.version)
+            survey.map(|s| s.version),
+            m.protection.map(Protection::name)
         ],
         |r| r.get(0),
     )?;

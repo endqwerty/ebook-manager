@@ -1,5 +1,8 @@
 //! The cover grid: a `GtkGridView` whose cell is a cover over a caption.
-use super::{BookCell, Shared, finished, finished_mark, item_factory, spoken, truncating};
+use super::{
+    BookCell, Shared, finished, finished_mark, item_factory, lock_mark, show_lock, spoken,
+    truncating,
+};
 use crate::{
     browse::BookListModel,
     cover::{Cover, Kind},
@@ -66,9 +69,11 @@ pub fn build(model: &BookListModel, shared: &Shared) -> gtk::GridView {
         author.set_hexpand(true);
         // The mark has a slot of its own, so only the name is cut short.
         let done = finished_mark();
+        let lock = lock_mark();
         let byline = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         byline.append(&author);
         byline.append(&done);
+        byline.append(&lock);
         let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
         text.set_valign(gtk::Align::Start);
         text.append(&title);
@@ -102,6 +107,7 @@ pub fn build(model: &BookListModel, shared: &Shared) -> gtk::GridView {
             title.set_text(book.map_or("", |book| &book.title));
             author.set_text(book.map_or("", |book| &book.authors));
             done.set_visible(book.is_some_and(|book| finished(book.progress)));
+            show_lock(&lock, book);
             if let Some(item) = weak.upgrade() {
                 item.set_accessible_label(&book.map(|book| spoken(book)).unwrap_or_default());
             }

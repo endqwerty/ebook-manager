@@ -180,6 +180,7 @@ impl Library {
                 || (self.shown() == ViewKind::Shelf
                     && self.pages.visible_child_name().as_deref() == Some("none")
                     && !self.search_bar.is_search_mode()),
+            moves: self.moved.get(),
         }
     }
 
@@ -543,7 +544,12 @@ impl Library {
             match library.store.run(move |lib| lib.book(&id)).await {
                 Ok(book) => {
                     library.close_context_menu();
-                    reader::open_in(&library.window, &library.store, &Rc::new(book));
+                    match book.imported.protection {
+                        Some(protection) => {
+                            reader::refuse_locked(&library.window, &book.title, protection)
+                        }
+                        None => reader::open_in(&library.window, &library.store, &Rc::new(book)),
+                    }
                 }
                 Err(e) => notice(
                     &library.window,
@@ -1664,6 +1670,9 @@ pub fn open(app: &adw::Application) {
     let weak = Rc::downgrade(&library);
     leave.connect_key_pressed(move |_, key, _, _| match weak.upgrade() {
         Some(library) if key == gtk::gdk::Key::Down && library.model.n_items() > 0 => {
+            // The search field is outside the books, so the reader moving
+            // into them is counted here.
+            library.moved.set(library.moved.get() + 1);
             // Arriving from the search field selects, as moving between
             // books with the arrow keys does.
             if library.model.selected_count() == 0 {

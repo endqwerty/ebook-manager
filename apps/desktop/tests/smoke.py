@@ -73,6 +73,86 @@ def epub(path, revised=False):
             )
 
 
+def locked_epubs(folder):
+    """A book locked by Adobe's rights file with a readable package, and one
+    whose every archive entry carries the ZIP encryption flag."""
+    folder.mkdir()
+    sealed = folder / "Sealed Map.epub"
+    epub(sealed)
+    with ZipFile(sealed) as archive:
+        entries = [(i.filename, archive.read(i.filename)) for i in archive.infolist()]
+    with ZipFile(sealed, "w", ZIP_DEFLATED) as archive:
+        for name, data in entries:
+            if name == "book.opf":
+                data = data.replace(b"The Lantern Atlas", b"The Sealed Map")
+            archive.writestr(name, data, ZIP_STORED if name == "mimetype" else ZIP_DEFLATED)
+        archive.writestr(
+            "META-INF/rights.xml",
+            '<adept:rights xmlns:adept="http://ns.adobe.com/adept"/>',
+        )
+        archive.writestr(
+            "META-INF/encryption.xml",
+            '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" '
+            'xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData>'
+            '<enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/>'
+            '<enc:CipherData><enc:CipherReference URI="a.xhtml"/></enc:CipherData>'
+            "</enc:EncryptedData></encryption>",
+        )
+    vault = folder / "Vault.epub"
+    epub(vault)
+    data = bytearray(vault.read_bytes())
+    # Bit 0 of the general-purpose flags, in every local and central header.
+    for signature, offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+        at = data.find(signature)
+        while at != -1:
+            data[at + offset] |= 1
+            at = data.find(signature, at + 4)
+    vault.write_bytes(bytes(data))
+
+
+def locked_books(root):
+    """Locked books are kept, named with their lock in every view, and Read
+    says why they cannot be opened instead of opening them."""
+    locked_epubs(root / "Locked")
+    focus("Ebook Manager")
+    key("ctrl+shift+o")
+    picker(root / "Locked", "Choose a folder of EPUBs")
+    find("Import complete")
+    find("Added ·", "label", contains=True)
+    click("Done")
+    focus("Ebook Manager")
+    key("Escape")
+    find(f"{len(GALLERY) + 2} books")
+    for words, name in [
+        ("vault", "Vault, Locked by a password"),
+        ("sealed", "The Sealed Map, Mira Field, Locked by Adobe"),
+    ]:
+        focus("Ebook Manager")
+        key("Escape")
+        search(words)
+        find(name, parent=find("Bookshelf"))
+    key("ctrl+1")
+    find("The Sealed Map, Mira Field, Locked by Adobe")
+    key("ctrl+3")
+    find("The Sealed Map, Mira Field, Locked by Adobe", "table row", contains=True)
+    key("ctrl+4")
+    find("Bookshelf")
+    select_book("sealed")
+    key("Return")
+    alert = find("", "dialog")
+    find("Can\u2019t open The Sealed Map", parent=alert, contains=True)
+    find("It is locked by Adobe.", parent=alert, contains=True)
+    buttons = [n.get_name() for n in walk(alert) if n.get_role_name() == "button"]
+    assert buttons == ["Close"], buttons
+    click("Close", alert)
+    gone("The Sealed Map", role="frame")
+    print(
+        "PASS locked books are kept, said with their lock in the shelf, grid and table, "
+        "and Read says why and offers only Close",
+        flush=True,
+    )
+
+
 def png(width, height, pixel):
     """A PNG whose colour at each point is `pixel(x, y)`, with x and y from 0 to 1."""
     rows = b"".join(
@@ -1472,6 +1552,7 @@ def shelf_only(binary, evidence, root):
             "PASS shelf and author sort on restart, keyboard read and export",
             flush=True,
         )
+        locked_books(root)
     finally:
         if proc.poll() is None:
             stop(proc)

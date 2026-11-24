@@ -1,8 +1,8 @@
 //! The list: a `GtkListView` whose row is a small cover, three lines of
 //! text and one short fact at the trailing edge.
 use super::{
-    BookCell, Shared, fact, finished, finished_mark, item_factory, percent, series, spoken,
-    truncating,
+    BookCell, Shared, fact, finished, finished_mark, item_factory, lock_mark, percent, series,
+    show_lock, spoken, truncating,
 };
 use crate::{
     browse::BookListModel,
@@ -55,12 +55,14 @@ pub fn build(model: &BookListModel, shared: &Shared) -> gtk::ListView {
         said.add_css_class("dimmed");
         said.add_css_class("numeric");
         let done = finished_mark();
+        let lock = lock_mark();
         // The separator starts at the text's edge and not under the cover.
         let text = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         text.add_css_class("book-row-text");
         text.append(&lines);
         text.append(&said);
         text.append(&done);
+        text.append(&lock);
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         content.set_margin_start(EDGE);
         content.append(&cover);
@@ -82,6 +84,7 @@ pub fn build(model: &BookListModel, shared: &Shared) -> gtk::ListView {
                     .unwrap_or_default(),
             );
             done.set_visible(!dated && book.is_some_and(|book| finished(book.progress)));
+            show_lock(&lock, book);
             if let Some(item) = weak.upgrade() {
                 item.set_accessible_label(&book.map(|book| spoken(book)).unwrap_or_default());
             }
@@ -114,6 +117,7 @@ mod tests {
             cover_rgb: None,
             spine_rgb: None,
             right_to_left: false,
+            protection: None,
         }
     }
 

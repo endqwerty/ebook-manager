@@ -22,7 +22,7 @@ let chapter = book.read_chapter(0)?;                  // blocks of text
 ```
 
 `inspect` and `open` are separate on purpose: a book can import and still
-refuse to open, for example when `Metadata::protected` is set.
+refuse to open, for example when `Metadata::protection` names a scheme.
 
 `survey` reads every linear chapter and decodes the cover, so it takes longer
 than `inspect`: tens of milliseconds for a novel in a release build. Its two
@@ -40,7 +40,8 @@ if let Some(SurveyedCover { thumbnail, average, spine }) = cover {
 
 An error from `survey` means the helper gave no answer (it timed out,
 crashed, or the file is not a readable EPUB); asking again later may work.
-A protected book surveys as `{ words: None, cover: None }`.
+A protected book surveys with `words: None`, and with its cover only when the
+cover's file is not encrypted.
 
 Following a link or contents entry, and resuming:
 

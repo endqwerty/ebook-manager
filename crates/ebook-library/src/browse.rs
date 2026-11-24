@@ -138,6 +138,7 @@ pub struct BrowseRow {
     pub cover_rgb: Option<u32>,
     pub spine_rgb: Option<u32>,
     pub right_to_left: bool,
+    pub protection: Option<Protection>,
 }
 pub struct ShelfStrip {
     pub thickness: Box<[u8]>,
@@ -194,7 +195,7 @@ fn counter(db: &Connection) -> Result<i64> {
     )
 }
 fn page(db: &Connection, ids: &[u32]) -> Result<Vec<BrowseRow>> {
-    let mut stmt=db.prepare_cached("SELECT id,version_id,title,authors,author_sort,series,coalesce(position,''),added,published,last_read,progress,cover_digest,cover_rgb,spine_rgb,rtl FROM book WHERE n=?")?;
+    let mut stmt=db.prepare_cached("SELECT id,version_id,title,authors,author_sort,series,coalesce(position,''),added,published,last_read,progress,cover_digest,cover_rgb,spine_rgb,rtl,protection FROM book WHERE n=?")?;
     ids.iter()
         .map(|n| {
             Ok(stmt.query_row([n], |r| {
@@ -215,6 +216,9 @@ fn page(db: &Connection, ids: &[u32]) -> Result<Vec<BrowseRow>> {
                     cover_rgb: r.get(12)?,
                     spine_rgb: r.get(13)?,
                     right_to_left: r.get(14)?,
+                    protection: r
+                        .get::<_, Option<String>>(15)?
+                        .and_then(|name| Protection::from_name(&name)),
                 })
             })?)
         })
