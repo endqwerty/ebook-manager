@@ -1,7 +1,7 @@
 //! The container file, the package document and the protection check.
 
 use super::archive::Archive;
-use super::xml::{parse_tree_checked, Element};
+use super::xml::{parse_tree_checked, parse_tree_complete, Element};
 use super::{clean_inline, encoding, paths, truncate_chars};
 use crate::model::{Author, Identifier, Limits, Metadata, Protection, SeriesMembership};
 use crate::wire::{WireError, WireErrorKind};
@@ -47,7 +47,8 @@ pub struct Package {
     /// Container path of the NCX, if declared.
     pub ncx: Option<String>,
     /// Container paths `META-INF/encryption.xml` lists, whatever their
-    /// algorithm.
+    /// algorithm, in lower case: the archive finds an entry whichever case
+    /// asks for it.
     pub encrypted: HashSet<String>,
 }
 
@@ -96,12 +97,13 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
         .next()
         .ok_or_else(|| WireError::invalid("the container names no package document"))?;
 
-    let (protection, encrypted) = protection(archive, limits)?;
-
     let doc = match read_tree(archive, &opf_path, limits.max_package_bytes) {
         Err(e) if e.kind == WireErrorKind::Protected => return Ok(Package::sealed()),
         other => other?,
     };
+    // After the package, so a marker that does not fit the unpacking
+    // allowance costs only the lock's name and never the book's metadata.
+    let (protection, encrypted) = protection(archive, limits)?;
     let package = doc
         .find("package")
         .ok_or_else(|| WireError::invalid("the package document has no package element"))?;
@@ -231,9 +233,10 @@ fn protection(
 ) -> Result<(Option<Protection>, HashSet<String>), WireError> {
     // A marker that cannot be read still says the book is locked.
     let marker = |archive: &mut Archive, path| {
-        archive
-            .contains(path)
-            .then(|| read_tree(archive, path, limits.max_package_bytes).ok())
+        archive.contains(path).then(|| {
+            let bytes = archive.read(path, limits.max_package_bytes).ok()?;
+            parse_tree_complete(&encoding::decode(&bytes).ok()?)
+        })
     };
     let mut encrypted = HashSet::new();
     let mut locked = archive.has_encrypted_entries();
@@ -255,7 +258,7 @@ fn protection(
                     .and_then(|r| r.attr_local("uri"))
                     .and_then(|uri| paths::resolve("", uri))
                 {
-                    encrypted.insert(local.path);
+                    encrypted.insert(local.path.to_lowercase());
                 }
             }
         }

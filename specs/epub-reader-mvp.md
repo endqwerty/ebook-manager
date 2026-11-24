@@ -90,8 +90,10 @@ and media-overlay books, and every platform other than native Linux packages.
   metadata is still returned so it can be imported and shown as locked. When
   the container file or the package is itself ZIP-encrypted, the metadata is
   empty and the scheme is a password. An encryption list or rights file that
-  cannot be read, because it is encrypted, malformed or over a limit, still
-  marks the book as locked.
+  cannot be read, because it is encrypted, malformed, cut short or over a
+  limit, still marks the book as locked. The package is read before these
+  files, so a marker that does not fit the unpacking allowance never costs the
+  metadata.
 - **M5** Series come from EPUB 3 `belongs-to-collection` entries whose
   `collection-type` is `series`, in package order, each with its
   `group-position` as text when given. Collections of another type are left

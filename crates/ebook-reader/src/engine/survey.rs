@@ -14,7 +14,7 @@ pub fn survey(archive: &mut Archive, package: &Package, limits: &Limits) -> Wire
         let open = package
             .cover
             .as_ref()
-            .is_some_and(|c| !package.encrypted.contains(&c.path));
+            .is_some_and(|c| !package.encrypted.contains(&c.path.to_lowercase()));
         return WireSurvey {
             words: None,
             cover: open
