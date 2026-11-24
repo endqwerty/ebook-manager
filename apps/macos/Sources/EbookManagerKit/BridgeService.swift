@@ -1,6 +1,8 @@
 import EbookBridge
 import Foundation
 
+extension BookDetail: Identifiable {}
+
 extension BridgeError {
     public var userMessage: String {
         switch self {

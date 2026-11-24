@@ -9,6 +9,8 @@ if ! command -v cargo >/dev/null 2>&1 && [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
+export MACOSX_DEPLOYMENT_TARGET=14.0
+
 RUST_LIB_DIR="$SCRIPT_DIR/build/rust"
 FFI_INCLUDE_DIR="$SCRIPT_DIR/Sources/ebook_bridgeFFI/include"
 BRIDGE_SWIFT_DIR="$SCRIPT_DIR/Sources/EbookBridge"

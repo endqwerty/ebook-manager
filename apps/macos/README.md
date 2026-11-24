@@ -25,8 +25,23 @@ at a scratch library folder instead of the default
 `Ebook Manager.app/Contents/Resources/` without modifying or forking either
 file. Both WebKitGTK 6.0 and `WKWebView` use `window.webkit.messageHandlers.reader.postMessage`
 and `callAsyncJavaScript` in a dedicated script world (`WKContentWorld`), so no
-adaptation to `reader.js` or `reader.css` was needed. During `swift test`,
-`ReaderAssets` loads the same two files directly from `apps/desktop/src/reader/`.
+edits to `reader.js` or `reader.css` were needed. Two `WKWebView` differences
+are handled in `ReaderWebController` around those unchanged files:
+
+1. Setting `WKWebpagePreferences.allowsContentJavaScript = false` in `WKWebView`
+   also disables `WKUserScript` in isolated `WKContentWorld`s (unlike WebKitGTK's
+   `enable-javascript-markup = false`). Instead, every `ebook:` chapter response
+   includes a `Content-Security-Policy` (`default-src 'none'; img-src ebook:;
+   style-src ebook: 'unsafe-inline'; form-action 'none'; base-uri 'none'`) both
+   in its HTTP header and `<meta http-equiv="Content-Security-Policy">`, which
+   blocks all inline `<script>` elements, event-handler attributes and external
+   scripts in the page world while `reader.js` runs in its own `WKContentWorld`.
+2. `WKWebView` has no public `WKUserStyleSheet` API, so `/s/reader.css` is served
+   on the per-view `ebook:` scheme and linked from the wrapper `<head>`. Also,
+   when a Mac runs headless or with its display asleep, WebKit pauses
+   `requestAnimationFrame`; a small `.atDocumentStart` shim in the reader's
+   `WKContentWorld` falls back to a 32 ms timer when `requestAnimationFrame` does
+   not fire, so `reader.js` never stalls on headless runners.
 
 ## What callers and users can rely on
 

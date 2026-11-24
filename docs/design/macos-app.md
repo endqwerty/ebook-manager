@@ -85,10 +85,12 @@ view switch (grid, list) and sort; the grid is an AppKit collection view once
 SwiftUI's lazy grid falls short at 100,000 books. The
 [interface design](interface.md) governs what is drawn.
 
-The reader is a WKWebView with JavaScript off for book content. A
+The reader is a WKWebView with book scripts blocked by Content Security Policy
+(`default-src 'none'`, because `WKWebpagePreferences.allowsContentJavaScript =
+false` also disables `WKUserScript` in isolated `WKContentWorld`s). A
 `WKURLSchemeHandler` on a scheme of its own serves a chapter's markup wrapped
-in the app's document as `application/xhtml+xml`, and pictures by id. The
-reader's own script and style come from
+in the app's document as `application/xhtml+xml`, `/s/reader.css`, and pictures
+by id. The reader's own script and style come from
 [`apps/desktop/src/reader`](../../apps/desktop/src/reader/README.md), shared,
 not copied. No other request leaves the view: a content rule list blocks every
 URL outside the scheme.

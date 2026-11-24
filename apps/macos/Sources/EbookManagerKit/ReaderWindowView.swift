@@ -1,4 +1,5 @@
 import AppKit
+import EbookBridge
 import EbookShellCore
 import SwiftUI
 import WebKit
@@ -501,6 +502,7 @@ final class ReaderWindowCoordinator: NSObject, NSWindowDelegate {
     func present() {
         let hosting = NSHostingController(rootView: ReaderWindowView(model: viewModel))
         let win = NSWindow(contentViewController: hosting)
+        win.isReleasedWhenClosed = false
         win.title = viewModel.handle.title
         win.setContentSize(NSSize(width: 820, height: 680))
         win.minSize = NSSize(width: 480, height: 380)

@@ -366,9 +366,10 @@ public final class LibraryViewModel: ObservableObject {
             lockedAlert = LockedAlertModel(heading: notice.heading, body: notice.body)
             return
         }
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             do {
-                let handle = try await bridge.openBook(bookId: bookId)
+                let handle = try await self.bridge.openBook(bookId: bookId)
                 let saved = try? await handle.loadPlace()
                 let coordinator = ReaderWindowCoordinator(
                     handle: handle,
@@ -378,23 +379,23 @@ public final class LibraryViewModel: ObservableObject {
                         self?.reloadBrowse()
                     }
                 )
-                openReaderControllers[bookId] = coordinator
+                self.openReaderControllers[bookId] = coordinator
                 coordinator.present()
-            } catch let BridgeError.Locked(_, _, _) {
-                if let detail = try? await bridge.book(id: bookId),
+            } catch BridgeError.Locked {
+                if let detail = try? await self.bridge.book(id: bookId),
                    let protection = detail.protection
                 {
                     let notice = lockedBookSummary(title: detail.title, protection: protection)
-                    lockedAlert = LockedAlertModel(heading: notice.heading, body: notice.body)
+                    self.lockedAlert = LockedAlertModel(heading: notice.heading, body: notice.body)
                 } else {
                     let notice = lockedBookSummary(title: "this book", protection: .unknown)
-                    lockedAlert = LockedAlertModel(heading: notice.heading, body: notice.body)
+                    self.lockedAlert = LockedAlertModel(heading: notice.heading, body: notice.body)
                 }
-                reloadBrowse()
+                self.reloadBrowse()
             } catch let err as BridgeError {
-                noticeAlert = SimpleNoticeModel(heading: "Couldn’t Open Book", body: err.userMessage)
+                self.noticeAlert = SimpleNoticeModel(heading: "Couldn’t Open Book", body: err.userMessage)
             } catch {
-                noticeAlert = SimpleNoticeModel(heading: "Couldn’t Open Book", body: error.localizedDescription)
+                self.noticeAlert = SimpleNoticeModel(heading: "Couldn’t Open Book", body: error.localizedDescription)
             }
         }
     }

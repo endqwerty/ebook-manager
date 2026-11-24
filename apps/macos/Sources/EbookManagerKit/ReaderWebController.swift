@@ -1,3 +1,4 @@
+import EbookBridge
 import EbookShellCore
 import Foundation
 import WebKit
@@ -93,7 +94,7 @@ public enum ReaderWebEvent: Equatable, Sendable {
 private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
     weak var owner: ReaderWebController?
 
-    init(owner: ReaderWebController) {
+    init(owner: ReaderWebController? = nil) {
         self.owner = owner
     }
 
@@ -107,7 +108,7 @@ private final class EbookSchemeHandler: NSObject, WKURLSchemeHandler {
     weak var owner: ReaderWebController?
     private var activeTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    init(owner: ReaderWebController) {
+    init(owner: ReaderWebController? = nil) {
         self.owner = owner
     }
 
@@ -258,6 +259,45 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
     private static let ruleListId = "ebook-only-v1"
     private static var cachedRuleList: WKContentRuleList?
 
+    // Headless macOS test runners and sleeping displays suspend WebKit's display link; fall back after 32 ms so `reader.js` never stalls.
+    private static let rafFallbackShim = """
+    (() => {
+        "use strict";
+        const nativeRAF = window.requestAnimationFrame.bind(window);
+        const nativeCancel = window.cancelAnimationFrame.bind(window);
+        const active = new Map();
+        let nextId = 1;
+        window.requestAnimationFrame = (callback) => {
+            const id = nextId++;
+            let finished = false;
+            const rafId = nativeRAF((timestamp) => {
+                if (finished) return;
+                finished = true;
+                const entry = active.get(id);
+                if (entry) clearTimeout(entry[1]);
+                active.delete(id);
+                callback(timestamp);
+            });
+            const timerId = setTimeout(() => {
+                if (finished) return;
+                finished = true;
+                nativeCancel(rafId);
+                active.delete(id);
+                callback(performance.now());
+            }, 32);
+            active.set(id, [rafId, timerId]);
+            return id;
+        };
+        window.cancelAnimationFrame = (id) => {
+            const entry = active.get(id);
+            if (!entry) return;
+            active.delete(id);
+            nativeCancel(entry[0]);
+            clearTimeout(entry[1]);
+        };
+    })();
+    """
+
     public let webView: WKWebView
     let token: String
     let source: any ReaderChapterSource
@@ -343,13 +383,21 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
         config.websiteDataStore = .nonPersistent()
         config.suppressesIncrementalRendering = false
 
+        // WKWebpagePreferences.allowsContentJavaScript also disables WKUserScript in isolated content worlds; CSP default-src 'none' blocks all markup scripts instead.
         let pagePrefs = WKWebpagePreferences()
-        pagePrefs.allowsContentJavaScript = false
+        pagePrefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = pagePrefs
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
         let contentController = WKUserContentController()
         contentController.add(ruleList)
+        let shimScript = WKUserScript(
+            source: Self.rafFallbackShim,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true,
+            in: readerWorld
+        )
+        contentController.addUserScript(shimScript)
         let userScript = WKUserScript(
             source: scriptText,
             injectionTime: .atDocumentEnd,
@@ -618,7 +666,6 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
         preferences: WKWebpagePreferences,
         decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
     ) {
-        preferences.allowsContentJavaScript = false
         if let url = navigationAction.request.url,
            url == allowedNavigationURL
         {
@@ -657,5 +704,15 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
         watchdogTask = nil
         currentLoad = nil
         onEvent(.failed("The part of the app that draws the page stopped."))
+    }
+
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        reportImmediateFailure(error.localizedDescription)
+    }
+
+    public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        reportImmediateFailure(error.localizedDescription)
     }
 }

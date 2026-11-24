@@ -78,7 +78,7 @@ public enum ReaderSchemeRouter {
         let dir = rightToLeft ? "rtl" : "ltr"
         return """
         <?xml version="1.0" encoding="utf-8"?>
-        <html xmlns="http://www.w3.org/1999/xhtml"\(langAttr) dir="\(dir)" style="\(escapeXMLAttribute(validStyle))"><head><title>Chapter</title><link rel="stylesheet" href="/s/reader.css"/></head><body>\(bodyMarkup)</body></html>
+        <html xmlns="http://www.w3.org/1999/xhtml"\(langAttr) dir="\(dir)" style="\(escapeXMLAttribute(validStyle))"><head><meta http-equiv="Content-Security-Policy" content="\(contentSecurityPolicy)"/><title>Chapter</title><link rel="stylesheet" href="/s/reader.css"/></head><body>\(bodyMarkup)</body></html>
         """
     }
 

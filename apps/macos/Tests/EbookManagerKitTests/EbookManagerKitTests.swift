@@ -1,3 +1,5 @@
+import AppKit
+import Compression
 import Darwin
 import EbookBridge
 @testable import EbookManagerKit
@@ -82,15 +84,19 @@ private final class HostileChapterSource: ReaderChapterSource {
     }
 
     func loadChapter(index: UInt32) async throws -> ServedChapter {
+        let repeatedParagraphs = (1 ... 30)
+            .map { "<p>Paragraph \($0) with enough words to span multiple pages inside the reader column.</p>" }
+            .joined()
         let markup = """
         <h1>Chapter One</h1>
         <script type="text/javascript">document.title = "PWNED"; fetch("http://127.0.0.1:\(port)/script");</script>
-        <p onclick="document.title='CLICKED'">Safe paragraph text inside isolated WKWebView.</p>
+        <p id="target" onclick="document.title='CLICKED'">Safe paragraph text inside isolated WKWebView.</p>
         <img src="http://127.0.0.1:\(port)/remote.png" alt="Blocked remote image"/>
+        \(repeatedParagraphs)
         """
         return ServedChapter(
             markup: markup,
-            length: 62,
+            length: 4000,
             language: "en",
             rightToLeft: false,
             title: "Chapter One",
@@ -103,30 +109,236 @@ private final class HostileChapterSource: ReaderChapterSource {
     }
 }
 
+private enum StoredZipBuilder {
+    static func build(entries: [(name: String, data: Data)]) -> Data {
+        var out = Data()
+        var centralDirectory = Data()
+        var offsets: [UInt32] = []
+
+        for entry in entries {
+            offsets.append(UInt32(out.count))
+            let nameBytes = Data(entry.name.utf8)
+            let crc = crc32(entry.data)
+            let size = UInt32(entry.data.count)
+
+            out.appendUInt32LE(0x0403_4B50)
+            out.appendUInt16LE(20)
+            out.appendUInt16LE(0)
+            out.appendUInt16LE(0)
+            out.appendUInt16LE(0)
+            out.appendUInt16LE(0)
+            out.appendUInt32LE(crc)
+            out.appendUInt32LE(size)
+            out.appendUInt32LE(size)
+            out.appendUInt16LE(UInt16(nameBytes.count))
+            out.appendUInt16LE(0)
+            out.append(nameBytes)
+            out.append(entry.data)
+        }
+
+        let cdOffset = UInt32(out.count)
+        for (index, entry) in entries.enumerated() {
+            let nameBytes = Data(entry.name.utf8)
+            let crc = crc32(entry.data)
+            let size = UInt32(entry.data.count)
+
+            centralDirectory.appendUInt32LE(0x0201_4B50)
+            centralDirectory.appendUInt16LE(20)
+            centralDirectory.appendUInt16LE(20)
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt32LE(crc)
+            centralDirectory.appendUInt32LE(size)
+            centralDirectory.appendUInt32LE(size)
+            centralDirectory.appendUInt16LE(UInt16(nameBytes.count))
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt16LE(0)
+            centralDirectory.appendUInt32LE(0)
+            centralDirectory.appendUInt32LE(offsets[index])
+            centralDirectory.append(nameBytes)
+        }
+
+        out.append(centralDirectory)
+        out.appendUInt32LE(0x0605_4B50)
+        out.appendUInt16LE(0)
+        out.appendUInt16LE(0)
+        out.appendUInt16LE(UInt16(entries.count))
+        out.appendUInt16LE(UInt16(entries.count))
+        out.appendUInt32LE(UInt32(centralDirectory.count))
+        out.appendUInt32LE(cdOffset)
+        out.appendUInt16LE(0)
+        return out
+    }
+
+    private static func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0 ..< 8 {
+                if (crc & 1) != 0 {
+                    crc = (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >>= 1
+                }
+            }
+        }
+        return ~crc
+    }
+
+    static func syntheticEPUB(title: String, extraText: String) -> Data {
+        let container = """
+        <?xml version="1.0"?>
+        <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+          <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+        </container>
+        """
+        let opf = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:identifier id="pub-id">urn:uuid:aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb</dc:identifier>
+            <dc:title>\(title)</dc:title>
+            <dc:creator>Mira Field</dc:creator>
+            <dc:language>en</dc:language>
+            <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
+          </metadata>
+          <manifest>
+            <item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>
+            <item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/>
+          </manifest>
+          <spine>
+            <itemref idref="c1"/>
+            <itemref idref="c2"/>
+          </spine>
+        </package>
+        """
+        let c1 = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head><body><h1>One</h1><p>Opening chapter.</p></body></html>
+        """
+        let c2 = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <html xmlns="http://www.w3.org/1999/xhtml"><head><title>Two</title></head><body><h1>Two</h1><p>Second chapter \(extraText).</p></body></html>
+        """
+        return build(entries: [
+            ("mimetype", Data("application/epub+zip".utf8)),
+            ("META-INF/container.xml", Data(container.utf8)),
+            ("OEBPS/content.opf", Data(opf.utf8)),
+            ("OEBPS/c1.xhtml", Data(c1.utf8)),
+            ("OEBPS/c2.xhtml", Data(c2.utf8)),
+        ])
+    }
+}
+
+private extension Data {
+    mutating func appendUInt16LE(_ value: UInt16) {
+        var le = value.littleEndian
+        Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
+    }
+
+    mutating func appendUInt32LE(_ value: UInt32) {
+        var le = value.littleEndian
+        Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
+    }
+}
+
 final class EbookManagerKitTests: XCTestCase {
     @MainActor
     func testWKWebViewBlocksBookScriptsAndRemoteRequestsWhileRunningReaderScript() async throws {
+        _ = NSApplication.shared
         let server = try LocalProbeServer()
         defer { server.stop() }
 
         let source = HostileChapterSource(port: server.port)
-        let landedPlace = expectation(description: "reader script landed and reported place")
-        var receivedPlace: PagePlaceReport?
+        let settled = expectation(description: "reader script landed and reported place")
+        var places: [PagePlaceReport] = []
+        var failureMessage: String?
 
         let controller = try await ReaderWebController.create(source: source) { event in
-            if case let .place(report) = event, receivedPlace == nil {
-                receivedPlace = report
-                landedPlace.fulfill()
+            switch event {
+            case let .place(report):
+                places.append(report)
+                if places.count == 1 {
+                    settled.fulfill()
+                }
+            case let .failed(reason) where places.isEmpty && failureMessage == nil:
+                failureMessage = reason
+                settled.fulfill()
+            default:
+                break
             }
         }
-        defer { controller.shutDown() }
+        let hostWindow = NSWindow(
+            contentRect: CGRect(x: 80, y: 80, width: 520, height: 420),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        hostWindow.isReleasedWhenClosed = false
+        hostWindow.alphaValue = 0.0
+        hostWindow.contentView = controller.webView
+        hostWindow.orderBack(nil)
 
         _ = controller.load(chapter: 0, landing: .start)
-        await fulfillment(of: [landedPlace], timeout: 10.0)
-        try await Task.sleep(nanoseconds: 250_000_000)
+        await fulfillment(of: [settled], timeout: 10.0)
 
-        XCTAssertNotNil(receivedPlace)
+        XCTAssertNil(failureMessage, "Unexpected WebKit load failure: \(failureMessage ?? "")")
+        XCTAssertEqual(places.first?.page, 0)
+        XCTAssertGreaterThan(places.first?.pages ?? 0, 1)
+
+        let moved = await controller.turn(by: 1, animate: false)
+        XCTAssertTrue(moved)
+        XCTAssertEqual(places.last?.page, 1)
+
+        try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(server.hits, 0, "No remote image or script request may leave the reader WKWebView")
-        XCTAssertNotEqual(controller.webView.title, "PWNED", "Inline book script must not execute")
+        let titleInPage = try await controller.evaluateInPageWorld("document.getElementById('target').click(); return document.title") as? String
+        XCTAssertEqual(titleInPage, "Chapter", "Inline book script and onclick handler must not execute under CSP")
+
+        controller.shutDown()
+        hostWindow.contentView = nil
+        hostWindow.orderOut(nil)
+    }
+
+    func testBridgeServiceEndToEndOnMacOS() async throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ebook-macos-kit-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let libDir = scratch.appendingPathComponent("library", isDirectory: true).path
+        let exportDir = scratch.appendingPathComponent("device", isDirectory: true)
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
+        let bookURL = scratch.appendingPathComponent("harbor.epub")
+        try StoredZipBuilder.syntheticEPUB(title: "Harbor Watch", extraText: "first edition").write(to: bookURL)
+
+        let bookId: String
+        do {
+            let service = BridgeService(directory: libDir)
+            let imported = try await service.importPaths([bookURL.path])
+            XCTAssertEqual(imported.count, 1)
+            guard case let .added(book) = imported[0].outcome else {
+                return XCTFail("Expected added book")
+            }
+            bookId = book.id
+            let handle = try await service.openBook(bookId: book.id)
+            await handle.savePlace(chapter: 1, offset: 7, page: 0, pages: 2)
+        }
+
+        let reopenedService = BridgeService(directory: libDir)
+        let reopenedHandle = try await reopenedService.openBook(bookId: bookId)
+        let restored = try await reopenedHandle.loadPlace()
+        XCTAssertEqual(restored?.chapter, 1)
+        XCTAssertEqual(restored?.offset, 7)
+
+        let firstExport = try await reopenedService.exportBook(bookId: bookId, destinationDir: exportDir.path)
+        if case .copied = firstExport {} else { XCTFail("Expected copied on first export") }
+        let secondExport = try await reopenedService.exportBook(bookId: bookId, destinationDir: exportDir.path)
+        if case .alreadyPresent = secondExport {} else { XCTFail("Expected alreadyPresent on second export") }
     }
 }
