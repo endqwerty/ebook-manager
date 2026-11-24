@@ -485,7 +485,7 @@ public struct LibraryWindowView: View {
                 }
                 .contextMenu(forSelectionType: String.self) { _ in
                 } primaryAction: { ids in
-                    if let first = ids.first {
+                    if ids.count == 1, let first = ids.first {
                         model.openBookForReading(bookId: first)
                     }
                 }
