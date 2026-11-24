@@ -60,6 +60,18 @@ than the library.
 - Above those results a line says how much of the library is indexed, such as
   "Searched the text of 1,102 of 1,284 books".
 - Escape clears the field and returns the place to what it showed.
+- **Go to (keyboard quick jump):** On pointer/keyboard platforms, a **Go to**
+  command (visible in the menu and listed in the platform shortcuts window, e.g.
+  `Ctrl+K` on Linux/Windows) opens a compact platform-native jump dialog over
+  a capped, indexed list of books, authors and series. `Return` navigates to the
+  author or series or reveals the book with its details (matching the app-wide
+  pattern where opening the reader is a deliberate action); secondary activation
+  (`Shift+Return`) opens the reader directly. `Escape` closes the dialog without
+  changing the current place's filter or scroll position and restores exact
+  focus; navigating back restores the originating filter, selection and scroll.
+  Results use a listbox with group headers, an announced result count, and row
+  names stating the kind ("Author, Herman Melville, 9 books"). Absent on
+  touch-only devices.
 
 ## Adding books
 
@@ -123,6 +135,59 @@ than the library.
   the change is made, a preview lists each book with the old and the new value
   side by side, the new one in the emphasised weight. The prominent action is
   Change, with the number of books, and the change can be undone.
+
+## Fetching metadata
+
+- Opened from Book details or Edit book (**Fetch metadata…**). Before or beside
+  the lookup, name the outgoing lookup terms and enabled source(s) (`PRIV-1`).
+- Proposed changes reuse bulk edit's old-and-new preview grammar: current and
+  proposed values side by side on wide windows, stacked as labelled groups on
+  phones and at text scale 1.5+. Each proposed value names its source and
+  confidence in the secondary colour ("From Open Library") and is marked by
+  weight and text, never colour alone.
+- **Safe defaults:** Only currently empty fields are checked by default. Fields
+  locked by the reader are unchecked and show their closed lock icon; checking
+  one explicitly unlocks it.
+- Cover candidates appear as a single-select row of 2:3 frames with pixel
+  dimensions in tabular figures and in each accessible name.
+- The prominent action carries the count ("Change 3 fields") and applies as one
+  undoable step.
+
+## Finding and merging duplicates
+
+- Opened from a menu command (**Find duplicates…**), not a permanent sidebar
+  place. Candidate groups appear in a list like Needs attention, naming the
+  match reason (identifier, normalized title/author, or content hash).
+- Selecting a group shows candidate books side by side (covers, formats, sizes,
+  reading progress, highlights/notes count, collections) with a persistent
+  **Not duplicates** button to dismiss false positives.
+- **No default primary:** Following the import duplicate sheet, no book is
+  pre-selected as primary.
+- State in plain words what happens to every file (merged books' files stay as
+  extra formats of the primary, or identical files move to the bin; no file is
+  silently deleted). Keep the furthest reading position while retaining other
+  positions in history and preserving all highlights/notes. The merge is one
+  undoable step; confirm first only if any part cannot be undone.
+
+## Reading log
+
+- **Reading log** sits under Browse in the sidebar (and in the phone's Browse
+  menu), with its screen title in the serif like any place.
+- **Editable chronological log:** Paged list grouped by month and year showing
+  small 2:3 covers, title, author, finish date (or "Reading" / neutral "Set
+  aside"), and re-read labels ("2nd read"). Readers can record a paper read,
+  log a re-read, and edit finish dates independently.
+- **Quiet statistics:** Tabular figures for the selected period (This year, All
+  time, or a specific year) counting manual finishes even when duration is
+  unknown. Monthly breakdown uses a plain table (or neutral secondary-colour
+  bars with text values)—never an accent-colour contribution heatmap.
+- **Goals and streaks without gamification:** An opt-in annual goal (off by
+  default) uses the cover progress grammar (2-unit hairline, separator track,
+  secondary-label fill) with no "behind pace" language. Streak figures
+  (`HIST-5`), when shown, are plain neutral numbers with no prompts, badges or
+  rewards.
+- **Privacy and export:** Data stays local, can be cleared from this screen
+  (`READ-76`), and exports in CSV and documented JSON (`HIST-8`).
 
 ## A device
 

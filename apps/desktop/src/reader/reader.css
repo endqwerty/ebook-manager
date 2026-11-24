@@ -20,6 +20,9 @@
 	--turn: slide;
 	/* "none" when the system asks for less motion. */
 	--motion: full;
+	--dark-images: original;
+	--line-focus: 0;
+	--focus-dim: 0.55;
 	/* A line of 60 to 70 characters, centred, never wider. */
 	--measure: 34em;
 	--edge: calc(48px * var(--margin));
@@ -95,6 +98,37 @@ img {
 	max-height: calc(100vh - 2 * var(--block)) !important;
 	object-fit: contain;
 	break-inside: avoid;
+}
+html[data-dark-images="dimmed"] img:not([data-original="1"]) {
+	filter: brightness(0.86);
+}
+html[data-dark-images="match"] img[data-lineart="1"]:not([data-original="1"]) {
+	filter: invert(1) hue-rotate(180deg) brightness(0.92);
+	mix-blend-mode: lighten;
+}
+.reader-ruler-mask,
+.reader-ruler-outline {
+	position: fixed !important;
+	left: 0 !important;
+	right: 0 !important;
+	pointer-events: none !important;
+	z-index: 9999 !important;
+	display: none;
+}
+.reader-ruler-mask {
+	background: var(--page) !important;
+}
+.reader-ruler-outline {
+	background: transparent !important;
+	border-top: 1px solid var(--ink) !important;
+	border-bottom: 1px solid var(--ink) !important;
+	box-sizing: border-box !important;
+}
+@media (prefers-reduced-motion: no-preference) {
+	html:not([data-motion="none"]) .reader-ruler-mask,
+	html:not([data-motion="none"]) .reader-ruler-outline {
+		transition: top 120ms ease, height 120ms ease;
+	}
 }
 figure, table, pre, blockquote { break-inside: avoid; }
 pre { white-space: pre-wrap; }

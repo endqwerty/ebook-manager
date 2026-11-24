@@ -3,8 +3,8 @@
 //! See docs/design/interface-reader.md, "Text settings".
 
 use super::settings::{
-    BLACK, Colour, GREY, LETTERS, LINES, Margin, PAPER, Rgb, SIZES, Settings, Turn, WEIGHTS, WHITE,
-    WORDS, contrast,
+    BLACK, Colour, DarkImages, FocusDim, GREY, LETTERS, LINES, LineFocus, Margin, PAPER, Rgb,
+    SIZES, Settings, Turn, WEIGHTS, WHITE, WORDS, contrast,
 };
 use gtk::gdk;
 use gtk::prelude::*;
@@ -460,6 +460,46 @@ pub fn build(
     }
     second.append(&row("Page turn", &turn));
 
+    let dark_images = gtk::DropDown::from_strings(&["As they are", "Dimmed", "Match the page"]);
+    {
+        let change = change.clone();
+        dark_images.connect_selected_notify(move |d| {
+            let chosen = [
+                DarkImages::Original,
+                DarkImages::Dimmed,
+                DarkImages::MatchPage,
+            ][d.selected().min(2) as usize];
+            change(&|s| s.dark_images = chosen);
+        });
+    }
+    second.append(&row("Images on dark pages", &dark_images));
+
+    let line_focus = gtk::DropDown::from_strings(&["Off", "1 line", "3 lines", "5 lines"]);
+    {
+        let change = change.clone();
+        line_focus.connect_selected_notify(move |d| {
+            let chosen = [
+                LineFocus::Off,
+                LineFocus::One,
+                LineFocus::Three,
+                LineFocus::Five,
+            ][d.selected().min(3) as usize];
+            change(&|s| s.line_focus = chosen);
+        });
+    }
+    second.append(&row("Line focus", &line_focus));
+
+    let focus_dim = gtk::DropDown::from_strings(&["Light", "Medium", "Strong"]);
+    {
+        let change = change.clone();
+        focus_dim.connect_selected_notify(move |d| {
+            let chosen =
+                [FocusDim::Light, FocusDim::Medium, FocusDim::Strong][d.selected().min(2) as usize];
+            change(&|s| s.focus_dim = chosen);
+        });
+    }
+    second.append(&row("Focus dimming", &focus_dim));
+
     let follow = gtk::Switch::new();
     second.append(&row("Page colour follows light and dark", &follow));
 
@@ -510,12 +550,15 @@ pub fn build(
     // after a reset, so the controls never show something else.
     let sync: Rc<dyn Fn()> = {
         let (settings, syncing, judge) = (settings.clone(), syncing.clone(), judge.clone());
-        let (font, weight, margin, turn, follow) = (
+        let (font, weight, margin, turn, follow, dark_images, line_focus, focus_dim) = (
             font.clone(),
             weight.clone(),
             margin.clone(),
             turn.clone(),
             follow.clone(),
+            dark_images.clone(),
+            line_focus.clone(),
+            focus_dim.clone(),
         );
         let (justify, hyphenate, columns) = (justify.clone(), hyphenate.clone(), columns.clone());
         let (page_colour, text_colour) = (page_colour.clone(), text_colour.clone());
@@ -548,6 +591,23 @@ pub fn build(
                 Turn::Fade => 1,
                 Turn::None => 2,
             });
+            dark_images.set_selected(match s.dark_images {
+                DarkImages::Original => 0,
+                DarkImages::Dimmed => 1,
+                DarkImages::MatchPage => 2,
+            });
+            line_focus.set_selected(match s.line_focus {
+                LineFocus::Off => 0,
+                LineFocus::One => 1,
+                LineFocus::Three => 2,
+                LineFocus::Five => 3,
+            });
+            focus_dim.set_selected(match s.focus_dim {
+                FocusDim::Light => 0,
+                FocusDim::Medium => 1,
+                FocusDim::Strong => 2,
+            });
+            focus_dim.set_sensitive(s.line_focus != LineFocus::Off);
             justify.set_active(s.justify);
             hyphenate.set_active(s.hyphenate);
             columns.set_active(s.two_columns);
