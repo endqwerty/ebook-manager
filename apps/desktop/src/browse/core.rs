@@ -504,7 +504,7 @@ impl Core {
                     && opening.reason == Placement::Refresh
                     && opening.query.shelf
                     && let Some((view, _, asked)) = &mut opening.arrived
-                    && *asked != now
+                    && !asked.same_place(&now)
                 {
                     // Keep showing the old books while the thread prepares
                     // the viewport the reader actually moved to.
@@ -564,7 +564,7 @@ impl Core {
                     },
                 });
                 match ranks {
-                    Ok(ranks) if now == asked => effects.push(Effect::Place(Placed {
+                    Ok(ranks) if now.same_place(&asked) => effects.push(Effect::Place(Placed {
                         anchors: asked,
                         current: ranks.first().copied().flatten(),
                         top: ranks.get(1).copied().flatten(),
