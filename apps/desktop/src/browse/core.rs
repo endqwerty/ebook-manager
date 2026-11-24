@@ -113,13 +113,14 @@ enum Locating {
     /// A view has opened, and will be shown when this is answered.
     Place { serial: u64 },
     /// The reader moved while their place was being found. The view is
-    /// shown, and this is where they had moved to. `since` is where the
-    /// new view stood when it was asked.
+    /// shown, and this is where they had moved to. `since` is how many
+    /// times the reader had moved when the new view went on screen. The
+    /// view's own layout changes what is on screen without them moving.
     Follow {
         token: ViewToken,
         anchors: Anchors,
         /// Unknown until the new view is on screen.
-        since: Option<Anchors>,
+        since: Option<u64>,
         reason: Placement,
     },
     /// Which of the selected books the view holds at all.
@@ -328,10 +329,10 @@ impl Core {
                 _ => effects.push(Effect::Gone),
             },
             Event::Swapped => {
-                let now = anchors();
+                let moves = anchors().moves;
                 for why in self.locating.values_mut() {
                     if let Locating::Follow { since, .. } = why {
-                        since.get_or_insert_with(|| now.clone());
+                        since.get_or_insert(moves);
                     }
                 }
             }
@@ -593,7 +594,7 @@ impl Core {
             }) => {
                 if let Ok(ranks) = ranks
                     && self.showing(token)
-                    && since.is_some_and(|since| anchors() == since)
+                    && since == Some(anchors().moves)
                 {
                     effects.push(Effect::Place(Placed {
                         anchors: was,
