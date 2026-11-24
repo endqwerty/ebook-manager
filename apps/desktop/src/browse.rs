@@ -58,6 +58,9 @@ pub struct Anchors {
     pub shelf_focus: Option<String>,
     /// A book holds the keyboard focus.
     pub focused: bool,
+    /// How many times the reader has scrolled, clicked or pressed a key in
+    /// the books.
+    pub moves: u64,
 }
 
 /// Why the open needs to place the reader.

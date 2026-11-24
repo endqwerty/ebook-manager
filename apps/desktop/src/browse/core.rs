@@ -921,6 +921,7 @@ mod tests {
             if was_opened && self.random(6) == 0 {
                 let current = fixture::id(self.random(u64::from(BOOKS)) as u32);
                 let top_offset = -(self.random(40) as f32);
+                let moves = self.anchors.borrow().moves + 1;
                 *self.anchors.borrow_mut() = Anchors {
                     shelf: Some(super::super::ShelfViewport {
                         first: self.random(BOOKS as u64) as u32,
@@ -931,6 +932,7 @@ mod tests {
                     top: Some(current),
                     top_offset,
                     focused: true,
+                    moves,
                 };
             }
         }
@@ -1038,6 +1040,7 @@ mod tests {
                 _ => {
                     let current = fixture::id(self.random(u64::from(BOOKS)) as u32);
                     let top_offset = -(self.random(40) as f32);
+                    let moves = self.anchors.borrow().moves + 1;
                     *self.anchors.borrow_mut() = Anchors {
                         shelf: Some(super::super::ShelfViewport {
                             first: self.random(BOOKS as u64) as u32,
@@ -1048,6 +1051,7 @@ mod tests {
                         top: Some(current),
                         top_offset,
                         focused: true,
+                        moves,
                     };
                 }
             }
@@ -1340,6 +1344,15 @@ mod tests {
                 pages: vec![],
             })
         };
+        let located_again = |effects: Vec<Effect>| {
+            effects
+                .iter()
+                .find_map(|e| match e {
+                    Effect::Send(Request::Locate { tag, .. }) => Some(*tag),
+                    _ => None,
+                })
+                .expect("one more look for the reader's place")
+        };
         // The reader does not move: they are placed with the swap.
         let tag = another(&mut core, Event::Refresh, &here);
         let effects = core.step(found(tag), &here);
@@ -1362,21 +1375,30 @@ mod tests {
         core.step(Event::Swapped, &here);
         let effects = core.step(found(follow), &here);
         assert!(matches!(&effects[..], [Effect::Place(placed)] if placed.anchors == moved(-10.0)));
+        // The new view's own layout changes what is on screen before the
+        // answer, but the reader does nothing: they are still placed.
+        let tag = another(&mut core, Event::Refresh, &here);
+        *at.borrow_mut() = moved(-10.0);
+        let follow = located_again(core.step(found(tag), &here));
+        *at.borrow_mut() = moved(0.0);
+        core.step(Event::Swapped, &here);
+        *at.borrow_mut() = Anchors {
+            top: Some("laid out".into()),
+            ..moved(0.0)
+        };
+        let effects = core.step(found(follow), &here);
+        assert!(matches!(&effects[..], [Effect::Place(placed)] if placed.anchors == moved(-10.0)));
         // The same, but they move again before the answer: nothing is
         // applied and nothing more is asked.
         let tag = another(&mut core, Event::Layout(Query::default()), &here);
         *at.borrow_mut() = moved(-10.0);
-        let effects = core.step(found(tag), &here);
-        let follow = effects
-            .iter()
-            .find_map(|e| match e {
-                Effect::Send(Request::Locate { tag, .. }) => Some(*tag),
-                _ => None,
-            })
-            .unwrap();
+        let follow = located_again(core.step(found(tag), &here));
         *at.borrow_mut() = moved(0.0);
         core.step(Event::Swapped, &here);
-        *at.borrow_mut() = moved(-25.0);
+        *at.borrow_mut() = Anchors {
+            moves: 1,
+            ..moved(-25.0)
+        };
         assert!(core.step(found(follow), &here).is_empty());
         let tag = another(
             &mut core,

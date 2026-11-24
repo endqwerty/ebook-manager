@@ -178,6 +178,7 @@ impl Library {
                 || (self.shown() == ViewKind::Shelf
                     && self.pages.visible_child_name().as_deref() == Some("none")
                     && !self.search_bar.is_search_mode()),
+            moves: self.moved.get(),
         }
     }
 
