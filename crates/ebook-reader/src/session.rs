@@ -398,8 +398,12 @@ impl Running {
         if let Some((cut, _)) = note.char_indices().nth(300) {
             note.truncate(cut);
         }
-        // bwrap reports its own setup failures as "bwrap: ..." before the helper runs.
-        if note.starts_with("bwrap:") {
+        // The launcher reports its own setup failures under its name, as in
+        // "bwrap: ...", before the helper runs.
+        if note
+            .strip_prefix(crate::sandbox::NAME)
+            .is_some_and(|rest| rest.starts_with(':'))
+        {
             return ReaderError::SandboxUnavailable { reason: note };
         }
         ReaderError::HelperFailed {

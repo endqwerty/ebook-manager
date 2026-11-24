@@ -673,6 +673,12 @@ fn memory_and_time_limits_stop_the_helper() {
             assert!(detail.starts_with("exit status: 4;"), "{detail}");
             assert!(detail.contains("memory allocation"), "{detail}");
         }
+        // Where the allocator keeps the count (S10), the request that goes
+        // over can be one the unpacker made allowing for failure. It then
+        // refuses the book and the helper carries on.
+        ReaderError::InvalidBook { detail } if cfg!(target_os = "macos") => {
+            assert!(detail.contains("out of memory"), "{detail}");
+        }
         other => panic!("{other:?}"),
     }
     assert!(starved.inspect(&path).is_ok());
@@ -871,7 +877,7 @@ fn open_descriptors_do_not_reach_the_sandbox() {
 
     // A stand-in for bwrap that reports whether it was handed that descriptor.
     let script = format!(
-        "#!/bin/sh\nif [ -e /dev/fd/{LEAKY} ]; then echo 'bwrap: LEAKED' >&2; else echo 'bwrap: CLEAN' >&2; fi\nexit 1\n"
+        "#!/bin/sh\nif [ -e /dev/fd/{LEAKY} ]; then echo '{LAUNCHER}: LEAKED' >&2; else echo '{LAUNCHER}: CLEAN' >&2; fi\nexit 1\n"
     );
     let fake = dir.file("fd-bwrap", script.as_bytes());
     Command::new("/bin/chmod")
@@ -889,7 +895,7 @@ fn open_descriptors_do_not_reach_the_sandbox() {
     });
     // SAFETY: closes the copy made above.
     unsafe { libc::close(LEAKY) };
-    assert_eq!(report, "bwrap: CLEAN");
+    assert_eq!(report, format!("{LAUNCHER}: CLEAN"));
 }
 
 /// S6: a helper reply that breaks the crate's promises is refused or
@@ -1081,7 +1087,7 @@ fn fatal_signals_end_the_helper_without_a_crash() {
     let cases = fatal
         .iter()
         .map(|s| s.to_string())
-        .chain(["stack".to_owned()]);
+        .chain(["stack".to_owned(), "cpu".to_owned()]);
     for case in cases {
         // Also with every signal blocked, as a parent could leave them.
         for blocked in [false, true] {
@@ -1100,6 +1106,13 @@ fn fatal_signals_end_the_helper_without_a_crash() {
             }
             let out = cmd.output().unwrap();
             let stderr = String::from_utf8_lossy(&out.stderr);
+            // A CPU limit with nothing above it ends the helper by SIGKILL
+            // on Linux, which leaves no crash record either.
+            let killed =
+                std::os::unix::process::ExitStatusExt::signal(&out.status) == Some(libc::SIGKILL);
+            if case == "cpu" && killed {
+                continue;
+            }
             assert_eq!(
                 out.status.code(),
                 Some(4),

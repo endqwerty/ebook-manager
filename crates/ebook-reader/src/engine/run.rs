@@ -97,8 +97,18 @@ fn start(args: &[String]) -> Result<Limits, WireError> {
         None => Limits::default(),
     };
     let cpu = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
-    restrict(&limits, cpu)?;
-    isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why))?;
+    let verify =
+        || isolation::verify().map_err(|why| WireError::new(WireErrorKind::NotIsolated, why));
+    // On Linux the process limit is what stops a new process, so it is set
+    // before the check. On macOS the profile is, and the limit would hide a
+    // profile that allowed one, so the check comes first.
+    if cfg!(target_os = "macos") {
+        verify()?;
+        restrict(&limits, cpu)?;
+    } else {
+        restrict(&limits, cpu)?;
+        verify()?;
+    }
     Ok(limits)
 }
 

@@ -231,8 +231,10 @@ and book are passed to the profile as parameters by their resolved paths.
 What differs from Linux:
 
 - The helper sees the host's real paths, so it finds the book from its fourth
-  argument and checks that `/Users`, `/etc`, `/tmp`, `/Library` and their like
-  can't be seen.
+  argument and checks that it can read nothing about `/Users`, `/etc`, `/tmp`,
+  `/Library` and their like beyond their names in the root listing. It checks
+  that it can't start a process before it sets its process limit, so the
+  refusal is the profile's.
 - There is no address-space limit to set. The helper's allocator counts the
   bytes in use and refuses past `Limits::memory_bytes`, which ends the helper
   with status 4 as running out of memory does on Linux. Memory the system maps
@@ -241,7 +243,7 @@ What differs from Linux:
 - Nothing kills the helper when the application dies. It exits when its input
   closes, and a call in progress ends by its CPU limit at the latest.
 - Descriptors above stderr are marked close-on-exec one by one, up to the
-  process's descriptor limit.
+  highest the application has open.
 - `sandbox-exec` is marked deprecated by Apple. If it goes, `Reader::new`
   returns `SandboxUnavailable`; see
   [the design](../../docs/design/macos-app.md#the-helper-on-macos). It can't be

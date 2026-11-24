@@ -49,7 +49,7 @@ pub fn confine(cmd: &mut Command) {
 
 /// macOS has no parent-death signal and no `close_range`. The helper ends
 /// when its input closes or its CPU limit runs out, and each descriptor is
-/// marked one by one, up to the most this process may hold.
+/// marked one by one, up to the highest this process has open.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 pub fn confine(cmd: &mut Command) {
@@ -75,29 +75,23 @@ pub fn confine(cmd: &mut Command) {
     }
 }
 
-/// One past the highest descriptor this process can hold: its own limit, or
-/// the system's per-process maximum when it has none.
+/// One past the highest descriptor this process has open. A limit lowered
+/// after a file was opened leaves that file open above it, so the open
+/// descriptors are listed. The limit stands in when they cannot be.
 #[cfg(target_os = "macos")]
 fn descriptor_limit() -> libc::c_int {
     const FALLBACK: u64 = 1 << 20;
-    let soft = rustix::process::getrlimit(rustix::process::Resource::Nofile).current;
-    let system = || {
-        let mut value: libc::c_int = 0;
-        let mut size = std::mem::size_of::<libc::c_int>();
-        #[allow(unsafe_code)]
-        // SAFETY: the name is a NUL-terminated string, and `value` and
-        // `size` describe one writable c_int.
-        let found = unsafe {
-            libc::sysctlbyname(
-                c"kern.maxfilesperproc".as_ptr(),
-                std::ptr::addr_of_mut!(value).cast(),
-                &mut size,
-                std::ptr::null_mut(),
-                0,
-            )
-        } == 0;
-        u64::try_from(value).ok().filter(|_| found)
+    let open = std::fs::read_dir("/dev/fd").ok().and_then(|entries| {
+        entries
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u64>().ok())
+            .max()
+    });
+    let limit = || {
+        rustix::process::getrlimit(rustix::process::Resource::Nofile)
+            .current
+            .unwrap_or(FALLBACK)
+            .min(FALLBACK)
     };
-    let limit = soft.or_else(system).unwrap_or(FALLBACK).min(FALLBACK);
-    libc::c_int::try_from(limit).unwrap_or(libc::c_int::MAX)
+    let end = open.map_or_else(limit, |highest| highest.saturating_add(1));
+    libc::c_int::try_from(end).unwrap_or(libc::c_int::MAX)
 }

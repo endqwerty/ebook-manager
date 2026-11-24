@@ -1,6 +1,7 @@
 //! The helper's memory bound on macOS, where the system offers no usable
 //! address-space limit. Every allocation the helper makes goes through
-//! [`Capped`], which refuses one that would pass the limit. Rust then aborts,
+//! [`Capped`], which refuses one that would pass the limit. A block being
+//! resized counts at both sizes until the move is done. Rust then aborts,
 //! and the helper's fatal-signal handler turns that into an ordinary exit.
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -77,16 +78,11 @@ unsafe impl GlobalAlloc for Capped {
     }
 
     unsafe fn realloc(&self, block: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let grown = size.saturating_sub(layout.size());
-        if grown > 0 && !take(grown) {
+        if !take(size) {
             return std::ptr::null_mut();
         }
         let moved = unsafe { System.realloc(block, layout, size) };
-        if moved.is_null() {
-            give(grown);
-        } else {
-            give(layout.size().saturating_sub(size));
-        }
+        give(if moved.is_null() { size } else { layout.size() });
         moved
     }
 }

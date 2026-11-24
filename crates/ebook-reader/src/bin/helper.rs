@@ -79,8 +79,8 @@ fn exit_on_fatal_signals() {
     }
 }
 
-/// Test hook: raise one fatal signal, or overflow the stack, so a test can
-/// check that the helper exits instead of crashing.
+/// Test hook: raise one fatal signal, overflow the stack or use up a CPU
+/// limit, so a test can check that the helper exits instead of crashing.
 fn fatal_probe(what: Option<&str>) -> i32 {
     #[allow(unconditional_recursion)]
     fn deeper(n: u64) -> u64 {
@@ -90,6 +90,20 @@ fn fatal_probe(what: Option<&str>) -> i32 {
     match what {
         Some("stack") => {
             deeper(0);
+        }
+        Some("cpu") => {
+            use rustix::process::{setrlimit, Resource, Rlimit};
+            let second = Rlimit {
+                current: Some(1),
+                maximum: Some(1),
+            };
+            if setrlimit(Resource::Cpu, second).is_err() {
+                return 2;
+            }
+            let mut spin = 0u64;
+            loop {
+                spin = std::hint::black_box(spin.wrapping_add(1));
+            }
         }
         Some(number) => {
             let Ok(signal) = number.parse::<libc::c_int>() else {

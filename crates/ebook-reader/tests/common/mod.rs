@@ -16,6 +16,12 @@ pub const SANDBOX: &str = "/usr/bin/bwrap";
 #[cfg(target_os = "macos")]
 pub const SANDBOX: &str = "/usr/bin/sandbox-exec";
 
+/// The name the launcher reports its own failures under.
+#[cfg(target_os = "linux")]
+pub const LAUNCHER: &str = "bwrap";
+#[cfg(target_os = "macos")]
+pub const LAUNCHER: &str = "sandbox-exec";
+
 #[cfg(target_os = "linux")]
 pub const SLEEP: &str = "/usr/bin/sleep";
 #[cfg(target_os = "macos")]
