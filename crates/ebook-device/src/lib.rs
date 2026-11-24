@@ -1,8 +1,6 @@
 //! Copy a managed EPUB to a user-selected folder on a mounted volume.
 
-use rustix::fs::{
-    linkat, openat, renameat, renameat_with, unlinkat, AtFlags, Mode, OFlags, RenameFlags,
-};
+use rustix::fs::{linkat, openat, renameat_with, unlinkat, AtFlags, Mode, OFlags, RenameFlags};
 use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
@@ -136,9 +134,9 @@ impl<'a> Staged<'a> {
     /// first way the filesystem supports: a rename that refuses to replace;
     /// a link, with the private name removed here so the caller's directory
     /// sync covers that too; or, on FAT and exFAT under macOS, which have
-    /// neither, an empty file created under the real name only if it is
-    /// free, which the copy then replaces.
-    fn publish(&self, name: &str) -> io::Result<()> {
+    /// neither, a second copy written into a file created under the real
+    /// name only if it is free.
+    fn publish(&mut self, name: &str, expected: [u8; 32]) -> io::Result<()> {
         let unsupported = |e: Errno| {
             [
                 Errno::INVAL,
@@ -162,12 +160,27 @@ impl<'a> Staged<'a> {
             Err(e) => return Err(e.into()),
         }
         let flags =
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        drop(openat(self.dir, name, flags, Mode::from_raw_mode(0o600))?);
-        renameat(self.dir, &self.name, self.dir, name).map_err(|e| {
-            let _ = unlinkat(self.dir, name, AtFlags::empty());
-            e.into()
-        })
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut claimed = File::from(openat(self.dir, name, flags, Mode::from_raw_mode(0o600))?);
+        // From here only the file this call created is touched, through its
+        // descriptor, so whatever else takes the name meanwhile is left as
+        // it is. A copy that fails is emptied, not removed by name.
+        let written = (|| {
+            self.file.rewind()?;
+            io::copy(&mut self.file, &mut claimed)?;
+            claimed.sync_all()?;
+            claimed.rewind()?;
+            if digest(&mut claimed)? != expected {
+                return Err(io::Error::other(
+                    "The copy on the device did not match the original",
+                ));
+            }
+            Ok(())
+        })();
+        if written.is_err() {
+            let _ = claimed.set_len(0);
+        }
+        written
     }
 }
 
@@ -227,7 +240,7 @@ fn copy_to(
             "The copy on the device did not match the original",
         ));
     }
-    match staged.publish(name) {
+    match staged.publish(name, expected) {
         Ok(()) => {
             dir.sync_all()?;
             Ok(ExportOutcome::Copied(display))

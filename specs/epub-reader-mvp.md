@@ -81,7 +81,7 @@ the place of `bwrap`. S2 and S3 read as follows.
   (`sysctl`). The helper and the book are named to the profile as parameters
   by their resolved paths. The helper has no network, no other host files, no
   writable storage, an empty environment, a session of its own and none of
-  the application's descriptors beyond its three standard streams.
+  the application's descriptors beyond its three standard streams, within the bounds S9 gives.
 - **S8** The helper refuses to open a book when a lookup of `/Users`,
   `/etc`, `/tmp`, `/var`, `/private`, `/Library`, `/Applications`,
   `/Volumes`, `/dev`, `/bin`, `/opt` or `/System/Library/CoreServices`
@@ -94,8 +94,12 @@ the place of `bwrap`. S2 and S3 read as follows.
 - **S9** macOS has no parent-death signal. The helper ends when the
   application's end closes its input. A call in progress then runs until it
   finishes or its CPU limit (F7) stops it. The application's open files are
-  marked close-on-exec one by one: every number under its descriptor limit,
-  and past it up to the highest it has open.
+  marked close-on-exec one by one: every number under its descriptor limit
+  as the helper's process starts, and past it up to the highest the
+  application had open a moment before. One case is not covered: a file
+  opened without close-on-exec in that moment, by another thread that also
+  lowers the limit beneath it before the helper's process starts. Nothing in
+  the application changes that limit.
 - **S10** macOS refuses an address-space limit below what a process already
   maps, so F7's memory bound is kept by the helper's allocator: it counts the
   bytes of every allocation in use and refuses one that would pass
