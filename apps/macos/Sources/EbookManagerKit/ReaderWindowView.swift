@@ -253,7 +253,37 @@ struct ReaderWindowView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @State private var showTextPopover = false
 
+    private var externalLinkAlertPresented: Binding<Bool> {
+        Binding(
+            get: { model.pendingExternalURL != nil },
+            set: { presented in
+                if !presented {
+                    model.pendingExternalURL = nil
+                }
+            }
+        )
+    }
+
     var body: some View {
+        readerContent
+            .alert(
+                "Open External Link?",
+                isPresented: externalLinkAlertPresented,
+                presenting: model.pendingExternalURL
+            ) { url in
+                Button("Open") {
+                    NSWorkspace.shared.open(url)
+                    model.pendingExternalURL = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    model.pendingExternalURL = nil
+                }
+            } message: { url in
+                Text(url.absoluteString)
+            }
+    }
+
+    private var readerContent: some View {
         let palette = model.resolvedPalette
         let footer = ReaderTheme.footerText(
             chapterIndex: model.currentChapterIndex,
@@ -264,7 +294,7 @@ struct ReaderWindowView: View {
             partial: model.isPartial
         )
 
-        HStack(spacing: 0) {
+        return HStack(spacing: 0) {
             if model.showContents {
                 contentsSidebar
                     .frame(width: 240)
@@ -355,24 +385,6 @@ struct ReaderWindowView: View {
         }
         .onChange(of: contrast) { _, newContrast in
             model.updateEnvironment(isDark: colorScheme == .dark, highContrast: newContrast == .increased)
-        }
-        .alert(
-            "Open External Link?",
-            isPresented: Binding(
-                get: { model.pendingExternalURL != nil },
-                set: { if !$0 { model.pendingExternalURL = nil } }
-            ),
-            presenting: model.pendingExternalURL
-        ) { url in
-            Button("Open") {
-                NSWorkspace.shared.open(url)
-                model.pendingExternalURL = nil
-            }
-            Button("Cancel", role: .cancel) {
-                model.pendingExternalURL = nil
-            }
-        } message: { url in
-            Text(url.absoluteString)
         }
     }
 
