@@ -288,6 +288,7 @@ impl Library {
             {
                 Some(b)
             }
+            (ImportChoice::Review, _) => exact.iter().find(|b| prev.as_ref() == Some(&b.id)),
             _ => None,
         };
         if let Some(b) = duplicate {

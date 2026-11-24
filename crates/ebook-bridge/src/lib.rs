@@ -859,54 +859,40 @@ impl Library {
         review_token: String,
         choice: ReviewChoice,
     ) -> Result<ImportItemResult, BridgeError> {
-        let pending = self
-            .reviews
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&review_token)
+        let mut reviews = self.reviews.lock().unwrap_or_else(|p| p.into_inner());
+        let pending = reviews
+            .get(&review_token)
             .ok_or_else(|| BridgeError::InvalidInput {
                 message: "This import review has already been settled.".into(),
             })?;
         let source_name = display_name(&pending.source);
         let import_choice = match choice {
-            ReviewChoice::Skip => {
-                return Ok(ImportItemResult {
-                    source_name,
-                    outcome: ImportOutcomeKind::Skipped,
-                    publication_pending: false,
-                });
-            }
-            ReviewChoice::KeepSeparate => ImportChoice::KeepSeparate,
-            ReviewChoice::Replace { book_id } => ImportChoice::Replace(book_id),
+            ReviewChoice::Skip => None,
+            ReviewChoice::KeepSeparate => Some(ImportChoice::KeepSeparate),
+            ReviewChoice::Replace { book_id } => Some(ImportChoice::Replace(book_id)),
         };
-        let result = self.with_writer(|lib| {
-            committed_import(lib.import(
-                pending.staged.path(),
-                &pending.source,
-                &pending.metadata,
-                import_choice,
-            ))
-        });
-        let failure = match result {
-            Ok((outcome, publication_pending)) => match outcome_kind(outcome) {
-                Some(outcome) => {
-                    return Ok(ImportItemResult {
-                        source_name,
-                        outcome,
-                        publication_pending,
-                    });
-                }
-                None => BridgeError::Failed {
-                    message: "The import still requires review.".into(),
-                },
-            },
-            Err(err) => err,
+        let (outcome, publication_pending) = if let Some(import_choice) = import_choice {
+            let (outcome, pending_publication) = self.with_writer(|lib| {
+                committed_import(lib.import(
+                    pending.staged.path(),
+                    &pending.source,
+                    &pending.metadata,
+                    import_choice,
+                ))
+            })?;
+            let outcome = outcome_kind(outcome).ok_or_else(|| BridgeError::Failed {
+                message: "The import still requires review.".into(),
+            })?;
+            (outcome, pending_publication)
+        } else {
+            (ImportOutcomeKind::Skipped, false)
         };
-        self.reviews
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(review_token, pending);
-        Err(failure)
+        reviews.remove(&review_token);
+        Ok(ImportItemResult {
+            source_name,
+            outcome,
+            publication_pending,
+        })
     }
 
     /// Drops staged files for reviews that will not be settled. Unknown tokens are ignored.

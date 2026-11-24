@@ -381,6 +381,8 @@ final class EbookManagerKitTests: XCTestCase {
         hostWindow.orderBack(nil)
 
         _ = controller.load(chapter: 0, landing: .start)
+        let loadingTurn = await controller.turn(by: 1, animate: false)
+        XCTAssertNil(loadingTurn)
         await fulfillment(of: [settled], timeout: 10.0)
 
         XCTAssertNil(failureMessage, "Unexpected WebKit load failure: \(failureMessage ?? "")")
@@ -388,7 +390,7 @@ final class EbookManagerKitTests: XCTestCase {
         XCTAssertGreaterThan(places.first?.pages ?? 0, 1)
 
         let moved = await controller.turn(by: 1, animate: false)
-        XCTAssertTrue(moved)
+        XCTAssertEqual(moved, true)
         XCTAssertEqual(places.last?.page, 1)
 
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -688,7 +690,11 @@ final class EbookManagerKitTests: XCTestCase {
         let imported = try await model.bridge.importPaths([incoming.path])
         XCTAssertEqual(imported.count, 140)
 
+        model.searchText = "Book 000"
+        let previous = model.reloadBrowse()
+        model.searchText = ""
         await model.reloadBrowse().value
+        await previous.value
         XCTAssertEqual(model.totalCount, 140)
         XCTAssertEqual(model.rows.count, 128)
         model.rowAppeared(index: 127, id: model.rows[127].id)

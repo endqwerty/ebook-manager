@@ -616,6 +616,41 @@ fn pending_imports_and_settlements_count_as_saved_and_spend_their_token() {
         lib_dir.join("portable/changes").read_dir().unwrap().count(),
         2
     );
+
+    fs::copy(&revised, &first).unwrap();
+    let import_first = || {
+        library
+            .import_paths(vec![first.to_string_lossy().into_owned()])
+            .remove(0)
+    };
+    let ImportOutcomeKind::NeedsReview { review_token, .. } = import_first().outcome else {
+        panic!("the source now contains the other book's bytes");
+    };
+    let away = block_portable_changes(&lib_dir);
+    let replaced = library
+        .settle_review(
+            review_token,
+            ReviewChoice::Replace {
+                book_id: added_id.clone(),
+            },
+        )
+        .unwrap();
+    assert!(replaced.publication_pending);
+    assert!(matches!(
+        replaced.outcome,
+        ImportOutcomeKind::Replaced { .. }
+    ));
+    unblock_portable_changes(&lib_dir, &away);
+    let retried = import_first();
+    assert!(
+        matches!(retried.outcome, ImportOutcomeKind::Duplicate { book } if book.id == added_id)
+    );
+    assert!(!retried.publication_pending);
+    assert_eq!(library.browse(String::new(), vec![]).unwrap().count, 2);
+    assert_eq!(
+        lib_dir.join("portable/changes").read_dir().unwrap().count(),
+        3
+    );
 }
 
 #[test]
@@ -650,7 +685,18 @@ fn skipped_and_discarded_reviews_release_their_staged_files() {
         .unwrap();
     assert_eq!(skipped.outcome, ImportOutcomeKind::Skipped);
     assert_eq!(skipped.source_name, "b0.epub");
-    library.discard_reviews(vec![tokens[1].clone(), "unknown".into()]);
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            start.wait();
+            let invalid = ReviewChoice::Replace {
+                book_id: "absent".into(),
+            };
+            assert!(library.settle_review(tokens[1].clone(), invalid).is_err());
+        });
+        start.wait();
+        library.discard_reviews(vec![tokens[1].clone(), "unknown".into()]);
+    });
     for token in tokens {
         assert!(matches!(
             library.settle_review(token, ReviewChoice::KeepSeparate),

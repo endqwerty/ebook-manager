@@ -311,6 +311,7 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
         let chapter: UInt32
         let landing: ChapterLanding
         var readyRecord: ChapterLoadRecord?
+        var landed = false
     }
 
     private var counter: UInt32 = 0
@@ -451,19 +452,18 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
         return number
     }
 
-    public func turn(by delta: Int, animate: Bool) async -> Bool {
-        guard let ready = currentLoad?.readyRecord else { return false }
+    public func turn(by delta: Int, animate: Bool) async -> Bool? {
+        guard let load = currentLoad, load.landed, let ready = load.readyRecord else { return nil }
         let result = try? await webView.callAsyncJavaScript(
             "return __reader.turn(by, smooth === 1)",
             arguments: ["by": delta, "smooth": animate ? 1 : 0],
             in: nil,
             contentWorld: readerWorld
         )
-        guard let text = result as? String, !text.isEmpty else {
-            return false
-        }
+        guard currentLoad?.number == ready.number, let text = result as? String else { return nil }
+        if text.isEmpty { return false }
         let parts = text.split(separator: ",").compactMap { UInt32($0) }
-        guard parts.count == 4 else { return false }
+        guard parts.count == 4 else { return nil }
         return emitPlace(
             load: ready,
             offset: parts[0],
@@ -471,7 +471,7 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
             pages: parts[2],
             count: parts[3],
             moved: true
-        )
+        ) ? true : nil
     }
 
     public func stepRuler(by delta: Int) async -> Bool? {
@@ -679,6 +679,7 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
         guard pages > 0, page < pages, offset <= load.length else {
             return false
         }
+        if currentLoad?.number == load.number { currentLoad?.landed = true }
         onEvent(.place(PagePlaceReport(
             load: load,
             offset: offset,

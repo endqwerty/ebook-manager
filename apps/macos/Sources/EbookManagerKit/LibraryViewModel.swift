@@ -143,6 +143,7 @@ public final class LibraryViewModel: ObservableObject {
     private var activeViewId: UInt64 = 0
     private var loadedPages: Set<UInt32> = []
     private var loadingPages: Set<UInt32> = []
+    private var pendingBrowse: Task<Void, Never>?
     private var browseSerial: UInt64 = 0
     private var searchDebounceTask: Task<Void, Never>?
     private var openingBookIds: Set<String> = []
@@ -242,7 +243,10 @@ public final class LibraryViewModel: ObservableObject {
             }
         }
 
-        return Task {
+        let previous = pendingBrowse
+        let task = Task {
+            await previous?.value
+            guard serial == browseSerial else { return }
             do {
                 let snapshot = try await bridge.browse(query: query, sort: rules)
                 guard serial == browseSerial else { return }
@@ -319,6 +323,8 @@ public final class LibraryViewModel: ObservableObject {
                 showLoadingIndicator = false
             }
         }
+        pendingBrowse = task
+        return task
     }
 
     public func loadMoreIfNeeded(forAppearIndex index: Int) {

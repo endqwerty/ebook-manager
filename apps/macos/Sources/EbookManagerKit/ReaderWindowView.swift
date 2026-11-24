@@ -142,7 +142,7 @@ final class ReaderWindowViewModel: ObservableObject {
             let outcome = await controller.stepRuler(by: delta)
             guard let self, outcome == false else { return }
             let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            let turned = await controller.turn(by: delta > 0 ? 1 : -1, animate: animate)
+            guard let turned = await controller.turn(by: delta > 0 ? 1 : -1, animate: animate) else { return }
             if turned {
                 controller.resetRuler(atEnd: delta < 0)
             } else if delta > 0, Int(self.currentChapterIndex) + 1 < self.handle.chapters.count {
@@ -187,7 +187,7 @@ final class ReaderWindowViewModel: ObservableObject {
         Task { @MainActor [weak self] in
             defer { self?.turnInFlight = false }
             let moved = await controller.turn(by: delta, animate: animate)
-            guard let self, !moved else { return }
+            guard let self, moved == false else { return }
             if delta > 0, Int(self.currentChapterIndex) + 1 < self.handle.chapters.count {
                 self.openChapter(index: self.currentChapterIndex + 1, landing: .start)
             } else if delta < 0, self.currentChapterIndex > 0 {
