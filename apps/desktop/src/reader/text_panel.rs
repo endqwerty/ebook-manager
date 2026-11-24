@@ -493,8 +493,8 @@ pub fn build(
     {
         let change = change.clone();
         focus_dim.connect_selected_notify(move |d| {
-            let chosen = [FocusDim::Light, FocusDim::Medium, FocusDim::Strong]
-                [d.selected().min(2) as usize];
+            let chosen =
+                [FocusDim::Light, FocusDim::Medium, FocusDim::Strong][d.selected().min(2) as usize];
             change(&|s| s.focus_dim = chosen);
         });
     }

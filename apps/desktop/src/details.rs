@@ -73,11 +73,7 @@ fn nav_button(label: &str, accessible: &str, on_click: impl Fn() + 'static) -> g
 }
 
 fn browse_row_from(book: &Book, pos: Option<&ReadingPosition>) -> BrowseRow {
-    let cover = book
-        .imported
-        .survey
-        .as_ref()
-        .and_then(|s| s.cover.as_ref());
+    let cover = book.imported.survey.as_ref().and_then(|s| s.cover.as_ref());
     let series = book
         .series
         .as_ref()
@@ -101,6 +97,7 @@ fn browse_row_from(book: &Book, pos: Option<&ReadingPosition>) -> BrowseRow {
         cover_rgb: cover.map(|c| c.average),
         spine_rgb: cover.map(|c| c.spine),
         right_to_left: book.imported.right_to_left,
+        protection: book.imported.protection,
     }
 }
 
@@ -359,7 +356,11 @@ impl Details {
             add_fact("Language", language.to_owned(), false);
         }
         if let Some(words) = book.imported.survey.as_ref().and_then(|s| s.words) {
-            add_fact("Length", format!("{} words", grouped_u64(u64::from(words))), true);
+            add_fact(
+                "Length",
+                format!("{} words", grouped_u64(u64::from(words))),
+                true,
+            );
         }
         let format_val = match file_size {
             Some(sz) => format!("EPUB, {}", format_bytes(sz)),

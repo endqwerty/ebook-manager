@@ -26,11 +26,7 @@ enum EntryKind {
     Book(String),
 }
 
-pub fn open(
-    parent: &impl IsA<gtk::Widget>,
-    store: Store,
-    on_pick: impl Fn(Destination) + 'static,
-) {
+pub fn open(parent: &impl IsA<gtk::Widget>, store: Store, on_pick: impl Fn(Destination) + 'static) {
     let dialog = adw::Dialog::builder()
         .title("Go to")
         .content_width(460)
@@ -246,9 +242,8 @@ pub fn open(
                 debounce.clone(),
                 populate.clone(),
             );
-            let timer = glib::timeout_add_local_once(
-                std::time::Duration::from_millis(60),
-                move || {
+            let timer =
+                glib::timeout_add_local_once(std::time::Duration::from_millis(60), move || {
                     debounce_slot.borrow_mut().take();
                     if serial.get() != next_serial {
                         return;
@@ -263,10 +258,9 @@ pub fn open(
                         let Ok(mut reader) = store.run(|lib| lib.browse_reader()).await else {
                             return;
                         };
-                        let res = gtk::gio::spawn_blocking(move || {
-                            reader.quick_jump(&query, 8, &cancel)
-                        })
-                        .await;
+                        let res =
+                            gtk::gio::spawn_blocking(move || reader.quick_jump(&query, 8, &cancel))
+                                .await;
                         if serial.get() != next_serial {
                             return;
                         }
@@ -274,8 +268,7 @@ pub fn open(
                             populate(false, found);
                         }
                     });
-                },
-            );
+                });
             debounce.replace(Some(timer));
         });
     }

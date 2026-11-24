@@ -357,12 +357,7 @@ impl BrowseReader {
     }
     /// Capped quick-jump search across authors, series and books, designed to
     /// run off the UI thread and stay fast at 100,000 books (#131).
-    pub fn quick_jump(
-        &mut self,
-        text: &str,
-        limit: usize,
-        cancel: &Cancel,
-    ) -> Result<QuickJump> {
+    pub fn quick_jump(&mut self, text: &str, limit: usize, cancel: &Cancel) -> Result<QuickJump> {
         cancel.check()?;
         self.same_file()?;
         let folded = sortkey::fold(text);
