@@ -97,7 +97,19 @@ public final class LibraryViewModel: ObservableObject {
     @Published public private(set) var rows: [BookRow] = []
     @Published public var selectedIds: Set<String> = []
     @Published public private(set) var isBusy = false
-    @Published public var importReport: ImportReportModel?
+    @Published public var importReport: ImportReportModel? {
+        didSet {
+            let kept = Set(importReport?.pendingReviews.map(\.reviewToken) ?? [])
+            let dropped = (oldValue?.pendingReviews ?? []).map(\.reviewToken).filter { !kept.contains($0) }
+            if importReport == nil {
+                activeReview = nil
+            }
+            if !dropped.isEmpty {
+                let service = bridge
+                Task { try? await service.discardReviews(tokens: dropped) }
+            }
+        }
+    }
     @Published public var activeReview: PendingReviewPrompt?
     @Published public var inspectingBook: BookDetail?
     @Published public var editingBook: BookDetail?
@@ -117,6 +129,9 @@ public final class LibraryViewModel: ObservableObject {
     private var openReaderControllers: [String: ReaderWindowCoordinator] = [:]
 
     private static let pageSize: UInt32 = 128
+
+    nonisolated static let publicationPendingNote =
+        "Saved in your library. Its backup record will be written when storage is available. To try again, choose Refresh Library."
 
     public init(libraryDirectory: String = LibraryLocation.resolve()) {
         let service = BridgeService(directory: libraryDirectory)
@@ -324,18 +339,10 @@ public final class LibraryViewModel: ObservableObject {
                         }
                         return false
                     }) {
-                        let updatedOutcome: ImportOutcomeKind
-                        switch (choice, settled) {
-                        case let (.keepSeparate, .some(book)):
-                            updatedOutcome = .added(book: book)
-                        case let (.replace, .some(book)):
-                            updatedOutcome = .replaced(book: book)
-                        default:
-                            updatedOutcome = .failed(message: "Skipped")
-                        }
                         report.items[idx] = ImportItemResult(
                             sourceName: report.items[idx].sourceName,
-                            outcome: updatedOutcome
+                            outcome: settled.outcome,
+                            publicationPending: settled.publicationPending
                         )
                     }
                     importReport = report
@@ -467,14 +474,12 @@ public final class LibraryViewModel: ObservableObject {
             seriesPosition: form.normalizedSeriesPosition
         )
         do {
-            _ = try await bridge.editBook(id: bookId, edit: edit)
+            let saved = try await bridge.editBook(id: bookId, edit: edit)
             editingBook = nil
             reloadBrowse()
-            return nil
-        } catch let BridgeError.PublicationPending(_, message) {
-            editingBook = nil
-            reloadBrowse()
-            noticeAlert = SimpleNoticeModel(heading: "Changes Saved Locally", body: message)
+            if saved.publicationPending {
+                noticeAlert = SimpleNoticeModel(heading: "Changes Saved Locally", body: Self.publicationPendingNote)
+            }
             return nil
         } catch let err as BridgeError {
             return err.userMessage

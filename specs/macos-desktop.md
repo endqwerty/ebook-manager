@@ -7,9 +7,15 @@ The macOS app keeps a local EPUB library in
 - Add Files and Add Folder show an outcome for each imported EPUB. An exact
   duplicate leaves the existing book in place. A file that needs review can be
   skipped, kept as a separate book or used to replace the selected book's file.
+  A skipped file shows as Skipped. Closing or replacing the report discards
+  the files still awaiting a decision.
+- When an import or edit is saved but its portable record can't be written,
+  the report or an alert says it was saved and that Refresh Library retries.
+  Saving the edit again, or importing the file again, retries without a
+  second change.
 - The library window shows books in a grid or list. Search finds a book by
-  title or author. An edit to the catalogue title or authors survives reopening
-  the library. Go to searches across books, authors and series. Show Details
+  title or author. An edit saves the title, authors, sort title, author
+  sort names and series together and survives reopening the library. Go to searches across books, authors and series. Show Details
   displays the selected book and offers Read and Edit. The managed EPUB
   retains its original bytes.
 - Read opens a reader window. Its contents list jumps to a chapter, and the

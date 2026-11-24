@@ -389,7 +389,16 @@ final class EbookManagerKitTests: XCTestCase {
             XCTAssertEqual(beforeSettle.count, 1)
 
             let replaced = try await service.settleReview(token: reviewToken, choice: .replace(bookId: bookId))
-            XCTAssertEqual(replaced?.id, bookId)
+            guard case let .replaced(replacedBook) = replaced.outcome else {
+                return XCTFail("Expected settled review Replaced")
+            }
+            XCTAssertEqual(replacedBook.id, bookId)
+            XCTAssertFalse(replaced.publicationPending)
+            do {
+                _ = try await service.settleReview(token: reviewToken, choice: .keepSeparate)
+                XCTFail("A settled review token must not import again")
+            } catch BridgeError.InvalidInput {}
+            try await service.discardReviews(tokens: [reviewToken])
             let afterSettle = try await service.browse(query: "", sort: [])
             XCTAssertEqual(afterSettle.count, 1)
 
@@ -404,7 +413,10 @@ final class EbookManagerKitTests: XCTestCase {
                     seriesPosition: "2"
                 )
             )
-            XCTAssertEqual(updated.title, "The Coastal Lantern")
+            XCTAssertFalse(updated.publicationPending)
+            XCTAssertEqual(updated.book.title, "The Coastal Lantern")
+            XCTAssertEqual(updated.book.sortTitle, "Coastal Lantern")
+            XCTAssertEqual(updated.book.series.first?.name, "Tide Guides")
             let jump = try await service.quickJump(query: "vance", limit: 5)
             XCTAssertEqual(jump.books.map(\.id), [bookId])
             XCTAssertEqual(jump.authors.map(\.name), ["Clara Vance"])

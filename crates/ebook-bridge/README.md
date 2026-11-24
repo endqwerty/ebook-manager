@@ -57,6 +57,19 @@ Survey runs in both places, matching the Linux desktop shell:
   `BridgeError`, whose `Display` text and `message` field can be shown directly
   to a user. `BridgeError::Locked` distinguishes a protected book so the shell
   can show the locked-book alert.
+- **A saved change is never reported as a failure.** When the catalogue commits
+  an import, review settlement or edit but the portable record cannot be written,
+  the result carries `publication_pending: true` instead of an error. `refresh`
+  retries publication, and so does saving the same edit or importing the same
+  file again; neither records a second change.
+- **Edits are one change.** `edit_book` saves the title, authors, sort title,
+  author sort names and series in a single journal entry, so a failure leaves
+  either all of them or none.
+- **Review tokens are spent once.** `settle_review` keeps its token after a
+  failure so the choice can be retried, and spends it once the choice is saved
+  or skipped. It returns the settled `ImportItemResult`, with `Skipped` for a
+  skip. `discard_reviews` releases tokens the shell will not settle, such as
+  those in a dismissed or replaced import report.
 - **No internal library paths cross the boundary.** Records identify books and
   resources by ID; only `export_book` returns the chosen destination path.
 - **Checked cover PNGs.** Files in `cache/thumbs` are read with `O_NOFOLLOW`,
@@ -70,7 +83,7 @@ Survey runs in both places, matching the Linux desktop shell:
   `<directory>/portable/` and `<directory>/cache/thumbs/`.
 - Keeps staged files on disk in the system temporary directory while an import
   awaits review. The in-memory token table owns the files until the review is
-  settled, skipped or dropped.
+  settled, skipped, discarded or dropped.
 - Spawns sandboxed `ebook-reader-helper` processes through `ebook-reader` for
   import, survey and `OpenBook` sessions; dropping `OpenBook` ends its helper.
 

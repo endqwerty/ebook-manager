@@ -426,15 +426,27 @@ pub enum ImportOutcomeKind {
         words: Option<u32>,
         candidates: Vec<ReviewCandidate>,
     },
+    Skipped,
     Failed {
         message: String,
     },
 }
 
+/// One file's import result. `publication_pending` means the outcome is saved in the
+/// catalogue but its portable record is not written yet; `refresh` retries it.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ImportItemResult {
     pub source_name: String,
     pub outcome: ImportOutcomeKind,
+    pub publication_pending: bool,
+}
+
+/// A saved edit. `publication_pending` means it is in the catalogue but its portable
+/// record is not written yet; `refresh` or saving the same values again retries it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SavedEdit {
+    pub book: BookDetail,
+    pub publication_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -674,25 +686,21 @@ impl Library {
                 return ImportItemResult {
                     source_name,
                     outcome: ImportOutcomeKind::Failed { message },
+                    publication_pending: false,
                 };
             }
         };
-        let outcome = self.with_writer(|lib| {
-            lib.import(
+        let result = self.with_writer(|lib| {
+            committed_import(lib.import(
                 candidate.staged.path(),
                 &candidate.source,
                 &candidate.metadata,
                 ImportChoice::Review,
-            )
-            .map_err(BridgeError::from_library)
+            ))
         });
-        let outcome = match outcome {
-            Ok(ImportOutcome::Added(book)) => ImportOutcomeKind::Added { book: book.into() },
-            Ok(ImportOutcome::Duplicate(book)) => {
-                ImportOutcomeKind::Duplicate { book: book.into() }
-            }
-            Ok(ImportOutcome::Replaced(book)) => ImportOutcomeKind::Replaced { book: book.into() },
-            Ok(ImportOutcome::NeedsReview(matches)) => {
+        let mut publication_pending = false;
+        let outcome = match result {
+            Ok((ImportOutcome::NeedsReview(matches), _)) => {
                 let token = Uuid::new_v4().to_string();
                 let title = candidate.metadata.title.clone();
                 let authors = candidate.metadata.authors.clone();
@@ -712,6 +720,10 @@ impl Library {
                     candidates,
                 }
             }
+            Ok((outcome, pending)) => {
+                publication_pending = pending;
+                outcome_kind(outcome).expect("a committed import")
+            }
             Err(err) => ImportOutcomeKind::Failed {
                 message: err.to_string(),
             },
@@ -719,7 +731,34 @@ impl Library {
         ImportItemResult {
             source_name,
             outcome,
+            publication_pending,
         }
+    }
+}
+
+/// Splits a committed import from a failure, treating a pending publication as committed.
+fn committed_import(
+    result: Result<ImportOutcome, anyhow::Error>,
+) -> Result<(ImportOutcome, bool), BridgeError> {
+    match result {
+        Ok(outcome) => Ok((outcome, false)),
+        Err(err) => match err.downcast::<ebook_library::PublicationPending>() {
+            Ok(ebook_library::PublicationPending {
+                outcome: Some(outcome),
+                ..
+            }) => Ok((outcome, true)),
+            Ok(pending) => Err(BridgeError::from_library(pending.into())),
+            Err(err) => Err(BridgeError::from_library(err)),
+        },
+    }
+}
+
+fn outcome_kind(outcome: ImportOutcome) -> Option<ImportOutcomeKind> {
+    match outcome {
+        ImportOutcome::Added(book) => Some(ImportOutcomeKind::Added { book: book.into() }),
+        ImportOutcome::Duplicate(book) => Some(ImportOutcomeKind::Duplicate { book: book.into() }),
+        ImportOutcome::Replaced(book) => Some(ImportOutcomeKind::Replaced { book: book.into() }),
+        ImportOutcome::NeedsReview(_) => None,
     }
 }
 
@@ -797,17 +836,20 @@ impl Library {
                 Discovered::Failed { name, message } => ImportItemResult {
                     source_name: name,
                     outcome: ImportOutcomeKind::Failed { message },
+                    publication_pending: false,
                 },
             })
             .collect()
     }
 
     /// Settles a pending import review by keeping the book separate, replacing a candidate, or skipping it.
+    /// The token stays valid after a failure so the choice can be retried, and is spent once
+    /// the choice is saved, even while its portable record is pending.
     pub fn settle_review(
         &self,
         review_token: String,
         choice: ReviewChoice,
-    ) -> Result<Option<BookDetail>, BridgeError> {
+    ) -> Result<ImportItemResult, BridgeError> {
         let pending = self
             .reviews
             .lock()
@@ -816,35 +858,58 @@ impl Library {
             .ok_or_else(|| BridgeError::InvalidInput {
                 message: "This import review has already been settled.".into(),
             })?;
+        let source_name = display_name(&pending.source);
         let import_choice = match choice {
-            ReviewChoice::Skip => return Ok(None),
+            ReviewChoice::Skip => {
+                return Ok(ImportItemResult {
+                    source_name,
+                    outcome: ImportOutcomeKind::Skipped,
+                    publication_pending: false,
+                });
+            }
             ReviewChoice::KeepSeparate => ImportChoice::KeepSeparate,
             ReviewChoice::Replace { book_id } => ImportChoice::Replace(book_id),
         };
         let result = self.with_writer(|lib| {
-            lib.import(
+            committed_import(lib.import(
                 pending.staged.path(),
                 &pending.source,
                 &pending.metadata,
                 import_choice,
-            )
-            .map_err(BridgeError::from_library)
+            ))
         });
-        match result {
-            Ok(ImportOutcome::Added(book))
-            | Ok(ImportOutcome::Duplicate(book))
-            | Ok(ImportOutcome::Replaced(book)) => Ok(Some(book.into())),
-            Ok(ImportOutcome::NeedsReview(_)) => Err(BridgeError::Failed {
-                message: "The import still requires review.".into(),
-            }),
-            Err(err) => {
-                self.reviews
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .insert(review_token, pending);
-                Err(err)
-            }
-        }
+        let failure = match result {
+            Ok((outcome, publication_pending)) => match outcome_kind(outcome) {
+                Some(outcome) => {
+                    return Ok(ImportItemResult {
+                        source_name,
+                        outcome,
+                        publication_pending,
+                    });
+                }
+                None => BridgeError::Failed {
+                    message: "The import still requires review.".into(),
+                },
+            },
+            Err(err) => err,
+        };
+        self.reviews
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(review_token, pending);
+        Err(failure)
+    }
+
+    /// Drops staged files for reviews that will not be settled. Unknown tokens are ignored.
+    pub fn discard_reviews(&self, review_tokens: Vec<String>) {
+        let dropped: Vec<PendingReview> = {
+            let mut reviews = self.reviews.lock().unwrap_or_else(|p| p.into_inner());
+            review_tokens
+                .iter()
+                .filter_map(|token| reviews.remove(token))
+                .collect()
+        };
+        drop(dropped);
     }
 
     /// Opens a browse snapshot for `query` and `sort`, returning the total count and first window of up to 128 rows.
@@ -963,8 +1028,8 @@ impl Library {
         })
     }
 
-    /// Edits a book's title, authors, sort title, author sort names and primary series.
-    pub fn edit_book(&self, book_id: String, edit: BookEdit) -> Result<BookDetail, BridgeError> {
+    /// Saves a book's title, authors, sort title, author sort names and primary series together.
+    pub fn edit_book(&self, book_id: String, edit: BookEdit) -> Result<SavedEdit, BridgeError> {
         if edit.title.trim().is_empty() {
             return Err(BridgeError::InvalidInput {
                 message: "Enter a title for this book.".into(),
@@ -972,24 +1037,21 @@ impl Library {
         }
         self.with_writer(|lib| {
             let current = lib.book(&book_id).map_err(BridgeError::from_library)?;
-            let planned = edit::plan_edit(&current, &edit);
-            let mut updated = current;
-            if let Some((title, authors)) = &planned.names {
-                updated = lib
-                    .edit(&book_id, title, authors)
-                    .map_err(BridgeError::from_library)?;
+            let changes = edit::plan_edit(&current, &edit);
+            match lib.edit_book(&book_id, changes) {
+                Ok(book) => Ok(SavedEdit {
+                    book: book.into(),
+                    publication_pending: false,
+                }),
+                Err(err) if err.is::<ebook_library::PublicationPending>() => Ok(SavedEdit {
+                    book: lib
+                        .book(&book_id)
+                        .map_err(BridgeError::from_library)?
+                        .into(),
+                    publication_pending: true,
+                }),
+                Err(err) => Err(BridgeError::from_library(err)),
             }
-            if let Some(filing) = planned.filing {
-                updated = lib
-                    .edit_filing(
-                        &book_id,
-                        filing.sort_title,
-                        filing.author_sorts,
-                        filing.series,
-                    )
-                    .map_err(BridgeError::from_library)?;
-            }
-            Ok(updated.into())
         })
     }
 

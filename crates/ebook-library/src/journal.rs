@@ -56,7 +56,10 @@ impl Library {
             )?;
         }
         tx.commit()?;
-        self.publish().context(PublicationPending { book_id })
+        self.publish().context(PublicationPending {
+            book_id,
+            outcome: None,
+        })
     }
     pub(super) fn publish(&mut self) -> Result<()> {
         let dir = self.directory("changes")?;

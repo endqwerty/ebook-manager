@@ -1,23 +1,10 @@
 //! Pure filing reconciliation, chapter progress calculation, and XHTML document wrapping.
 
 use crate::{BookEdit, StyleProperty};
-use ebook_library::Book;
+use ebook_library::{Book, BookChanges};
 use ebook_reader::ChapterInfo;
 
 type SeriesList = Vec<(String, Option<String>)>;
-
-#[derive(Debug, PartialEq)]
-pub struct FilingChanges {
-    pub sort_title: Option<String>,
-    pub author_sorts: Option<Vec<Option<String>>>,
-    pub series: Option<SeriesList>,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct PlannedEdit {
-    pub names: Option<(String, Vec<String>)>,
-    pub filing: Option<FilingChanges>,
-}
 
 fn filled(text: Option<&str>) -> Option<String> {
     text.map(str::trim)
@@ -29,8 +16,7 @@ fn series_of(book: &Book) -> &SeriesList {
     book.series.as_ref().unwrap_or(&book.imported.series)
 }
 
-pub fn plan_edit(book: &Book, edit: &BookEdit) -> PlannedEdit {
-    let title = edit.title.trim().to_owned();
+pub fn plan_edit(book: &Book, edit: &BookEdit) -> BookChanges {
     let authors: Vec<String> = edit
         .authors
         .iter()
@@ -50,19 +36,12 @@ pub fn plan_edit(book: &Book, edit: &BookEdit) -> PlannedEdit {
         .into_iter()
         .collect();
     series.extend(series_of(book).iter().skip(1).cloned());
-    let filing = FilingChanges {
+    BookChanges {
+        title: edit.title.trim().to_owned(),
+        authors,
         sort_title: filled(edit.sort_title.as_deref()),
         author_sorts: (sorts != imported_sorts).then_some(sorts),
         series: (series != book.imported.series).then_some(series),
-    };
-    let current = FilingChanges {
-        sort_title: book.sort_title.clone(),
-        author_sorts: book.author_sorts.clone(),
-        series: book.series.clone(),
-    };
-    PlannedEdit {
-        names: (title != book.title || authors != book.authors).then_some((title, authors)),
-        filing: (filing != current).then_some(filing),
     }
 }
 

@@ -96,9 +96,15 @@ public final class BridgeService: @unchecked Sendable {
         }
     }
 
-    public func settleReview(token: String, choice: ReviewChoice) async throws -> BookDetail? {
+    public func settleReview(token: String, choice: ReviewChoice) async throws -> ImportItemResult {
         try await runWrite { lib in
             try lib.settleReview(reviewToken: token, choice: choice)
+        }
+    }
+
+    public func discardReviews(tokens: [String]) async throws {
+        try await runWrite { lib in
+            lib.discardReviews(reviewTokens: tokens)
         }
     }
 
@@ -108,7 +114,7 @@ public final class BridgeService: @unchecked Sendable {
         }
     }
 
-    public func editBook(id: String, edit: BookEdit) async throws -> BookDetail {
+    public func editBook(id: String, edit: BookEdit) async throws -> SavedEdit {
         try await runWrite { lib in
             try lib.editBook(bookId: id, edit: edit)
         }

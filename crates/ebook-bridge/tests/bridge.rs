@@ -266,8 +266,12 @@ fn folder_import_handles_book_duplicate_revision_and_broken_file() {
                 book_id: added_id.clone(),
             },
         )
-        .unwrap()
-        .expect("settled replacement returns updated book");
+        .unwrap();
+    assert!(!replaced.publication_pending);
+    let replaced = match replaced.outcome {
+        ImportOutcomeKind::Replaced { book } => book,
+        other => panic!("expected Replaced, got {other:?}"),
+    };
     assert_eq!(replaced.id, added_id);
 
     let after_replace = library.browse(String::new(), vec![]).unwrap();
@@ -290,8 +294,11 @@ fn folder_import_handles_book_duplicate_revision_and_broken_file() {
     };
     let kept = library
         .settle_review(token_two, ReviewChoice::KeepSeparate)
-        .unwrap()
-        .expect("keep separate returns new book");
+        .unwrap();
+    let kept = match kept.outcome {
+        ImportOutcomeKind::Added { book } => book,
+        other => panic!("expected Added, got {other:?}"),
+    };
     assert_ne!(kept.id, replaced.id);
     assert_eq!(library.browse(String::new(), vec![]).unwrap().count, 2);
 
@@ -334,6 +341,8 @@ fn saved_reading_place_and_edits_survive_closing_and_reopening_library() {
                 },
             )
             .unwrap();
+        assert!(!edited.publication_pending);
+        let edited = edited.book;
         assert_eq!(edited.title, "A Harbor Almanac");
         assert_eq!(edited.series[0].name, "Sea Manuals");
         assert_eq!(edited.series[0].position.as_deref(), Some("1.5"));
@@ -480,4 +489,173 @@ fn cover_thumbnail_repairs_tampered_cache_and_export_detects_existing_copy() {
 
     assert_eq!(binding_palette_index("abc".into()), 7);
     assert_eq!(binding_palette_index(String::new()), 2);
+}
+
+fn block_portable_changes(lib_dir: &Path) -> PathBuf {
+    let changes = lib_dir.join("portable").join("changes");
+    let away = lib_dir.join("changes-away");
+    fs::rename(&changes, &away).unwrap();
+    fs::write(&changes, b"occupied").unwrap();
+    away
+}
+
+fn unblock_portable_changes(lib_dir: &Path, away: &Path) {
+    let changes = lib_dir.join("portable").join("changes");
+    fs::remove_file(&changes).unwrap();
+    fs::rename(away, &changes).unwrap();
+}
+
+#[test]
+fn edit_saves_every_field_together_while_publication_is_pending() {
+    ensure_helper_beside_test_exe();
+    let root = TempDir::new().unwrap();
+    let lib_dir = root.path().join("library");
+    let path = write_file(
+        root.path(),
+        "pending.epub",
+        &synthetic_epub(
+            "0f1e2d3c-0ec0-4962-a077-5375e799a012",
+            "Pending Shores",
+            "Mira Field",
+            "Chapter text.",
+        ),
+    );
+    let library = Library::open(lib_dir.to_string_lossy().into_owned()).unwrap();
+    let id = match &library.import_paths(vec![path.to_string_lossy().into_owned()])[0].outcome {
+        ImportOutcomeKind::Added { book } => book.id.clone(),
+        other => panic!("expected Added, got {other:?}"),
+    };
+    let away = block_portable_changes(&lib_dir);
+    let edit = BookEdit {
+        title: "Shores Retitled".into(),
+        authors: vec!["Clara Vance".into()],
+        sort_title: Some("Retitled Shores".into()),
+        author_sorts: vec![Some("Vance, Clara".into())],
+        series_name: Some("Coast Notes".into()),
+        series_position: Some("3".into()),
+    };
+    let returned = library.edit_book(id.clone(), edit.clone()).unwrap();
+    assert!(returned.publication_pending);
+    let saved = library.book(id.clone()).unwrap();
+    assert_eq!(returned.book, saved);
+    assert_eq!(saved.title, "Shores Retitled");
+    assert_eq!(saved.sort_title.as_deref(), Some("Retitled Shores"));
+    assert_eq!(saved.author_sorts, vec![Some("Vance, Clara".to_owned())]);
+    assert_eq!(saved.series[0].name, "Coast Notes");
+    assert_eq!(saved.series[0].position.as_deref(), Some("3"));
+    assert!(
+        library
+            .edit_book(id.clone(), edit.clone())
+            .unwrap()
+            .publication_pending
+    );
+    unblock_portable_changes(&lib_dir, &away);
+    let retried = library.edit_book(id.clone(), edit).unwrap();
+    assert!(!retried.publication_pending);
+    assert_eq!(retried.book, saved);
+    assert_eq!(
+        lib_dir.join("portable/changes").read_dir().unwrap().count(),
+        2,
+        "one import and one edit"
+    );
+}
+
+#[test]
+fn pending_imports_and_settlements_count_as_saved_and_spend_their_token() {
+    ensure_helper_beside_test_exe();
+    let root = TempDir::new().unwrap();
+    let lib_dir = root.path().join("library");
+    let uuid = "7a6b5c4d-0ec0-4962-a077-5375e799a012";
+    let first = write_file(
+        root.path(),
+        "first.epub",
+        &synthetic_epub(uuid, "Harbor Lights", "Mira Field", "One."),
+    );
+    let library = Library::open(lib_dir.to_string_lossy().into_owned()).unwrap();
+    let away = block_portable_changes(&lib_dir);
+
+    let added = &library.import_paths(vec![first.to_string_lossy().into_owned()])[0];
+    assert!(added.publication_pending);
+    let added_id = match &added.outcome {
+        ImportOutcomeKind::Added { book } => book.id.clone(),
+        other => panic!("expected Added, got {other:?}"),
+    };
+    let again = &library.import_paths(vec![first.to_string_lossy().into_owned()])[0];
+    assert!(again.publication_pending);
+    assert!(matches!(&again.outcome, ImportOutcomeKind::Duplicate { book } if book.id == added_id));
+
+    let revised = write_file(
+        root.path(),
+        "revised.epub",
+        &synthetic_epub(uuid, "Harbor Lights", "Mira Field", "Two, revised."),
+    );
+    let token = match &library.import_paths(vec![revised.to_string_lossy().into_owned()])[0].outcome
+    {
+        ImportOutcomeKind::NeedsReview { review_token, .. } => review_token.clone(),
+        other => panic!("expected NeedsReview, got {other:?}"),
+    };
+    let missing = ReviewChoice::Replace {
+        book_id: "not-a-candidate".into(),
+    };
+    assert!(library.settle_review(token.clone(), missing).is_err());
+    let settled = library
+        .settle_review(token.clone(), ReviewChoice::KeepSeparate)
+        .unwrap();
+    assert!(settled.publication_pending);
+    assert_eq!(settled.source_name, "revised.epub");
+    assert!(matches!(&settled.outcome, ImportOutcomeKind::Added { book } if book.id != added_id));
+    assert!(matches!(
+        library.settle_review(token, ReviewChoice::KeepSeparate),
+        Err(BridgeError::InvalidInput { .. })
+    ));
+    assert_eq!(library.browse(String::new(), vec![]).unwrap().count, 2);
+
+    unblock_portable_changes(&lib_dir, &away);
+    library.refresh().unwrap();
+    assert_eq!(
+        lib_dir.join("portable/changes").read_dir().unwrap().count(),
+        2
+    );
+}
+
+#[test]
+fn skipped_and_discarded_reviews_release_their_staged_files() {
+    ensure_helper_beside_test_exe();
+    let root = TempDir::new().unwrap();
+    let lib_dir = root.path().join("library");
+    let uuid = "1b2c3d4e-0ec0-4962-a077-5375e799a012";
+    let library = Library::open(lib_dir.to_string_lossy().into_owned()).unwrap();
+    let original = write_file(
+        root.path(),
+        "a.epub",
+        &synthetic_epub(uuid, "Quay", "Mira Field", "One."),
+    );
+    library.import_paths(vec![original.to_string_lossy().into_owned()]);
+    let mut tokens = Vec::new();
+    for n in 0..2 {
+        let path = write_file(
+            root.path(),
+            &format!("b{n}.epub"),
+            &synthetic_epub(uuid, "Quay", "Mira Field", &format!("Revision {n}.")),
+        );
+        match &library.import_paths(vec![path.to_string_lossy().into_owned()])[0].outcome {
+            ImportOutcomeKind::NeedsReview { review_token, .. } => {
+                tokens.push(review_token.clone())
+            }
+            other => panic!("expected NeedsReview, got {other:?}"),
+        }
+    }
+    let skipped = library
+        .settle_review(tokens[0].clone(), ReviewChoice::Skip)
+        .unwrap();
+    assert_eq!(skipped.outcome, ImportOutcomeKind::Skipped);
+    assert_eq!(skipped.source_name, "b0.epub");
+    library.discard_reviews(vec![tokens[1].clone(), "unknown".into()]);
+    for token in tokens {
+        assert!(matches!(
+            library.settle_review(token, ReviewChoice::KeepSeparate),
+            Err(BridgeError::InvalidInput { .. })
+        ));
+    }
+    assert_eq!(library.browse(String::new(), vec![]).unwrap().count, 1);
 }

@@ -22,7 +22,7 @@ struct ImportReportSheet: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.sourceName)
                                 .font(.body.weight(.medium))
-                            if let detail = failureDetail(for: item.outcome) {
+                            if let detail = detail(for: item) {
                                 Text(detail)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -74,17 +74,20 @@ struct ImportReportSheet: View {
                 Text("Needs review")
                     .foregroundStyle(.secondary)
             }
+        case .skipped:
+            Text("Skipped")
+                .foregroundStyle(.secondary)
         case .failed:
             Text("Failed")
                 .foregroundStyle(.secondary)
         }
     }
 
-    private func failureDetail(for outcome: ImportOutcomeKind) -> String? {
-        if case let .failed(message) = outcome {
+    private func detail(for item: ImportItemResult) -> String? {
+        if case let .failed(message) = item.outcome {
             return message
         }
-        return nil
+        return item.publicationPending ? LibraryViewModel.publicationPendingNote : nil
     }
 }
 
