@@ -118,6 +118,126 @@
 		const edge = 48 * (parseFloat(setting("--margin")) || 1);
 		const fits = (width() - 4 * edge) / 2 >= 30 * em;
 		root.classList.toggle("two", setting("--columns") === "2" && fits);
+		syncVisuals();
+	};
+
+	// #129 Dark-page image classification (runs once per image when Match the page is active).
+	const classifyImage = (img) => {
+		if (img.dataset.lineartChecked === "1") return;
+		img.dataset.lineartChecked = "1";
+		if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) return;
+		try {
+			const c = document.createElement("canvas");
+			const w = Math.min(32, img.naturalWidth);
+			const h = Math.min(32, img.naturalHeight);
+			c.width = w;
+			c.height = h;
+			const ctx = c.getContext("2d");
+			if (!ctx) return;
+			ctx.drawImage(img, 0, 0, w, h);
+			const data = ctx.getImageData(0, 0, w, h).data;
+			let opaque = 0;
+			let lowChroma = 0;
+			let lightPixels = 0;
+			let transparent = 0;
+			for (let i = 0; i < data.length; i += 4) {
+				const a = data[i + 3];
+				if (a < 32) {
+					transparent += 1;
+					continue;
+				}
+				opaque += 1;
+				const r = data[i], g = data[i + 1], b = data[i + 2];
+				const spread = Math.max(r, g, b) - Math.min(r, g, b);
+				if (spread < 28) lowChroma += 1;
+				if ((0.2126 * r + 0.7152 * g + 0.0722 * b) > 165) lightPixels += 1;
+			}
+			const total = w * h;
+			if (opaque > 0 && lowChroma / opaque >= 0.94 && (lightPixels / opaque >= 0.55 || transparent / total >= 0.25)) {
+				img.dataset.lineart = "1";
+			}
+		} catch (_) {}
+	};
+
+	// #134 Reading ruler / line focus overlays live on `root`, outside `body`,
+	// so `body` text offsets and `:first-child` rules stay untouched.
+	let rulerTop = null;
+	let rulerBottom = null;
+	let rulerOutline = null;
+	let rulerLine = 0;
+
+	const ensureRuler = () => {
+		if (rulerTop) return;
+		const make = (cls) => {
+			const el = document.createElementNS("http://www.w3.org/1999/xhtml", "div");
+			el.className = cls;
+			el.setAttribute("aria-hidden", "true");
+			root.appendChild(el);
+			return el;
+		};
+		rulerTop = make("reader-ruler-mask");
+		rulerBottom = make("reader-ruler-mask");
+		rulerOutline = make("reader-ruler-outline");
+	};
+
+	const rulerMetrics = () => {
+		const style = document.body ? getComputedStyle(document.body) : getComputedStyle(root);
+		const padTop = parseFloat(style.paddingTop) || 0;
+		const padBottom = parseFloat(style.paddingBottom) || 0;
+		const fontSize = parseFloat(style.fontSize) || 18;
+		const parsedLh = parseFloat(style.lineHeight);
+		const lh = Number.isFinite(parsedLh) && parsedLh > 0 ? parsedLh : fontSize * 1.5;
+		const h = root.clientHeight || innerHeight;
+		const contentH = Math.max(lh, h - padTop - padBottom);
+		const bandLines = parseInt(setting("--line-focus"), 10) || 0;
+		const totalLines = Math.max(1, Math.floor(contentH / lh));
+		return { padTop, h, lh, bandLines, totalLines };
+	};
+
+	const renderRuler = () => {
+		const { padTop, h, lh, bandLines, totalLines } = rulerMetrics();
+		if (bandLines <= 0) {
+			if (rulerTop) {
+				rulerTop.style.display = "none";
+				rulerBottom.style.display = "none";
+				rulerOutline.style.display = "none";
+			}
+			return;
+		}
+		ensureRuler();
+		const maxStart = Math.max(0, totalLines - bandLines);
+		rulerLine = Math.max(0, Math.min(rulerLine, maxStart));
+		const top = Math.max(0, padTop + rulerLine * lh - 2);
+		const bandH = Math.min(h - top, bandLines * lh + 4);
+		const dim = setting("--focus-dim");
+		if (dim === "contrast") {
+			rulerTop.style.display = "none";
+			rulerBottom.style.display = "none";
+			rulerOutline.style.display = "block";
+			rulerOutline.style.top = `${top}px`;
+			rulerOutline.style.height = `${bandH}px`;
+		} else {
+			const alpha = parseFloat(dim) || 0.55;
+			rulerOutline.style.display = "none";
+			rulerTop.style.display = "block";
+			rulerTop.style.opacity = String(alpha);
+			rulerTop.style.top = "0px";
+			rulerTop.style.height = `${top}px`;
+			rulerBottom.style.display = "block";
+			rulerBottom.style.opacity = String(alpha);
+			rulerBottom.style.top = `${top + bandH}px`;
+			rulerBottom.style.height = `${Math.max(0, h - (top + bandH))}px`;
+		}
+	};
+
+	const syncVisuals = () => {
+		const mode = setting("--dark-images") || "original";
+		root.dataset.darkImages = mode;
+		root.dataset.motion = setting("--motion") || "full";
+		if (mode === "match") {
+			for (const img of document.images) classifyImage(img);
+		}
+		renderRuler();
 	};
 
 	// The page a point of the document falls on, from its place on screen now.
@@ -315,6 +435,23 @@
 			const at = locate(offset);
 			return at ? at[0].data.charAt(at[1]) : "";
 		},
+		stepRuler(by) {
+			const { bandLines, totalLines } = rulerMetrics();
+			if (bandLines <= 0) return "off";
+			const maxStart = Math.max(0, totalLines - bandLines);
+			const next = rulerLine + by;
+			if (next < 0 || next > maxStart) return "edge";
+			rulerLine = next;
+			renderRuler();
+			return "moved";
+		},
+		resetRuler(edge) {
+			const { bandLines, totalLines } = rulerMetrics();
+			if (bandLines <= 0) return false;
+			rulerLine = edge === "end" ? Math.max(0, totalLines - bandLines) : 0;
+			renderRuler();
+			return true;
+		},
 		length: () => length,
 	};
 	Object.defineProperty(window, "__reader", { value: Object.freeze(api) });
@@ -332,9 +469,28 @@
 				return;
 			}
 			if (!getSelection().isCollapsed) return;
+			const { padTop, lh, bandLines, totalLines } = rulerMetrics();
+			if (bandLines > 0) {
+				const line = Math.floor((event.clientY - padTop) / lh);
+				if (line >= 0 && line < totalLines) {
+					rulerLine = Math.max(0, Math.min(line, Math.max(0, totalLines - bandLines)));
+					renderRuler();
+				}
+			}
 			const along = (rtl() ? width() - event.clientX : event.clientX) / width();
 			const zone = along < 0.25 ? "back" : along >= 0.75 ? "forward" : along >= 1 / 3 && along < 2 / 3 ? "middle" : "";
 			if (zone) post({ kind: "tap", load, zone });
+		},
+		true,
+	);
+	// Double-clicking an image toggles Show original (#129).
+	document.addEventListener(
+		"dblclick",
+		(event) => {
+			const img = event.target instanceof Element ? event.target.closest("img") : null;
+			if (!img) return;
+			if (img.dataset.original === "1") delete img.dataset.original;
+			else img.dataset.original = "1";
 		},
 		true,
 	);

@@ -770,6 +770,16 @@ impl Reading {
         match key {
             Key::Right | Key::KP_Right => self.turn(towards_end),
             Key::Left | Key::KP_Left => self.turn(-towards_end),
+            Key::Down | Key::KP_Down
+                if reading && self.settings.borrow().line_focus != settings::LineFocus::Off =>
+            {
+                self.step_ruler(1);
+            }
+            Key::Up | Key::KP_Up
+                if reading && self.settings.borrow().line_focus != settings::LineFocus::Off =>
+            {
+                self.step_ruler(-1);
+            }
             Key::Page_Down | Key::KP_Page_Down => self.turn(1),
             Key::Page_Up | Key::KP_Page_Up => self.turn(-1),
             Key::space if reading && back => self.turn(-1),
@@ -777,6 +787,19 @@ impl Reading {
             _ => return false,
         }
         true
+    }
+
+    fn step_ruler(self: &Rc<Self>, by: i32) {
+        let weak = Rc::downgrade(self);
+        self.view.step_ruler(by, move |state| {
+            let Some(reading) = weak.upgrade() else {
+                return;
+            };
+            if state == Some(false) {
+                reading.turn(by);
+                reading.view.reset_ruler(by < 0);
+            }
+        });
     }
 
     fn right_to_left(&self) -> bool {

@@ -32,6 +32,7 @@ pub fn main_menu() -> gio::Menu {
     }
     menu.append_section(None, &sizes);
     let rest = gio::Menu::new();
+    rest.append(Some("_Go to…"), Some("win.go-to"));
     rest.append(Some("_Refresh Library"), Some("win.refresh"));
     menu.append_section(None, &rest);
     menu

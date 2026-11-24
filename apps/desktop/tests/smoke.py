@@ -903,8 +903,8 @@ def run(binary, evidence, root):
         # The Menu key opens the focused book's menu, and Edit is in it.
         key("Menu")
         find("", "menu item")
-        # Read has the focus. Edit is the next item.
-        key("Down", "Return")
+        # Read has the focus. Show Details is next, then Edit.
+        key("Down", "Down", "Return")
         find("Edit book", "frame")
         key("Escape")
         gone("Edit book")
@@ -1584,7 +1584,7 @@ def shelf_evidence(evidence, look, *, keep_author_sort=False):
         xd("mousemove", 2, 2)
         key("Menu")
         find("", "menu item")
-        key("Down", "Return")
+        key("Down", "Down", "Return")
         find("Edit book", "frame")
         key("Escape")
         gone("Edit book")

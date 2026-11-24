@@ -1,6 +1,8 @@
 mod browse;
 mod cover;
+mod details;
 mod edit;
+mod goto;
 mod imports;
 mod reader;
 mod settings;

@@ -55,6 +55,8 @@ struct Library {
     /// pointer or a key, any of which can move them.
     moved: Rc<Cell<u64>>,
     surveying: Cell<bool>,
+    details_split: adw::OverlaySplitView,
+    details: RefCell<Option<Rc<details::Details>>>,
 }
 
 fn grouped(count: u32) -> String {
@@ -774,6 +776,7 @@ impl Library {
         first.append_item(&item("_Read", "win.read-book"));
         menu.append_section(None, &first);
         let rest = gio::Menu::new();
+        rest.append_item(&item("Show _Details", "win.details-book"));
         rest.append_item(&item("_Edit…", "win.edit-book"));
         rest.append_item(&item("_Send to Device…", "win.send-book"));
         menu.append_section(None, &rest);
@@ -920,6 +923,37 @@ impl Library {
             }),
         );
         simple(
+            "go-to",
+            Box::new(|library| {
+                let weak = Rc::downgrade(library);
+                goto::open(&library.window, library.store.clone(), move |dest| {
+                    let Some(lib) = weak.upgrade() else { return };
+                    match dest {
+                        goto::Destination::Author(text) | goto::Destination::Series(text) => {
+                            lib.filter_to(&text);
+                        }
+                        goto::Destination::Book { id, open_reader } => {
+                            if open_reader {
+                                lib.read(id);
+                            } else {
+                                lib.show_details_for(vec![id]);
+                            }
+                        }
+                    }
+                });
+            }),
+        );
+        simple(
+            "details",
+            Box::new(|library| {
+                if library.details_split.shows_sidebar() {
+                    library.details_split.set_show_sidebar(false);
+                } else {
+                    library.sync_details(true);
+                }
+            }),
+        );
+        simple(
             "refresh",
             Box::new(|library| {
                 let library = library.clone();
@@ -951,8 +985,45 @@ impl Library {
             Box::new(|library| library.with_selection(|library, books| library.send(books))),
         );
         on_book("read-book", |library, id| library.read(id));
+        on_book("details-book", |library, id| {
+            library.show_details_for(vec![id])
+        });
         on_book("edit-book", |library, id| library.edit(id));
         on_book("send-book", |library, id| library.send(vec![id]));
+    }
+
+    fn filter_to(&self, text: &str) {
+        self.search_bar.set_search_mode(true);
+        self.search.set_text(text);
+        self.search_for(text);
+    }
+
+    fn show_details_for(&self, ids: Vec<String>) {
+        if let Some(details) = self.details.borrow().as_ref() {
+            details.show(ids);
+        }
+        self.details_split.set_show_sidebar(true);
+    }
+
+    fn sync_details(self: &Rc<Self>, open_pane: bool) {
+        if !open_pane && !self.details_split.shows_sidebar() {
+            return;
+        }
+        if open_pane {
+            self.details_split.set_show_sidebar(true);
+        }
+        let count = self.model.selected_count();
+        if count == 0 {
+            if let Some(details) = self.details.borrow().as_ref() {
+                details.show(Vec::new());
+            }
+            return;
+        }
+        self.with_selection(|library, ids| {
+            if let Some(details) = library.details.borrow().as_ref() {
+                details.show(ids);
+            }
+        });
     }
 }
 
@@ -998,6 +1069,7 @@ pub fn accelerators(app: &adw::Application) {
         ("win.add-files", &["<Control>o"][..]),
         ("win.add-folder", &["<Control><Shift>o"]),
         ("win.search", &["<Control>f"]),
+        ("win.go-to", &["<Control>k"]),
         ("win.view('grid')", &["<Control>1"]),
         ("win.view('list')", &["<Control>2"]),
         ("win.view-table", &["<Control>3"]),
@@ -1148,8 +1220,66 @@ pub fn open(app: &adw::Application) {
             placed: Cell::new(0),
             moved: Rc::default(),
             surveying: Cell::new(false),
+            details_split: adw::OverlaySplitView::builder()
+                .sidebar_position(gtk::PackType::End)
+                .show_sidebar(false)
+                .min_sidebar_width(280.0)
+                .max_sidebar_width(360.0)
+                .sidebar_width_fraction(0.35)
+                .build(),
+            details: RefCell::new(None),
         }
     });
+    let details_pane = details::Details::new(
+        store.clone(),
+        library.thumbs.clone(),
+        details::Callbacks {
+            read: {
+                let weak = Rc::downgrade(&library);
+                Box::new(move |id| {
+                    if let Some(lib) = weak.upgrade() {
+                        lib.read(id);
+                    }
+                })
+            },
+            send: {
+                let weak = Rc::downgrade(&library);
+                Box::new(move |ids| {
+                    if let Some(lib) = weak.upgrade() {
+                        lib.send(ids);
+                    }
+                })
+            },
+            edit: {
+                let weak = Rc::downgrade(&library);
+                Box::new(move |id| {
+                    if let Some(lib) = weak.upgrade() {
+                        lib.edit(id);
+                    }
+                })
+            },
+            filter: {
+                let weak = Rc::downgrade(&library);
+                Box::new(move |text| {
+                    if let Some(lib) = weak.upgrade() {
+                        lib.filter_to(&text);
+                    }
+                })
+            },
+            close: {
+                let weak = Rc::downgrade(&library);
+                Box::new(move || {
+                    if let Some(lib) = weak.upgrade() {
+                        lib.details_split.set_show_sidebar(false);
+                    }
+                })
+            },
+        },
+    );
+    library
+        .details_split
+        .set_sidebar(Some(details_pane.widget()));
+    library.details.replace(Some(details_pane));
 
     // Nothing for 300 ms, then the progress indicator.
     let spinner = gtk::Spinner::builder()
@@ -1199,10 +1329,11 @@ pub fn open(app: &adw::Application) {
     content.append(&heading);
     content.append(&library.width);
     content.append(&library.pages);
+    library.details_split.set_content(Some(&content));
     let frame = adw::ToolbarView::new();
     frame.add_top_bar(&header);
     frame.add_top_bar(&search_bar);
-    frame.set_content(Some(&content));
+    frame.set_content(Some(&library.details_split));
     library.overlay.set_child(Some(&frame));
     // Reuse the native popup surface. Older GTK can still have a tooltip
     // query pending when the menu closes.
@@ -1257,6 +1388,10 @@ pub fn open(app: &adw::Application) {
                 library.show_sort();
             }
             library.refresh_state();
+            if let Some(details) = library.details.borrow().as_ref() {
+                details.invalidate();
+            }
+            library.sync_details(false);
             // Books imported before covers were read get theirs once the
             // window has shown what it has.
             if library.model.status() == Status::Ready && !library.surveying.replace(true) {
@@ -1273,6 +1408,7 @@ pub fn open(app: &adw::Application) {
     model.connect_selection_changed(move |_, _, _| {
         if let Some(library) = weak.upgrade() {
             library.refresh_actions();
+            library.sync_details(false);
         }
     });
     let weak = Rc::downgrade(&library);
@@ -1410,7 +1546,33 @@ pub fn open(app: &adw::Application) {
                 library.search_bar.set_search_mode(false);
                 glib::Propagation::Stop
             }
+            Some(library) if library.details_split.shows_sidebar() => {
+                library.details_split.set_show_sidebar(false);
+                glib::Propagation::Stop
+            }
             _ => glib::Propagation::Proceed,
+        })),
+    ));
+    let weak = Rc::downgrade(&library);
+    keys.add_shortcut(gtk::Shortcut::new(
+        gtk::ShortcutTrigger::parse_string("space"),
+        Some(gtk::CallbackAction::new(move |_, _| {
+            let Some(library) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let focus = gtk::prelude::GtkWindowExt::focus(&library.window);
+            let in_books = focus
+                .as_ref()
+                .is_some_and(|w| w.is_ancestor(&library.scrolled));
+            if !in_books || library.search_bar.is_search_mode() {
+                return glib::Propagation::Proceed;
+            }
+            if library.details_split.shows_sidebar() {
+                library.details_split.set_show_sidebar(false);
+            } else {
+                library.sync_details(true);
+            }
+            glib::Propagation::Stop
         })),
     ));
     window.add_controller(keys);
