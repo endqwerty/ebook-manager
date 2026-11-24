@@ -120,7 +120,9 @@ jobs:
       - name: Export to a mounted FAT32 volume
         run: |
           hdiutil create -size 64m -fs "MS-DOS FAT32" -volname EBOOKTEST "$RUNNER_TEMP/card.dmg"
-          hdiutil attach "$RUNNER_TEMP/card.dmg"
-          diskutil info /Volumes/EBOOKTEST | grep -q "FAT32"
-          TMPDIR=/Volumes/EBOOKTEST cargo test --release --locked -p ebook-device
-          hdiutil detach /Volumes/EBOOKTEST
+          card="$RUNNER_TEMP/card"
+          mkdir "$card"
+          hdiutil attach -mountpoint "$card" "$RUNNER_TEMP/card.dmg"
+          trap 'hdiutil detach "$card"' EXIT
+          diskutil info "$card" | grep "FAT32"
+          TMPDIR="$card" cargo test --release --locked -p ebook-device

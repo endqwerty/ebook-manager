@@ -417,7 +417,8 @@ fn a_helper_that_goes_quiet_is_not_tried_again() {
 fn a_helper_that_stops_reading_requests_is_ended() {
     let dir = Scratch::new();
     let book_path = dir.file("b.epub", &simple(&["<p>x</p>"], &[]));
-    let flood = content_frame(&dir);
+    let reply = std::fs::read(content_frame(&dir)).unwrap();
+    let flood = dir.file("replies", &reply.repeat(256));
     let script = format!(
         "#!/bin/sh\necho '0 {{\"Ok\":{{\"Probe\":{{\"isolated\":true}}}}}}'\nread -r request\n{open}\nwhile cat '{flood}'; do :; done\n",
         open = send(&outline_frame(&dir)),
@@ -429,20 +430,19 @@ fn a_helper_that_stops_reading_requests_is_ended() {
         ..config()
     };
     let book = reader_over(&cfg).open(&book_path).unwrap();
-    let started = Instant::now();
-    // Each read takes a reply already waiting and leaves a request unread.
-    let ended = (0..20_000).find_map(|_| book.read_content(0).err());
+    let ended = (0..20_000).find_map(|_| {
+        let started = Instant::now();
+        book.read_content(0)
+            .err()
+            .map(|error| (error, started.elapsed()))
+    });
     match ended {
-        Some(ReaderError::HelperFailed { detail }) => {
-            assert!(detail.contains("stopped reading"), "{detail}")
+        Some((ReaderError::HelperFailed { detail }, elapsed)) => {
+            assert!(detail.contains("stopped reading"), "{detail}");
+            assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
         }
         other => panic!("{other:?}"),
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(20),
-        "{:?}",
-        started.elapsed()
-    );
 }
 
 /// S5: however many calls find a book's helper busy, at most four run in
