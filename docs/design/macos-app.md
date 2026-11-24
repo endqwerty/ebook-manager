@@ -111,12 +111,14 @@ What bubblewrap gave on Linux, and what gives it here:
 | No new processes: process limit of one | Profile denies fork; the process limit is set as well |
 | Address-space limit | macOS refuses an address-space limit below what a process already maps. The helper's allocator counts what it hands out and refuses beyond `Limits::memory_bytes`, which ends the helper as running out of memory does on Linux |
 | Dies with the application: parent-death signal | The helper exits when its input closes, and its CPU limit ends a call in progress |
-| Every descriptor above stderr closed on exec, by `close_range` | The same, set one by one up to the descriptor limit |
+| Every descriptor above stderr closed on exec, by `close_range` | The same, set one by one up to the highest descriptor the application has open |
 
-The helper keeps checking for itself before it reads a book: that `/Users`,
-`/etc`, `/tmp`, `/var`, `/Library` and their like can't be seen, that it can't
-write, has no network and can't start a process. Outside the profile each of
-those fails, so there is no unconfined run.
+The helper keeps checking for itself before it reads a book: that it can read
+nothing about `/Users`, `/etc`, `/tmp`, `/var`, `/Library` and their like, that
+it can't write, has no network and can't start a process. Outside the profile
+each of those fails, so there is no unconfined run. The checks are a tripwire
+for a missing profile. What the profile itself allows is checked by a test
+that runs a probe under it.
 
 `sandbox-exec` is marked deprecated in its manual page. It is what the system's
 own build and browser sandboxes are driven by, and nothing else gives a
@@ -133,11 +135,10 @@ the profile, which must refuse.
 
 ### Device export
 
-`ebook-device` keeps its transfer on the chosen directory by using the open
-directory's descriptor. On Linux it names files through `/proc/self/fd`; on
-macOS it asks the system for the descriptor's current path (`F_GETPATH`) when
-the transfer starts. A mount that changes during the copy fails the transfer's
-last step, which is the same outcome.
+`ebook-device` named files through `/proc/self/fd`, which macOS lacks. It now
+opens, creates and renames every file relative to the open directory's
+descriptor (`openat`, `renameat` without replacing) on both systems, so there
+is one implementation and no path to go stale.
 
 ## Behaviour
 

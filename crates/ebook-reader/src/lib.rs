@@ -1,7 +1,8 @@
 //! Sandboxed EPUB parsing and reading engine.
 //!
 //! The host API ([`Reader`], [`Book`]) never parses book bytes itself. It runs the
-//! `ebook-reader-helper` binary inside a bubblewrap sandbox, one for each open
+//! `ebook-reader-helper` binary inside a sandbox (bubblewrap on Linux,
+//! `sandbox-exec` on macOS), one for each open
 //! book and one for each other call, and reads back plain, presentation-ready
 //! data. See the crate README for the contract.
 #![deny(unsafe_code)]
@@ -9,6 +10,7 @@
 mod error;
 mod host;
 mod model;
+mod sandbox;
 mod session;
 mod spawn;
 #[doc(hidden)]

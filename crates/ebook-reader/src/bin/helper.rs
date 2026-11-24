@@ -1,6 +1,10 @@
-//! Sandboxed helper. Started by the host library inside bubblewrap; refuses to
+//! Sandboxed helper. Started by the host library inside its sandbox; refuses to
 //! read a book when it finds itself outside a sandbox.
 #![deny(unsafe_code)]
+
+#[cfg(target_os = "macos")]
+#[global_allocator]
+static MEMORY: ebook_reader::engine::memory::Capped = ebook_reader::engine::memory::Capped;
 
 /// Exit code for a helper stopped by a fatal signal.
 const STOPPED: i32 = 4;
@@ -75,8 +79,8 @@ fn exit_on_fatal_signals() {
     }
 }
 
-/// Test hook: raise one fatal signal, or overflow the stack, so a test can
-/// check that the helper exits instead of crashing.
+/// Test hook: raise one fatal signal, overflow the stack or use up a CPU
+/// limit, so a test can check that the helper exits instead of crashing.
 fn fatal_probe(what: Option<&str>) -> i32 {
     #[allow(unconditional_recursion)]
     fn deeper(n: u64) -> u64 {
@@ -86,6 +90,20 @@ fn fatal_probe(what: Option<&str>) -> i32 {
     match what {
         Some("stack") => {
             deeper(0);
+        }
+        Some("cpu") => {
+            use rustix::process::{setrlimit, Resource, Rlimit};
+            let second = Rlimit {
+                current: Some(1),
+                maximum: Some(1),
+            };
+            if setrlimit(Resource::Cpu, second).is_err() {
+                return 2;
+            }
+            let mut spin = 0u64;
+            loop {
+                spin = std::hint::black_box(spin.wrapping_add(1));
+            }
         }
         Some(number) => {
             let Ok(signal) = number.parse::<libc::c_int>() else {
@@ -105,11 +123,36 @@ fn fatal_probe(what: Option<&str>) -> i32 {
     0
 }
 
+/// Test hook: say which of these paths this process can see, read or write,
+/// so a test can check what the sandbox it was started in allows.
+fn visible_probe(paths: &[String]) -> i32 {
+    use std::io::Read;
+    let mut found = Vec::new();
+    for path in paths {
+        let read = std::fs::File::open(path)
+            .and_then(|mut file| file.read(&mut [0u8; 1]))
+            .is_ok();
+        let seen = std::fs::symlink_metadata(path).is_ok();
+        if std::fs::OpenOptions::new().append(true).open(path).is_ok() {
+            found.push(format!("writes {path}"));
+        } else if read {
+            found.push(format!("reads {path}"));
+        } else if seen {
+            found.push(format!("sees {path}"));
+        }
+    }
+    eprint!("{}", found.join(", "));
+    5
+}
+
 fn main() {
     exit_on_fatal_signals();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("fatal-probe") {
         std::process::exit(fatal_probe(args.get(1).map(String::as_str)));
+    }
+    if args.first().map(String::as_str) == Some("visible-probe") {
+        std::process::exit(visible_probe(&args[1..]));
     }
     std::process::exit(ebook_reader::engine::run::main(&args));
 }

@@ -1,5 +1,5 @@
-//! The one place this crate steps outside safe Rust: preparing the child
-//! process between `fork` and `exec`, before bubblewrap starts.
+//! Preparing the child process between `fork` and `exec`, before the sandbox
+//! launcher starts.
 
 use std::io;
 use std::os::unix::process::CommandExt;
@@ -17,6 +17,7 @@ use std::process::Command;
 /// The signal follows the thread that started the child, so that thread must
 /// stay alive until the child is collected. Every call in this crate blocks
 /// on its child, which keeps that true.
+#[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 pub fn confine(cmd: &mut Command) {
     let parent = std::process::id() as libc::pid_t;
@@ -44,4 +45,53 @@ pub fn confine(cmd: &mut Command) {
             Ok(())
         });
     }
+}
+
+/// macOS has no parent-death signal and no `close_range`. The helper ends
+/// when its input closes or its CPU limit runs out, and each descriptor is
+/// marked one by one, up to the highest this process has open.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub fn confine(cmd: &mut Command) {
+    let parent = std::process::id() as libc::pid_t;
+    let end = descriptor_limit();
+    // SAFETY: the closure runs in the forked child before exec. It makes
+    // direct system calls only, allocates nothing, takes no locks and
+    // touches no memory shared with the parent, so it is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::getppid() != parent {
+                return Err(io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            libc::setsid();
+            for fd in 3..end {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags >= 0 && libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// One past the highest descriptor this process has open. A limit lowered
+/// after a file was opened leaves that file open above it, so the open
+/// descriptors are listed. The limit stands in when they cannot be.
+#[cfg(target_os = "macos")]
+fn descriptor_limit() -> libc::c_int {
+    const FALLBACK: u64 = 1 << 20;
+    let open = std::fs::read_dir("/dev/fd").ok().and_then(|entries| {
+        entries
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u64>().ok())
+            .max()
+    });
+    let limit = || {
+        rustix::process::getrlimit(rustix::process::Resource::Nofile)
+            .current
+            .unwrap_or(FALLBACK)
+            .min(FALLBACK)
+    };
+    let end = open.map_or_else(limit, |highest| highest.saturating_add(1));
+    libc::c_int::try_from(end).unwrap_or(libc::c_int::MAX)
 }

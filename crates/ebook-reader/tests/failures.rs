@@ -43,7 +43,7 @@ fn reader_fails_closed_without_a_working_sandbox() {
     ));
 
     let no_bwrap = ReaderConfig {
-        bwrap_path: Some("/nonexistent/bwrap".into()),
+        sandbox_path: Some("/nonexistent/bwrap".into()),
         ..config()
     };
     assert!(matches!(
@@ -54,7 +54,7 @@ fn reader_fails_closed_without_a_working_sandbox() {
     // A "bwrap" that sandboxes nothing: it exits without running the helper.
     for stand_in in ["/usr/bin/false", "/usr/bin/true"] {
         let cfg = ReaderConfig {
-            bwrap_path: Some(stand_in.into()),
+            sandbox_path: Some(stand_in.into()),
             ..config()
         };
         assert!(
@@ -69,7 +69,8 @@ fn reader_fails_closed_without_a_working_sandbox() {
     // A "bwrap" that runs the helper with no sandbox at all: the helper's own
     // check refuses, so the reader is still not created.
     let dir = Scratch::new();
-    let script = format!("#!/bin/sh\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift; shift\nexec '{HELPER}' \"$@\"\n");
+    let script =
+        format!("#!/bin/sh\nwhile [ \"$1\" != session ]; do shift; done\nexec '{HELPER}' \"$@\"\n");
     let fake = dir.file("fake-bwrap", script.as_bytes());
     Command::new("/bin/chmod")
         .arg("+x")
@@ -77,7 +78,7 @@ fn reader_fails_closed_without_a_working_sandbox() {
         .status()
         .unwrap();
     let cfg = ReaderConfig {
-        bwrap_path: Some(fake),
+        sandbox_path: Some(fake),
         ..config()
     };
     let refusal = settle(|| match Reader::new(cfg.clone()) {
@@ -108,6 +109,7 @@ fn helper_refuses_to_parse_outside_a_sandbox() {
 
 /// S3: inside the sandbox there is no network, no home, no writable disk, and
 /// no host file other than the one book. Checked from inside with a shell.
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_has_no_network_and_sees_only_the_book() {
     let dir = Scratch::new();
@@ -154,6 +156,49 @@ fn sandbox_has_no_network_and_sees_only_the_book() {
     );
     // The helper's own probe covers the network: it ran when `reader()` succeeded.
     reader();
+}
+
+/// S3 on macOS: under the profile the host really uses, the helper program
+/// sees the book and nothing else of the host's. A stand-in launcher keeps
+/// the host's own arguments and swaps the helper's for its `visible-probe`.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_sees_only_the_book() {
+    let dir = Scratch::new();
+    let book = dir.file("b.epub", &epub3());
+    let book = book.canonicalize().unwrap();
+    let secret = dir.file("secret.txt", b"private");
+    let home = std::env::var("HOME").unwrap();
+    let script = format!(
+        "#!/bin/sh\ncase \"$*\" in *BOOK=*) ;; *) exec {SANDBOX} \"$@\";; esac\n\
+         n=0; for a in \"$@\"; do [ \"$a\" = session ] && break; n=$((n+1)); done\n\
+         i=0; for a in \"$@\"; do [ $i -lt $n ] && set -- \"$@\" \"$a\"; i=$((i+1)); done; shift $i\n\
+         exec {SANDBOX} \"$@\" visible-probe '{book}' '{secret}' '{dir}' '{home}' /etc/passwd /private/tmp /dev/null\n",
+        book = book.display(),
+        secret = secret.display(),
+        dir = dir.0.display(),
+    );
+    let fake = dir.file("probe-launcher", script.as_bytes());
+    Command::new("/bin/chmod")
+        .arg("+x")
+        .arg(&fake)
+        .status()
+        .unwrap();
+    let cfg = ReaderConfig {
+        sandbox_path: Some(fake),
+        ..config()
+    };
+    let seen = settle(
+        || match Reader::new(cfg.clone()).and_then(|r| r.open(&book)) {
+            Err(ReaderError::HelperFailed { detail }) => detail,
+            other => panic!("expected the probe's report, got {other:?}"),
+        },
+    );
+    assert_eq!(
+        seen,
+        format!("exit status: 5; reads {}", book.display()),
+        "the probe names each path it could see, read or write"
+    );
 }
 
 /// F1: files that are not EPUBs say so.
@@ -628,18 +673,20 @@ fn memory_and_time_limits_stop_the_helper() {
             assert!(detail.starts_with("exit status: 4;"), "{detail}");
             assert!(detail.contains("memory allocation"), "{detail}");
         }
+        // Where the allocator keeps the count (S10), the request that goes
+        // over can be one the unpacker made allowing for failure. It then
+        // refuses the book and the helper carries on.
+        ReaderError::InvalidBook { detail } if cfg!(target_os = "macos") => {
+            assert!(detail.contains("out of memory"), "{detail}");
+        }
         other => panic!("{other:?}"),
     }
     assert!(starved.inspect(&path).is_ok());
 
     // A stand-in sandbox that says it is ready and then never replies.
-    let stuck = stand_in(
-        &dir,
-        "stuck-bwrap",
-        &[("*", "exec /usr/bin/sleep 30".into())],
-    );
+    let stuck = stand_in(&dir, "stuck-bwrap", &[("*", format!("exec {SLEEP} 30"))]);
     let cfg = ReaderConfig {
-        bwrap_path: Some(stuck),
+        sandbox_path: Some(stuck),
         timeout: Duration::from_millis(300),
         ..config()
     };
@@ -819,14 +866,18 @@ fn open_descriptors_do_not_reach_the_sandbox() {
     use std::os::fd::AsRawFd;
     let dir = Scratch::new();
     let secret = std::fs::File::open(dir.file("secret.txt", b"private")).unwrap();
-    // A descriptor number unlikely to be in use, inheritable on purpose.
-    const LEAKY: i32 = 57;
+    // A descriptor number no other test thread will be handed while this
+    // one runs, inheritable on purpose. The tests open far fewer files.
+    #[cfg(target_os = "linux")]
+    const LEAKY: i32 = 900;
+    #[cfg(target_os = "macos")]
+    const LEAKY: i32 = 200;
     // SAFETY: dup2 onto an unused number; the copy is closed below.
     assert_eq!(unsafe { libc::dup2(secret.as_raw_fd(), LEAKY) }, LEAKY);
 
-    // A stand-in for bwrap that reports whether it was handed descriptor 57.
+    // A stand-in for bwrap that reports whether it was handed that descriptor.
     let script = format!(
-        "#!/bin/sh\nif [ -e /proc/$$/fd/{LEAKY} ]; then echo 'bwrap: LEAKED' >&2; else echo 'bwrap: CLEAN' >&2; fi\nexit 1\n"
+        "#!/bin/sh\nif [ -e /dev/fd/{LEAKY} ]; then echo '{LAUNCHER}: LEAKED' >&2; else echo '{LAUNCHER}: CLEAN' >&2; fi\nexit 1\n"
     );
     let fake = dir.file("fd-bwrap", script.as_bytes());
     Command::new("/bin/chmod")
@@ -835,7 +886,7 @@ fn open_descriptors_do_not_reach_the_sandbox() {
         .status()
         .unwrap();
     let cfg = ReaderConfig {
-        bwrap_path: Some(fake),
+        sandbox_path: Some(fake),
         ..config()
     };
     let report = settle(|| match Reader::new(cfg.clone()) {
@@ -844,7 +895,7 @@ fn open_descriptors_do_not_reach_the_sandbox() {
     });
     // SAFETY: closes the copy made above.
     unsafe { libc::close(LEAKY) };
-    assert_eq!(report, "bwrap: CLEAN");
+    assert_eq!(report, format!("{LAUNCHER}: CLEAN"));
 }
 
 /// S6: a helper reply that breaks the crate's promises is refused or
@@ -861,7 +912,7 @@ fn inconsistent_replies_are_not_passed_on() {
         );
         let path = stand_in(&dir, name, &[("*", send(&reply))]);
         ReaderConfig {
-            bwrap_path: Some(path),
+            sandbox_path: Some(path),
             ..config()
         }
     };
@@ -971,6 +1022,7 @@ fn every_call_counts_the_package_and_contents_it_uses() {
 
 /// F7: an application that already runs under a lower memory ceiling than the
 /// reader's own still gets a working reader, held to that lower ceiling.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_lower_inherited_memory_ceiling_is_kept() {
     let dir = Scratch::new();
@@ -983,7 +1035,7 @@ fn a_lower_inherited_memory_ceiling_is_kept() {
         .status()
         .unwrap();
     let cfg = ReaderConfig {
-        bwrap_path: Some(wrapped),
+        sandbox_path: Some(wrapped),
         ..config()
     };
     let mut title = None;
@@ -1035,7 +1087,7 @@ fn fatal_signals_end_the_helper_without_a_crash() {
     let cases = fatal
         .iter()
         .map(|s| s.to_string())
-        .chain(["stack".to_owned()]);
+        .chain(["stack".to_owned(), "cpu".to_owned()]);
     for case in cases {
         // Also with every signal blocked, as a parent could leave them.
         for blocked in [false, true] {
@@ -1054,6 +1106,13 @@ fn fatal_signals_end_the_helper_without_a_crash() {
             }
             let out = cmd.output().unwrap();
             let stderr = String::from_utf8_lossy(&out.stderr);
+            // A CPU limit with nothing above it ends the helper by SIGKILL
+            // on Linux, which leaves no crash record either.
+            let killed =
+                std::os::unix::process::ExitStatusExt::signal(&out.status) == Some(libc::SIGKILL);
+            if case == "cpu" && killed {
+                continue;
+            }
             assert_eq!(
                 out.status.code(),
                 Some(4),
@@ -1105,6 +1164,7 @@ fn zip64_archives_are_counted_by_their_real_entries() {
 
 /// F7: a lower soft memory limit inherited from the application is kept too,
 /// not raised to the helper's own.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_lower_inherited_soft_memory_limit_is_kept() {
     let dir = Scratch::new();
@@ -1121,7 +1181,7 @@ fn a_lower_inherited_soft_memory_limit_is_kept() {
         .status()
         .unwrap();
     let mut cfg = ReaderConfig {
-        bwrap_path: Some(wrapped),
+        sandbox_path: Some(wrapped),
         ..config()
     };
     cfg.limits.max_compression_ratio = u32::MAX;
@@ -1386,7 +1446,7 @@ fn malformed_cover_replies_are_refused() {
         let reply_file = dir.file(&format!("{name}.frame"), &bytes);
         let path = stand_in(&dir, name, &[("*", send(&reply_file))]);
         let cfg = ReaderConfig {
-            bwrap_path: Some(path),
+            sandbox_path: Some(path),
             ..config()
         };
         let mut outcome = None;

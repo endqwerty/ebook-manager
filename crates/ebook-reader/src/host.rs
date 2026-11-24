@@ -22,14 +22,14 @@ pub const HELPER_ENV: &str = "EBOOK_READER_HELPER";
 
 /// Deepest contents nesting the helper produces, counted from 0.
 const MAX_TOC_DEPTH: u32 = 32;
-const BWRAP_PLACES: [&str; 2] = ["/usr/bin/bwrap", "/bin/bwrap"];
 
 #[derive(Debug, Clone)]
 pub struct ReaderConfig {
     /// Use this helper instead of searching the documented places.
     pub helper_path: Option<PathBuf>,
-    /// Use this bubblewrap instead of `/usr/bin/bwrap` or `/bin/bwrap`.
-    pub bwrap_path: Option<PathBuf>,
+    /// Use this sandbox launcher instead of the system's: bubblewrap on
+    /// Linux, `sandbox-exec` on macOS.
+    pub sandbox_path: Option<PathBuf>,
     pub limits: Limits,
     /// Wall-clock allowance for one call.
     pub timeout: Duration,
@@ -39,7 +39,7 @@ impl Default for ReaderConfig {
     fn default() -> Self {
         ReaderConfig {
             helper_path: None,
-            bwrap_path: None,
+            sandbox_path: None,
             limits: Limits::default(),
             timeout: Duration::from_secs(15),
         }
@@ -49,7 +49,7 @@ impl Default for ReaderConfig {
 #[derive(Debug)]
 pub(crate) struct Inner {
     pub(crate) helper: PathBuf,
-    pub(crate) bwrap: PathBuf,
+    pub(crate) sandbox: PathBuf,
     pub(crate) limits: Limits,
     pub(crate) limits_json: String,
     pub(crate) timeout: Duration,
@@ -65,7 +65,7 @@ impl Inner {
     }
 }
 
-/// Helper, bubblewrap and limits that have already shown a working sandbox in
+/// Helper, launcher and limits that have already shown a working sandbox in
 /// this process. Every session checks its sandbox again as it starts, so this
 /// only spares a reader a second check before its first call.
 /// Each configuration has its own flag, so a slow check of one holds up only
@@ -81,12 +81,12 @@ pub struct Reader {
 }
 
 impl Reader {
-    /// Find the helper and bubblewrap, then prove the sandbox works by running
+    /// Find the helper and the sandbox launcher, then prove the sandbox works by running
     /// the helper's isolation check inside it. Any failure is an error: there
     /// is no unsandboxed fallback.
     pub fn new(config: ReaderConfig) -> Result<Reader, ReaderError> {
         let helper = find_helper(config.helper_path.as_deref())?;
-        let bwrap = find_bwrap(config.bwrap_path.as_deref())?;
+        let sandbox = find_sandbox(config.sandbox_path.as_deref())?;
         let limits_json =
             serde_json::to_string(&config.limits).map_err(|e| ReaderError::HelperFailed {
                 detail: e.to_string(),
@@ -94,7 +94,7 @@ impl Reader {
         let reader = Reader {
             inner: Arc::new(Inner {
                 helper,
-                bwrap,
+                sandbox,
                 limits: config.limits,
                 limits_json,
                 timeout: config.timeout,
@@ -102,7 +102,7 @@ impl Reader {
         };
         let key = (
             reader.inner.helper.clone(),
-            reader.inner.bwrap.clone(),
+            reader.inner.sandbox.clone(),
             reader.inner.limits_json.clone(),
         );
         let flag = PROVEN
@@ -265,17 +265,17 @@ fn find_helper(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
     })
 }
 
-fn find_bwrap(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
+fn find_sandbox(configured: Option<&Path>) -> Result<PathBuf, ReaderError> {
     let places: Vec<PathBuf> = match configured {
         Some(p) => vec![p.to_owned()],
-        None => BWRAP_PLACES.iter().map(PathBuf::from).collect(),
+        None => crate::sandbox::PLACES.iter().map(PathBuf::from).collect(),
     };
     places
         .iter()
         .find(|p| p.is_absolute() && p.is_file())
         .cloned()
         .ok_or_else(|| ReaderError::SandboxUnavailable {
-            reason: "bubblewrap (bwrap) is not installed".into(),
+            reason: crate::sandbox::MISSING.into(),
         })
 }
 

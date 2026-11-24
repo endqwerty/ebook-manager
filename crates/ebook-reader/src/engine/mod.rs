@@ -7,6 +7,8 @@ pub mod encoding;
 pub mod entities;
 pub mod isolation;
 pub mod markup;
+#[cfg(target_os = "macos")]
+pub mod memory;
 pub mod package;
 pub mod paths;
 pub mod resource;
