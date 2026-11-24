@@ -71,7 +71,7 @@ fn stage(source: PathBuf, thumbnails: &Path) -> Result<Candidate> {
 }
 
 /// The library's name for the scheme the reader helper found.
-fn protection(found: ebook_reader::Protection) -> Protection {
+pub(crate) fn protection(found: ebook_reader::Protection) -> Protection {
     match found {
         ebook_reader::Protection::ReadiumLcp => Protection::Lcp,
         ebook_reader::Protection::Adobe => Protection::Adobe,

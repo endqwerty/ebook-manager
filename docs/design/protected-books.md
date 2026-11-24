@@ -128,6 +128,14 @@ so a record with any other value is refused like other invalid metadata.
 Replacing a book's file keeps the rule simple: the protection is that of the
 file now kept.
 
+A book imported before this change was imported only when the old check found
+no encrypted resource, but a file carrying only a marker passed that check and
+is stored unlocked. Its lock is found when it is read: the helper refuses to
+open it as protected, the window inspects the file, records the scheme for that
+version of the book (`Library::set_protection`) and shows the locked alert.
+Rescanning every book at upgrade would cost a helper run per book for a rare
+case.
+
 ### What the reader sees
 
 One phrase names the lock everywhere: "Locked by" and the scheme's name,

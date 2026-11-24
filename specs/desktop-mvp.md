@@ -74,7 +74,7 @@ Click or use the arrow keys to select. Shift extends the range. Control-click to
 
 - A locked book shows the closed-lock symbol where the finished check mark goes: after the author in the grid, in the list's trailing slot whatever the sort, and in the table's Progress column. The shelf's spine shows nothing extra. Its tooltip names the lock and says that Ebook Manager can't read, convert or change the text of books locked this way.
 - Every view's spoken name for a locked book ends with its lock, such as "Locked by Adobe", in place of how far it has been read. The table's rows are named like the grid's items.
-- Read on a locked book opens no reader. An alert titled "Can’t open" and the title says which scheme locks it and what the app cannot do, with one button, Close, and nothing else. Send to device and Edit work as for any book.
+- Read on a locked book opens no reader. An alert titled "Can’t open" and the title says which scheme locks it and what the app cannot do, with one button, Close, and nothing else. Send to device and Edit work as for any book. A book imported before the app recognised its scheme opens no reader either: when the reader helper refuses it as protected, the reader window closes, the app looks at the file again, keeps the scheme it finds (or an unrecognised one) for that version of the book, and shows the same alert.
 
 ## Edit
 

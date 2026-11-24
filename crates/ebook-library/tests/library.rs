@@ -665,3 +665,20 @@ fn a_catalogue_without_the_protection_column_gains_it_in_place() -> Result<()> {
     assert!(schemes.contains(&("A Small Atlas", None)));
     Ok(())
 }
+
+/// A book stored unlocked whose file the reader now finds locked takes the
+/// scheme, but only for the version of the file that was looked at.
+#[test]
+fn a_lock_found_later_is_kept_for_that_version() -> Result<()> {
+    let d = tempdir()?;
+    let staged = d.path().join("stage");
+    fs::write(&staged, b"old package")?;
+    let mut l = Library::open(&d.path().join("app"))?;
+    let b = add(&mut l, &staged)?;
+    l.set_protection(&b.id, "another version", Protection::Adobe)?;
+    assert_eq!(first_row(&l)?.protection, None);
+    l.set_protection(&b.id, &b.version_id, Protection::Adobe)?;
+    assert_eq!(l.book(&b.id)?.imported.protection, Some(Protection::Adobe));
+    assert_eq!(first_row(&l)?.protection, Some(Protection::Adobe));
+    Ok(())
+}
