@@ -43,7 +43,8 @@ embedded title even when its exported filename uses your edited library title.
 Read the [desktop guide](apps/desktop/README.md) for the controls and the
 [library guide](crates/ebook-library/README.md) to back up and restore your
 books, edits and reading positions. The [EPUB reader guide](crates/ebook-reader/README.md)
-describes format support and the Linux sandbox.
+describes format support and the sandbox, and the [bridge guide](crates/ebook-bridge/README.md)
+describes the UniFFI layer shared with native shells.
 
 ## Back up and restore
 

@@ -1,0 +1,33 @@
+[package]
+name = "ebook-bridge"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+name = "ebook_bridge"
+crate-type = ["lib", "staticlib"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[dependencies]
+anyhow = "1"
+ebook-device = { path = "../ebook-device" }
+ebook-library = { path = "../ebook-library" }
+ebook-reader = { path = "../ebook-reader" }
+libc = "0.2"
+png = "0.18"
+sha2 = "0.10"
+tempfile = "3"
+uniffi = "0.32.2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

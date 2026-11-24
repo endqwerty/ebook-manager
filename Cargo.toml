@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop", "crates/ebook-convert", "crates/ebook-device", "crates/ebook-library", "crates/ebook-reader"]
+members = ["apps/desktop", "crates/ebook-bridge", "crates/ebook-convert", "crates/ebook-device", "crates/ebook-library", "crates/ebook-reader"]
 resolver = "2"
 
 [profile.release]
