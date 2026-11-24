@@ -40,8 +40,9 @@ Survey runs in both places, matching the Linux desktop shell:
    survey failure during staging leaves the book unsurveyed rather than failing
    the import.
 2. **In the background and on demand for unsurveyed or restored books.** The
-   shell calls `Library::survey_unsurveyed(limit)` from a background task at
-   startup or after a portable restore to populate word counts and covers for
+   shell calls `Library::survey_unsurveyed(limit, skip)` in batches at startup
+   and after Refresh or Try Again. Pass failed IDs into subsequent batches so
+   other books can progress. A new survey retries those IDs. This fills in
    books that lack survey version 1. `Library::cover_thumbnail(book_id)` also
    remakes any missing or tampered file in `cache/thumbs` from the managed EPUB.
 

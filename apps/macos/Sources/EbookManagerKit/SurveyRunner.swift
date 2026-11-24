@@ -25,7 +25,7 @@ public final class SurveyRunner {
             restartRequested = true
             return task
         }
-        let started = Task { @MainActor [weak self] in
+        let started = Task<Void, Never> { @MainActor [weak self] in
             await self?.run()
         }
         task = started
