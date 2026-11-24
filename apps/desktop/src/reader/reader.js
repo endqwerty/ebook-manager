@@ -127,7 +127,7 @@
 		img.dataset.lineartChecked = "1";
 		if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) return;
 		try {
-			const c = document.createElement("canvas");
+			const c = document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
 			const w = Math.min(32, img.naturalWidth);
 			const h = Math.min(32, img.naturalHeight);
 			c.width = w;
@@ -373,6 +373,11 @@
 				}
 			} else if (to.end) {
 				show(pages() - 1);
+				const { bandLines, totalLines } = rulerMetrics();
+				if (bandLines > 0) {
+					rulerLine = Math.max(0, totalLines - bandLines);
+					renderRuler();
+				}
 			} else if (to.page !== undefined) {
 				show(to.page);
 			} else {
@@ -475,6 +480,7 @@
 				if (line >= 0 && line < totalLines) {
 					rulerLine = Math.max(0, Math.min(line, Math.max(0, totalLines - bandLines)));
 					renderRuler();
+					return;
 				}
 			}
 			const along = (rtl() ? width() - event.clientX : event.clientX) / width();

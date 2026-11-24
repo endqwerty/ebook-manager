@@ -796,8 +796,36 @@ impl Reading {
                 return;
             };
             if state == Some(false) {
-                reading.turn(by);
+                reading.turn_with_ruler(by);
+            }
+        });
+    }
+
+    fn turn_with_ruler(self: &Rc<Self>, by: i32) {
+        let Some((place, load)) = self.keeper.borrow().displayed() else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        self.view.turn(by, true, move |moved| {
+            let Some(reading) = weak.upgrade() else {
+                return;
+            };
+            let keeper = reading.keeper.borrow();
+            let same = keeper.displayed().is_some_and(|(_, shown)| shown == load) && !keeper.gone();
+            drop(keeper);
+            if !same {
+                return;
+            }
+            if moved {
                 reading.view.reset_ruler(by < 0);
+                return;
+            }
+            let chapters = reading.book.chapters().len() as u32;
+            if by > 0 && place.chapter + 1 < chapters {
+                reading.load(place.chapter + 1, Landing::Start);
+            } else if by < 0 && place.chapter > 0 {
+                // `Landing::End` places the ruler on the last line after landing.
+                reading.load(place.chapter - 1, Landing::End);
             }
         });
     }
