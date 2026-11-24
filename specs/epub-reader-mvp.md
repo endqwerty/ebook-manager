@@ -93,13 +93,13 @@ the place of `bwrap`. S2 and S3 read as follows.
   in `tests/failures.rs` checks what the profile lets the helper read.
 - **S9** macOS has no parent-death signal. The helper ends when the
   application's end closes its input. A call in progress then runs until it
-  finishes or its CPU limit (F7) stops it. The application's open files are
-  marked close-on-exec one by one: every number under its descriptor limit
-  as the helper's process starts, and past it up to the highest the
-  application had open a moment before. One case is not covered: a file
-  opened without close-on-exec in that moment, by another thread that also
-  lowers the limit beneath it before the helper's process starts. Nothing in
-  the application changes that limit.
+  finishes or its CPU limit (F7) stops it. To mark inherited descriptors close-on-exec, the launcher scans from
+  descriptor 3 to the greater of the observed limit and the highest descriptor
+  listed before launch plus 256 (exclusive). It also covers the child’s soft
+  limit at startup. These bounds are capped at 1,048,576 when the limit query
+  succeeds. A descriptor opened beyond the scan after listing can escape if
+  the limit is lowered below it before the fork. The application does not
+  change that limit.
 - **S10** macOS refuses an address-space limit below what a process already
   maps, so F7's memory bound is kept by the helper's allocator: it counts the
   bytes of every allocation in use and refuses one that would pass

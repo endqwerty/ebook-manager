@@ -15,8 +15,8 @@ CrossPoint documents native EPUB support and browsing folders on that card.
   retry recognises that copy too. If both names contain different bytes, the
   user chooses another folder.
 - Export syncs and checks a temporary copy before publishing it. On macOS FAT
-  and exFAT volumes, it then writes those bytes into a newly created destination
-  file. Disconnecting during that write can leave an empty or partial EPUB under
+  and exFAT volumes, it frees the temporary space and copies from the original
+  into an exclusively created destination file, then verifies the digest again. Disconnecting during that write can leave an empty or partial EPUB under
   the final name. A retry preserves that file and tries the hash-suffixed name.
   An interrupted transfer can also leave a hidden temporary file. Safely eject
   the volume after the transfer.

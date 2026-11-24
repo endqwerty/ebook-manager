@@ -17,7 +17,8 @@ joined with the filename.
 The copy gets its name without replacing anything, by the first way the
 filesystem supports: a rename that refuses to replace, a hard link, or, on FAT
 and exFAT under macOS, which have neither, a file created under the name only
-if it is free, into which the checked copy is written a second time. That last
+if it is free. Export frees the temporary copy’s space, copies from the open
+source into the new file, syncs it and checks its digest. That last
 way touches only the file it created, so a file that something else puts under
 the name meanwhile is left alone. An export cut short there leaves an empty or
 partial file under the name. The next export of that book then finds the name

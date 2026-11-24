@@ -126,3 +126,4 @@ jobs:
           trap 'hdiutil detach "$card"' EXIT
           diskutil info "$card" | grep "FAT32"
           TMPDIR="$card" cargo test --release --locked -p ebook-device
+          EBOOK_TEST_CARD="$card" cargo test --release --locked -p ebook-device --test export card_with_room_for_one_copy -- --ignored --exact

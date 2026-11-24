@@ -136,7 +136,7 @@ impl<'a> Staged<'a> {
     /// sync covers that too; or, on FAT and exFAT under macOS, which have
     /// neither, a second copy written into a file created under the real
     /// name only if it is free.
-    fn publish(&mut self, name: &str, expected: [u8; 32]) -> io::Result<()> {
+    fn publish(&mut self, name: &str, source: &mut File, expected: [u8; 32]) -> io::Result<()> {
         let unsupported = |e: Errno| {
             [
                 Errno::INVAL,
@@ -161,13 +161,14 @@ impl<'a> Staged<'a> {
         }
         let flags =
             OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        source.rewind()?;
+        self.file.set_len(0)?;
         let mut claimed = File::from(openat(self.dir, name, flags, Mode::from_raw_mode(0o600))?);
         // From here only the file this call created is touched, through its
         // descriptor, so whatever else takes the name meanwhile is left as
         // it is. A copy that fails is emptied, not removed by name.
         let written = (|| {
-            self.file.rewind()?;
-            io::copy(&mut self.file, &mut claimed)?;
+            io::copy(source, &mut claimed)?;
             claimed.sync_all()?;
             claimed.rewind()?;
             if digest(&mut claimed)? != expected {
@@ -240,7 +241,7 @@ fn copy_to(
             "The copy on the device did not match the original",
         ));
     }
-    match staged.publish(name, expected) {
+    match staged.publish(name, source, expected) {
         Ok(()) => {
             dir.sync_all()?;
             Ok(ExportOutcome::Copied(display))
