@@ -120,11 +120,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux-junit
-          path: target/nextest/ci
-
       - name: Put mainworthy on the path
         run: |
           image=ghcr.io/endqwerty/mainworthy:main
@@ -135,6 +130,11 @@ jobs:
           docker rm "$container" >/dev/null
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/mainworthy" version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-junit
+          path: target/nextest/ci
 
       - name: Report results and read the gate
         if: always()

@@ -5,7 +5,16 @@ import SwiftUI
 
 @MainActor
 final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
-    var libraryModel: LibraryViewModel?
+    private var libraryModel: LibraryViewModel?
+    private var pendingFiles: [URL] = []
+
+    func attach(_ model: LibraryViewModel) {
+        libraryModel = model
+        if !pendingFiles.isEmpty {
+            model.importURLs(pendingFiles)
+            pendingFiles.removeAll()
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -20,7 +29,11 @@ final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        libraryModel?.importURLs(urls)
+        if let libraryModel {
+            libraryModel.importURLs(urls)
+        } else {
+            pendingFiles.append(contentsOf: urls)
+        }
     }
 }
 
@@ -34,7 +47,7 @@ struct EbookManagerApp: App {
             LibraryWindowView(model: model)
                 .frame(minWidth: 640, minHeight: 460)
                 .onAppear {
-                    appDelegate.libraryModel = model
+                    appDelegate.attach(model)
                     model.start()
                 }
         }

@@ -51,9 +51,10 @@ are handled in `ReaderWebController` around those unchanged files:
 
 ## What callers and users can rely on
 
-- **All bridge calls run off the main actor.** `BridgeService` and
-  `OpenBookHandle` dispatch every synchronous `ebook-bridge` call onto dedicated
-  background `DispatchQueue`s, separating catalogue reads from writes.
+- **Background work and shutdown.** The shell dispatches synchronous bridge
+  operations to background queues. Opening a book and loading its cover can
+  update library records or cached files. Closing a reader waits for the
+  last queued position save, so it can wait for a catalogue write to finish.
 - **Sandboxed helper beside the executable.** `build.sh` places
   `ebook-reader-helper` next to `EbookManager` inside `Contents/MacOS` and
   signs both ad hoc (`codesign -s -`).

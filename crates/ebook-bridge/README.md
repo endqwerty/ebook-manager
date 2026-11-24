@@ -68,8 +68,9 @@ Survey runs in both places, matching the Linux desktop shell:
 
 - Creates and locks `<directory>/library.lock`, `<directory>/library.sqlite`,
   `<directory>/portable/` and `<directory>/cache/thumbs/`.
-- Holds temporary staged files in memory-backed `PendingReview` entries while an
-  import awaits `settle_review`, removing them when settled, skipped or dropped.
+- Keeps staged files on disk in the system temporary directory while an import
+  awaits review. The in-memory token table owns the files until the review is
+  settled, skipped or dropped.
 - Spawns sandboxed `ebook-reader-helper` processes through `ebook-reader` for
   import, survey and `OpenBook` sessions; dropping `OpenBook` ends its helper.
 

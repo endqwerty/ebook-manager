@@ -65,10 +65,12 @@ The GTK shell has the same joins in `apps/desktop/src` (`imports.rs`,
 without moving the GTK code. Once both shells work, the GTK shell should call
 the bridge's Rust API and its copies go.
 
-A decision that would be wrong if: Swift needs to hold a view of a hundred
-thousand rows and each window costs more than a frame through UniFFI's
-serialisation. Measure a 128-row window at 100,000 books; above 4 ms, move
-the row list to a C buffer.
+Keep the UniFFI row records while a 128-row window at 100,000 books fits
+within 4 ms. On Apple silicon, five release-mode runs through the generated
+Swift binding had medians of 0.79–0.87 ms. Each run opened the generated
+100,000-book catalogue, warmed five windows and then timed twenty different
+windows. Each returned 128 distinct IDs and a title for every row. This
+measures the catalogue call and Swift decoding; drawing the rows is separate.
 
 ### The shell
 
@@ -155,7 +157,8 @@ is one implementation and no path to go stale.
    is imported, each gets its own result and the window shows one book until
    the revision is settled. Bridge tests, on Linux and macOS.
 5. When the app is closed and opened again, the book opens at the place it was
-   left. Bridge tests for the stored place; the app's UI test for the view.
+   left. The Swift walkthrough checks the stored place through the bridge and
+   renders the chapter in a real WKWebView.
 6. When a book is sent to a folder twice, the second send reports that it is
    already there. `crates/ebook-device/tests`.
 
