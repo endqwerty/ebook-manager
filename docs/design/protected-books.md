@@ -83,8 +83,13 @@ metadata exists. Instead, when the archive has an encrypted entry and the
 container file or the package cannot be read because it is encrypted,
 `inspect` returns metadata with protection "a password" and nothing else.
 Import then names the book after its file name, as it already does for a
-package without a title. Every other call on such a file still answers
-`Protected`.
+package without a title. Open, chapter, contents and resource calls answer
+`Protected`, and a survey answers with no count and no cover.
+
+A marker file that cannot be read counts as a lock, never as a broken book:
+an `encryption.xml` or `rights.xml` that is ZIP-encrypted, malformed or over a
+limit makes the book locked by a password (when ZIP-encrypted) or by an
+unrecognised scheme.
 
 ### What is read from a locked book
 
@@ -105,14 +110,17 @@ metadata, so it survives a rebuild and a restore. Older records without it read
 as unprotected. A book imported before this change was refused, so none needs
 reviewing.
 
-The catalogue's `book` table gains a `protection` column. The catalogue version
-stays 1: setting a version 1 catalogue aside would leave its device-local
-source paths and unpublished changes behind
-([library README](../../crates/ebook-library/README.md)). Instead, opening a
-catalogue whose `book` table has no `protection` column adds it with
-`ALTER TABLE` and clears the stored projection profile, so the existing
-re-projection on open fills every row from its record. `BrowseRow` carries the
-scheme so the views can show it without another read.
+The catalogue's `book` table gains a `protection` column, written by
+`project.sql` and read by the browse query. The catalogue version stays 1:
+setting a version 1 catalogue aside would leave its device-local source paths
+and unpublished changes behind
+([library README](../../crates/ebook-library/README.md)). Instead, opening an
+existing version 1 catalogue whose `book` table has no `protection` column adds
+it with `ALTER TABLE`. Every book in such a catalogue was imported before
+protected books could be, so an empty column is already right and no row is
+projected again. `BrowseRow` carries the scheme so the views can show it
+without another read. The record's `protection` is an enum of the five names,
+so a record with any other value is refused like other invalid metadata.
 
 Replacing a book's file keeps the rule simple: the protection is that of the
 file now kept.
@@ -129,21 +137,28 @@ text of books locked this way."
   of the author line in the finished mark's slot. A locked book has no reading
   progress, so the slot holds one mark.
 - **List.** The same symbol sits in the row's trailing slot beside the date
-  or percentage, where the finished mark goes, whatever the sort.
+  or percentage, where the finished mark goes. Unlike the finished mark, it
+  shows whatever the sort, because it says the book cannot be read.
 - **Table.** The Progress column shows the symbol in place of a percentage.
 - **Shelf.** The spine shows nothing extra.
 - **Spoken names and tooltips.** The grid's and list's item, the shelf's spine
   and, new, each table row have a spoken name that ends with the lock phrase,
   for example "Moby-Dick, Herman Melville, Locked by Adobe". It takes the place
-  of the reading state, which a locked book does not have. The lock symbol's
-  tooltip is the lock phrase and the sentence.
+  of the reading state, which a locked book does not have. The table's rows get
+  it from a row factory that labels each `ColumnViewRow`. The lock symbol's
+  tooltip is the lock phrase and the sentence, for a pointer. For the keyboard
+  and a screen reader the name carries the phrase, and Read gives the
+  sentence.
 - **Read.** Read on a locked book, by menu, key or double-click, starts no
   reader and shows the platform's alert. Title: "Can't open *Title*". Message:
   the lock phrase as a sentence ("It is locked by Adobe.") and the explanation
   sentence. One button, Close, the default for Return and Escape. No link and
-  no other action. [Interface screens](interface-screens.md#dialogs-and-messages)
-  gains this case, because its rules cover confirmations and background
-  problems but not a request that cannot be carried out at all.
+  no other action. The interface rules allow a message only for a problem that
+  needs a decision and keep one-book problems off dialogs. A request the app
+  cannot carry out at all is a third case: without an answer the reader's
+  action would seem ignored. [The base page](interface.md)'s Quiet rule and
+  messages rule, and [interface screens](interface-screens.md#dialogs-and-messages),
+  gain that case in this change.
 - **Import.** A locked book imports like any other and the import report
   counts it as added.
 - **Send to device.** Allowed. Copying the managed file is not reading or
@@ -154,19 +169,20 @@ text of books locked this way."
 
 ### No way around the lock
 
-The README's project section states the policy that covers the docs and the
-issue tracker: the project does not ship, link to, host or describe a way to
-remove protection, and closes issues and pull requests that ask for one. In
-the app, the only text about a lock is the phrase, the sentence and the alert
-above, and a test checks the alert's text and buttons.
+A new `CONTRIBUTING.md`, which GitHub links from the new-issue and
+new-pull-request pages, and the README's project section state the policy for
+the docs, the issue tracker and any future extension list: the project does not
+ship, link to, host or describe a way to remove protection, and closes issues
+and pull requests that ask for one. LAW-1 is marked done on that policy and on
+the app's content; the app has no extension list yet. In the app, the only text
+about a lock is the phrase, the sentence and the alert above, and a test checks
+the alert's text and buttons. FMT-11 rests on the absence of any such code,
+link or instruction, which each pull request's reviewers check in the diff.
 
 ### Risks and limits
 
 - A file can claim a scheme it does not use. The name only explains a refusal;
   nothing is unlocked or trusted because of it.
-- Adding the column re-projects every book once, on the first start after the
-  update. Its time at 100,000 books is measured with the scale check and
-  reported in the pull request.
 - `rights.xml` is untrusted input. It goes through the helper's sandbox and
   XML limits like the package does.
 - Apple's marker is unsourced beyond secondary descriptions. If it is wrong,
@@ -201,9 +217,13 @@ above, and a test checks the alert's text and buttons.
    scheme and the explanation, has the one response Close, contains no link,
    and no reader opens. Test: unit test of the alert's text and responses, and
    a smoke driver step.
-8. When the catalogue on disk has no `protection` column, then opening adds it
-   and a locked book's protection is shown, with source paths kept. Test:
-   library crate test that opens a catalogue made by the previous schema.
+8. When the catalogue on disk has no `protection` column, then opening adds it,
+   its books stay unprotected and its source paths are kept, and a locked book
+   imported afterwards shows its protection. Test: library crate test that
+   opens a catalogue made by the previous schema.
+10. When `rights.xml` or `encryption.xml` is malformed or ZIP-encrypted, then
+   the book is locked (unrecognised, or a password) and its metadata is still
+   read when the package can be. Test: reader crate tests.
 9. When the portable record has no `protection` field, then the book is
    unprotected. Test: library crate test reading such a record.
 
@@ -235,15 +255,19 @@ above, and a test checks the alert's text and buttons.
   phrase, mark and names (`views/mod.rs`, `grid.rs`, `list.rs`, `table.rs`,
   `shelf/spine.rs`); the Read alert (`window.rs` `read()`); smoke steps;
   `specs/desktop-mvp.md`.
-- `docs/design/interface-screens.md`: the alert case.
-- `README.md`: the policy sentence.
+- `docs/design/interface.md` (Quiet and messages rules),
+  `docs/design/interface-screens.md` (dialogs and messages) and
+  `docs/design/interface-views.md` (the list's trailing slot and the table's
+  Progress column hold the lock): the alert case and the lock mark.
+- `docs/design/library-browsing.md`: a locked book's cover and its column.
+- `README.md` and a new `CONTRIBUTING.md`: the policy.
 - `docs/requirements/02-content-types.md` and `10-constraints.md`: mark
   FMT-10, FMT-11, LAW-1 and LAW-2 done.
 
 ## Tasks
 
 1. Reader: scheme detection, unreadable package, survey cover, with tests
-   (2, 3, 4, 5). Open.
+   (2, 3, 4, 5, 10). Done except 10.
 2. Library: field, column, row, with tests (8, 9). Open.
 3. Desktop: import, views, Read alert, smoke steps (1, 2, 6, 7). Open.
 4. Specs, requirements, READMEs and interface page. Open.
