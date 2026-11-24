@@ -9,8 +9,8 @@ mod text_panel;
 mod view;
 
 use super::*;
-use ebook_library::ReadingPosition;
-use ebook_reader::{Reader, ReaderConfig, ResourceId};
+use ebook_library::{Protection, ReadingPosition};
+use ebook_reader::{Reader, ReaderConfig, ReaderError, ResourceId, Unsupported};
 use progress::Weight;
 use std::{
     cell::{Cell, RefCell},
@@ -139,6 +139,46 @@ pub fn open_in(parent: &impl IsA<gtk::Window>, store: &store::Store, b: &Rc<Book
         }
         let (book, (chapter, landing)) = match result {
             Ok(x) => x,
+            Err(e)
+                if e.downcast_ref::<ReaderError>()
+                    == Some(&ReaderError::Unsupported(Unsupported::Protected)) =>
+            {
+                // A book imported before its scheme was recognised: keep the
+                // lock found now, and answer as for any locked book.
+                w.close();
+                let (id, version) = (b.id.clone(), b.version_id.clone());
+                let found = store
+                    .run(move |lib| lib.managed_file(&id))
+                    .await
+                    .ok()
+                    .map(|path| {
+                        gio::spawn_blocking(move || {
+                            Reader::new(ReaderConfig::default())?.inspect(&path)
+                        })
+                    });
+                let protection = match found {
+                    Some(inspect) => inspect
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .and_then(|m| m.protection)
+                        .map(crate::imports::protection),
+                    None => None,
+                }
+                .unwrap_or(Protection::Unknown);
+                let id = b.id.clone();
+                // The library may have gone while the file was looked at.
+                if parent_gone.get() || parent_win.surface().is_none_or(|s| s.is_destroyed()) {
+                    orphaned(&parent_win);
+                    return;
+                }
+                refuse_locked(&parent_win, &b.title, protection);
+                // Only the views' lock mark waits on this. Read asks again.
+                let _ = store
+                    .run(move |lib| lib.set_protection(&id, &version, protection))
+                    .await;
+                return;
+            }
             Err(e) => {
                 status.set_text(&format!("Couldn’t open book · {e:#}"));
                 return;
@@ -1020,5 +1060,64 @@ mod tests {
         let _ = poll_once(late.as_mut());
         await_library(&store, None).unwrap();
         assert_eq!(*log.lock().unwrap(), [2, 1]);
+    }
+}
+
+/// The answer to Read for a locked book: what cannot be done and why, and
+/// its one response. Nothing else is offered.
+fn locked_alert(title: &str, protection: Protection) -> (String, String, [&'static str; 1]) {
+    let lock = crate::views::locked_by(protection);
+    (
+        format!("Can\u{2019}t open {title}"),
+        format!(
+            "It is {}{}. {}",
+            lock[..1].to_lowercase(),
+            &lock[1..],
+            crate::views::LOCK_MEANS
+        ),
+        ["Close"],
+    )
+}
+
+/// Shows why a locked book cannot be read, in place of a reader.
+pub fn refuse_locked(window: &impl IsA<gtk::Window>, title: &str, protection: Protection) {
+    let (message, detail, buttons) = locked_alert(title, protection);
+    gtk::AlertDialog::builder()
+        .message(message)
+        .detail(detail)
+        .buttons(buttons)
+        .default_button(0)
+        .cancel_button(0)
+        .modal(true)
+        .build()
+        .show(Some(window));
+}
+
+#[cfg(test)]
+mod locked_tests {
+    use super::*;
+
+    #[test]
+    fn read_on_a_locked_book_says_why_and_offers_only_close() {
+        let (message, detail, buttons) = locked_alert("Moby-Dick", Protection::Adobe);
+        assert_eq!(message, "Can\u{2019}t open Moby-Dick");
+        assert_eq!(
+            detail,
+            "It is locked by Adobe. Ebook Manager can't read, convert or change the text of \
+             books locked this way."
+        );
+        assert_eq!(buttons, ["Close"]);
+        for protection in [
+            Protection::Lcp,
+            Protection::Apple,
+            Protection::Password,
+            Protection::Unknown,
+        ] {
+            let (_, detail, _) = locked_alert("T", protection);
+            assert!(
+                !detail.contains("http") && !detail.contains("www"),
+                "{detail}"
+            );
+        }
     }
 }

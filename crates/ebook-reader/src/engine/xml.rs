@@ -155,11 +155,23 @@ pub fn parse_tree(src: &str) -> Element {
 /// As [`parse_tree`], and whether the whole document fitted. `false` means
 /// the tree stops early and anything counted from it would be short.
 pub fn parse_tree_checked(src: &str) -> (Element, bool) {
+    let (tree, whole, _) = parse_tree_status(src);
+    (tree, whole)
+}
+
+/// The tree only when the document parsed without an error, closed every
+/// element it opened and fitted the limits.
+pub fn parse_tree_complete(src: &str) -> Option<Element> {
+    let (tree, whole, complete) = parse_tree_status(src);
+    (whole && complete).then_some(tree)
+}
+
+fn parse_tree_status(src: &str) -> (Element, bool, bool) {
     let mut whole = true;
     let mut stack: Vec<Element> = vec![Element::default()];
     let mut overflow = 0usize;
     let mut nodes = 0usize;
-    tokenize(src, false, |tok| {
+    let clean = tokenize(src, false, |tok| {
         // An element counts once, at its start; so does each run of text.
         if !matches!(tok, Tok::End { .. }) {
             nodes += 1;
@@ -201,10 +213,11 @@ pub fn parse_tree_checked(src: &str) -> (Element, bool) {
         }
         true
     });
+    let closed = stack.len() == 1 && overflow == 0;
     while stack.len() > 1 {
         close_top(&mut stack);
     }
-    (stack.pop().unwrap_or_default(), whole)
+    (stack.pop().unwrap_or_default(), whole, clean && closed)
 }
 
 fn close_top(stack: &mut Vec<Element>) {

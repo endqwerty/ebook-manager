@@ -1,15 +1,22 @@
 //! The table: a `GtkColumnView` with a column for each fact. Its headers
 //! change the model's sort, and the table never sorts rows itself.
-use super::{BookCell, Shared, column_factory, fact, finished, finished_mark, truncating};
+use super::{
+    BookCell, Shared, column_factory, fact, finished, finished_mark, lock_mark, show_lock, spoken,
+    truncating,
+};
 use crate::{
-    browse::BookListModel,
+    browse::{BookListModel, BookObject},
     cover::{Cover, Kind},
     settings::{Column, Sort, SortField},
     views::grid::EDGE,
 };
 use gtk::{gio, glib, prelude::*};
 use gtk4 as gtk;
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 
 /// The small cover in the title column. A row is this cover and 8 more.
 const COVER: i32 = 20;
@@ -50,11 +57,14 @@ fn cell(shared: &Shared, field: SortField) -> BookCell {
             label.set_xalign(1.0);
             label.set_hexpand(true);
             let done = finished_mark();
+            let lock = lock_mark();
             content.append(&label);
             content.append(&done);
+            content.append(&lock);
             BookCell::new(&content, shared, move |_, book| {
                 label.set_text(&book.map(|book| fact(book, field)).unwrap_or_default());
                 done.set_visible(book.is_some_and(|book| finished(book.progress)));
+                show_lock(&lock, book);
             })
         }
         _ => {
@@ -72,6 +82,44 @@ fn cell(shared: &Shared, field: SortField) -> BookCell {
             })
         }
     }
+}
+
+/// Names each row as the grid and list name their items, once its book
+/// arrives.
+fn row_names() -> gtk::SignalListItemFactory {
+    fn name(row: &gtk::ColumnViewRow, book: &BookObject) {
+        row.set_accessible_label(&book.row().map(|b| spoken(&b)).unwrap_or_default());
+    }
+    let factory = gtk::SignalListItemFactory::new();
+    let bound: Rc<RefCell<HashMap<usize, (BookObject, glib::SignalHandlerId)>>> = Rc::default();
+    let binding = bound.clone();
+    factory.connect_bind(move |_, slot| {
+        let Some(row) = slot.downcast_ref::<gtk::ColumnViewRow>() else {
+            return;
+        };
+        let Some(book) = row.item().and_downcast::<BookObject>() else {
+            return;
+        };
+        name(row, &book);
+        let weak = row.downgrade();
+        let handler = book.connect_loaded_notify(move |book| {
+            if let Some(row) = weak.upgrade() {
+                name(&row, book);
+            }
+        });
+        if let Some((old, handler)) = binding
+            .borrow_mut()
+            .insert(slot.as_ptr() as usize, (book, handler))
+        {
+            old.disconnect(handler);
+        }
+    });
+    factory.connect_unbind(move |_, slot| {
+        if let Some((book, handler)) = bound.borrow_mut().remove(&(slot.as_ptr() as usize)) {
+            book.disconnect(handler);
+        }
+    });
+    factory
 }
 
 /// A header's menu: which columns are shown, and moving this one. It is
@@ -156,6 +204,7 @@ pub fn build(
     view.set_margin_start(EDGE - 6);
     view.set_margin_end(EDGE - 6);
     view.update_property(&[gtk::accessible::Property::Label("Books")]);
+    view.set_row_factory(Some(&row_names()));
     let events = Rc::new(events);
     for saved in columns {
         let field = saved.field;

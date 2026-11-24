@@ -4,7 +4,7 @@
 mod common;
 
 use common::*;
-use ebook_reader::{Reader, ReaderConfig, ReaderError, Unsupported};
+use ebook_reader::{Protection, Reader, ReaderConfig, ReaderError, Unsupported};
 use image::ImageFormat;
 use std::path::PathBuf;
 use std::process::Command;
@@ -212,7 +212,7 @@ fn protected_books_are_refused_with_a_clear_reason() {
     assert_eq!(err, ReaderError::Unsupported(Unsupported::Protected));
     assert!(err.to_string().contains("DRM-free"));
     let m = reader().inspect(&path).unwrap();
-    assert!(m.protected);
+    assert_eq!(m.protection, Some(Protection::Unrecognised));
     assert_eq!(m.title.as_deref(), Some("Simple"));
 
     // Obfuscated fonts alone do not lock the text.
@@ -221,8 +221,214 @@ fn protected_books_are_refused_with_a_clear_reason() {
   <enc:CipherData><enc:CipherReference URI="OEBPS/font.otf"/></enc:CipherData></enc:EncryptedData></encryption>"#;
     let bytes = simple(&["<p>open</p>"], &[("META-INF/encryption.xml", fonts)]);
     let book = reader().open(&dir.file("fonts.epub", &bytes)).unwrap();
-    assert!(!book.metadata().protected);
+    assert_eq!(book.metadata().protection, None);
     assert_eq!(book.read_chapter(0).unwrap().plain_text(), "open\n");
+}
+
+/// Sets the ZIP format's encryption flag, bit 0 of the general-purpose flags,
+/// in the local and central headers of each named entry.
+fn mark_encrypted(bytes: &mut [u8], names: &[&str]) {
+    for name in names.iter().map(|n| n.as_bytes()) {
+        let mut marked = 0;
+        for at in 0..bytes.len() - name.len() {
+            if &bytes[at..at + name.len()] != name {
+                continue;
+            }
+            if at >= 30 && &bytes[at - 30..at - 26] == b"PK\x03\x04" {
+                bytes[at - 30 + 6] |= 1;
+                marked += 1;
+            }
+            if at >= 46 && &bytes[at - 46..at - 42] == b"PK\x01\x02" {
+                bytes[at - 46 + 8] |= 1;
+                marked += 1;
+            }
+        }
+        assert_eq!(marked, 2, "{}", String::from_utf8_lossy(name));
+    }
+}
+
+const LOCKED_CHAPTER: &[u8] = br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/c0.xhtml"/></enc:CipherData></enc:EncryptedData></encryption>"#;
+
+/// M4: the scheme is named from what the container declares, the first match
+/// in the order Readium LCP, Adobe, Apple, a password, then unrecognised.
+#[test]
+fn the_protection_scheme_is_named_from_the_container() {
+    let adobe: &[u8] = br#"<?xml version="1.0"?><adept:rights xmlns:adept="http://ns.adobe.com/adept"><adept:licenseToken/></adept:rights>"#;
+    let other: &[u8] =
+        br#"<?xml version="1.0"?><rights xmlns="urn:example:rights"><grant/></rights>"#;
+    let lcp: &[u8] = br#"{"id":"x"}"#;
+    let sinf: &[u8] = br#"<?xml version="1.0"?><fairplay:sinfs xmlns:fairplay="http://itunes.apple.com/ns/epub"/>"#;
+    let enc = ("META-INF/encryption.xml", LOCKED_CHAPTER);
+    let cases: Vec<(&str, Vec<(&str, &[u8])>, Option<Protection>)> = vec![
+        (
+            "lcp",
+            vec![enc, ("META-INF/license.lcpl", lcp)],
+            Some(Protection::ReadiumLcp),
+        ),
+        (
+            "adobe",
+            vec![enc, ("META-INF/rights.xml", adobe)],
+            Some(Protection::Adobe),
+        ),
+        (
+            "apple",
+            vec![enc, ("META-INF/sinf.xml", sinf)],
+            Some(Protection::Apple),
+        ),
+        (
+            "other rights",
+            vec![enc, ("META-INF/rights.xml", other)],
+            Some(Protection::Unrecognised),
+        ),
+        ("encryption only", vec![enc], Some(Protection::Unrecognised)),
+        (
+            "rights alone",
+            vec![("META-INF/rights.xml", adobe)],
+            Some(Protection::Adobe),
+        ),
+        (
+            "lcp licence alone",
+            vec![("META-INF/license.lcpl", lcp)],
+            Some(Protection::ReadiumLcp),
+        ),
+        (
+            "apple marker alone",
+            vec![("META-INF/sinf.xml", sinf)],
+            Some(Protection::Apple),
+        ),
+        (
+            "lcp before adobe",
+            vec![
+                enc,
+                ("META-INF/rights.xml", adobe),
+                ("META-INF/license.lcpl", lcp),
+            ],
+            Some(Protection::ReadiumLcp),
+        ),
+        (
+            "adobe before apple",
+            vec![
+                enc,
+                ("META-INF/sinf.xml", sinf),
+                ("META-INF/rights.xml", adobe),
+            ],
+            Some(Protection::Adobe),
+        ),
+    ];
+    let dir = Scratch::new();
+    for (name, extra, expected) in cases {
+        let path = dir.file(&format!("{name}.epub"), &simple(&["<p>x</p>"], &extra));
+        let m = reader().inspect(&path).unwrap();
+        assert_eq!(m.protection, expected, "{name}");
+        assert_eq!(m.title.as_deref(), Some("Simple"), "{name}");
+        assert_eq!(
+            reader().open(&path).unwrap_err(),
+            ReaderError::Unsupported(Unsupported::Protected),
+            "{name}"
+        );
+    }
+    // A password on one entry, with a package that can be read.
+    let mut bytes = simple(
+        &["<p>one</p>", "<p>two</p>"],
+        &[("META-INF/sinf.xml", sinf)],
+    );
+    mark_encrypted(&mut bytes, &["OEBPS/c1.xhtml"]);
+    let m = reader().inspect(&dir.file("both.epub", &bytes)).unwrap();
+    assert_eq!(m.protection, Some(Protection::Apple));
+    let mut bytes = simple(&["<p>one</p>", "<p>two</p>"], &[]);
+    mark_encrypted(&mut bytes, &["OEBPS/c1.xhtml"]);
+    let m = reader()
+        .inspect(&dir.file("password.epub", &bytes))
+        .unwrap();
+    assert_eq!(m.protection, Some(Protection::Password));
+}
+
+/// M4: a marker file that cannot be read is a lock, not a broken book.
+#[test]
+fn an_unreadable_marker_file_still_names_a_lock() {
+    let dir = Scratch::new();
+    let adobe: &[u8] = br#"<adept:rights xmlns:adept="http://ns.adobe.com/adept"/>"#;
+    for marker in ["META-INF/rights.xml", "META-INF/encryption.xml"] {
+        let body = if marker.ends_with("rights.xml") {
+            adobe
+        } else {
+            LOCKED_CHAPTER
+        };
+        let mut bytes = simple(&["<p>x</p>"], &[(marker, body)]);
+        mark_encrypted(&mut bytes, &[marker]);
+        let m = reader()
+            .inspect(&dir.file("sealed-marker.epub", &bytes))
+            .unwrap();
+        assert_eq!(m.protection, Some(Protection::Password), "{marker}");
+        assert_eq!(m.title.as_deref(), Some("Simple"), "{marker}");
+    }
+    // Cut short: what parsed lists nothing, but the file is not whole.
+    for truncated in [
+        &b"<encryption><"[..],
+        &LOCKED_CHAPTER[..LOCKED_CHAPTER.len() / 2],
+        &b""[..],
+        &b"not xml at all <<<>>>"[..],
+        &b"<other/>"[..],
+    ] {
+        let bytes = simple(&["<p>x</p>"], &[("META-INF/encryption.xml", truncated)]);
+        let m = reader().inspect(&dir.file("cut.epub", &bytes)).unwrap();
+        assert_eq!(m.protection, Some(Protection::Unrecognised));
+        assert_eq!(m.title.as_deref(), Some("Simple"));
+    }
+    // Over the element limit of a package document.
+    let huge = format!("<rights>{}</rights>", "<a/>".repeat(400_001));
+    let bytes = simple(&["<p>x</p>"], &[("META-INF/rights.xml", huge.as_bytes())]);
+    let m = reader()
+        .inspect(&dir.file("huge-rights.epub", &bytes))
+        .unwrap();
+    assert_eq!(m.protection, Some(Protection::Unrecognised));
+    assert_eq!(m.title.as_deref(), Some("Simple"));
+}
+
+/// M4: the package is read before the marker files, so a reader whose
+/// unpacking allowance fits the package still gets the book's metadata when
+/// a marker does not fit.
+#[test]
+fn the_package_is_read_before_the_marker_files() {
+    let big = format!(
+        "<adept:rights xmlns:adept=\"http://ns.adobe.com/adept\">{}</adept:rights>",
+        "<a/>".repeat(2000)
+    );
+    let bytes = simple(&["<p>x</p>"], &[("META-INF/rights.xml", big.as_bytes())]);
+    let dir = Scratch::new();
+    let path = dir.file("rights.epub", &bytes);
+    let mut cfg = config();
+    cfg.limits.max_unpacked_bytes = 2048;
+    let m = Reader::new(cfg).unwrap().inspect(&path).unwrap();
+    assert_eq!(m.title.as_deref(), Some("Simple"));
+    assert!(m.protection.is_some());
+}
+
+/// M4: an archive whose container file and package are encrypted is still
+/// inspected, as a book locked by a password with nothing else known.
+#[test]
+fn a_wholly_encrypted_archive_is_inspected_as_locked() {
+    let mut bytes = simple(&["<p>one</p>"], &[]);
+    mark_encrypted(
+        &mut bytes,
+        &[
+            "META-INF/container.xml",
+            "OEBPS/content.opf",
+            "OEBPS/c0.xhtml",
+        ],
+    );
+    let dir = Scratch::new();
+    let path = dir.file("sealed.epub", &bytes);
+    let m = reader().inspect(&path).unwrap();
+    assert_eq!(m.protection, Some(Protection::Password));
+    assert_eq!(m.title, None);
+    assert!(m.authors.is_empty());
+    assert_eq!(
+        reader().open(&path).unwrap_err(),
+        ReaderError::Unsupported(Unsupported::Protected)
+    );
+    let s = reader().survey(&path).unwrap();
+    assert_eq!((s.words, s.cover.is_some()), (None, false));
 }
 
 /// F4: damaged books fail with a reason instead of opening half-way.
@@ -578,7 +784,7 @@ fn zip_encrypted_entries_are_noticed_at_open() {
         ReaderError::Unsupported(Unsupported::Protected)
     );
     let m = reader().inspect(&path).unwrap();
-    assert!(m.protected);
+    assert_eq!(m.protection, Some(Protection::Password));
     assert_eq!(m.title.as_deref(), Some("Simple"));
 }
 
@@ -659,7 +865,7 @@ fn inconsistent_replies_are_not_passed_on() {
             ..config()
         }
     };
-    let meta = r#"{"title":null,"authors":[],"identifiers":[],"languages":[],"epub_version":null,"protected":false,"series":[],"published":null,"right_to_left":false}"#;
+    let meta = r#"{"title":null,"authors":[],"identifiers":[],"languages":[],"epub_version":null,"protection":null,"series":[],"published":null,"right_to_left":false}"#;
 
     let empty = fake(
         "empty",
@@ -1101,18 +1307,67 @@ fn an_incomplete_reading_order_has_no_word_count() {
     assert_eq!(unknown("", "", short), None);
 }
 
-/// V1: a protected book's survey is an answer with nothing in it.
+/// V1: a protected book's survey has no word count, and its cover only when
+/// the cover's file is not encrypted.
 #[test]
-fn a_protected_book_surveys_as_unknown() {
-    let encryption = br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/c0.xhtml"/></enc:CipherData></enc:EncryptedData></encryption>"#;
+fn a_protected_book_surveys_its_cover_only_when_it_is_not_encrypted() {
     let s = survey_with(
         config(),
         &simple(
             &["<p>Locked.</p>"],
-            &[("META-INF/encryption.xml", encryption)],
+            &[("META-INF/encryption.xml", LOCKED_CHAPTER)],
         ),
     );
     assert_eq!((s.words, s.cover), (None, None));
+
+    let png = striped(100, 150, ImageFormat::Png);
+    let open_cover = with_cover_and(&png, &[("META-INF/encryption.xml", LOCKED_CHAPTER)]);
+    let s = survey_with(config(), &open_cover);
+    assert_eq!(s.words, None);
+    assert!(s.cover.is_some());
+
+    // Listed in the encryption file, under a percent-encoded name.
+    let listed = br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/images/c%6Fver.png"/></enc:CipherData></enc:EncryptedData></encryption>"#;
+    let s = survey_with(
+        config(),
+        &with_cover_and(&png, &[("META-INF/encryption.xml", listed)]),
+    );
+    assert_eq!((s.words, s.cover.is_some()), (None, false));
+
+    // Listed under another case than the package uses: the archive finds
+    // the entry whichever case asks for it.
+    let upper = br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/IMAGES/COVER.PNG"/></enc:CipherData></enc:EncryptedData></encryption>"#;
+    let s = survey_with(
+        config(),
+        &with_cover_and(&png, &[("META-INF/encryption.xml", upper)]),
+    );
+    assert_eq!((s.words, s.cover.is_some()), (None, false));
+
+    // An encryption list that cannot be read could list the cover.
+    let s = survey_with(
+        config(),
+        &with_cover_and(&png, &[("META-INF/encryption.xml", b"<encryption><")]),
+    );
+    assert_eq!((s.words, s.cover.is_some()), (None, false));
+
+    // In an encrypted ZIP entry.
+    let mut sealed = with_cover_and(&png, &[]);
+    mark_encrypted(&mut sealed, &["OEBPS/images/cover.png"]);
+    let s = survey_with(config(), &sealed);
+    assert_eq!((s.words, s.cover.is_some()), (None, false));
+}
+
+/// A book with one chapter and `cover.png` as its declared cover, and more
+/// files.
+fn with_cover_and(image: &[u8], extra: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut files: Vec<(&str, &[u8])> = vec![("OEBPS/images/cover.png", image)];
+    files.extend_from_slice(extra);
+    package(Parts {
+        manifest: r#"<item id="cov" href="images/cover.png" media-type="image/png" properties="cover-image"/>"#,
+        chapters: &["<p>Three short words.</p>"],
+        files: &files,
+        ..Parts::default()
+    })
 }
 
 /// V5: the host refuses a cover reply whose pixels do not fill its size, or

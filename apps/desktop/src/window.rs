@@ -542,7 +542,12 @@ impl Library {
             match library.store.run(move |lib| lib.book(&id)).await {
                 Ok(book) => {
                     library.close_context_menu();
-                    reader::open_in(&library.window, &library.store, &Rc::new(book));
+                    match book.imported.protection {
+                        Some(protection) => {
+                            reader::refuse_locked(&library.window, &book.title, protection)
+                        }
+                        None => reader::open_in(&library.window, &library.store, &Rc::new(book)),
+                    }
                 }
                 Err(e) => notice(
                     &library.window,

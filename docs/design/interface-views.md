@@ -95,7 +95,7 @@ control with its own row background, separators, selection and swipe actions.
 | Thumbnail | A 2:3 frame at the leading edge. 40 wide at the small size, 48 at medium and 60 at large. Corners of 2, the edge line and the contact shadow. No ambient shadow and no spine shade. |
 | Row height | The taller of the thumbnail and the three lines of text, plus 12 above and below. The row grows with the system's text size and the text is never clipped. |
 | Text | 12 after the thumbnail. Line one is the title in the emphasised body style, on one line. Line two is the author in the body style, secondary colour. Line three is the series and the book's number in it, in the caption style, secondary colour, and is blank when the book has no series. |
-| Trailing | One short fact in the caption style, secondary colour, in tabular figures: the percentage read for a book being read, a check mark for a finished one, and nothing otherwise. Then the platform's disclosure mark where its lists use one. |
+| Trailing | One short fact in the caption style, secondary colour, in tabular figures: the percentage read for a book being read, a check mark for a finished one, and nothing otherwise. A locked book has the closed-lock symbol in the check mark's place, whatever the sort. Then the platform's disclosure mark where its lists use one. |
 | Separator | The platform's, starting at the text's leading edge and not under the thumbnail. |
 | Progress | No line. The percentage at the trailing edge says it. |
 
@@ -119,8 +119,8 @@ control with its own row background, separators, selection and swipe actions.
   8 units, with the edge line, corners of 1 unit and no shadow or spine shade.
 - Text columns align to the leading edge and number columns to the trailing
   edge. Dates count as text. Numbers and dates use tabular figures.
-- Progress is a percentage, empty for an unread book and a check mark for a
-  finished one.
+- Progress is a percentage, empty for an unread book, a check mark for a
+  finished one and the closed-lock symbol for a locked one.
 - A click on a header, or Return with the header focused, sorts by it. A click
   with the platform's add-to-selection key adds it as the next key, up to
   three, and each such header shows a small 2 or 3. The sort editor sets the

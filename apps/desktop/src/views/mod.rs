@@ -10,7 +10,7 @@ use crate::{
     settings::{CoverSize, SortField},
     thumbs::Thumbs,
 };
-use ebook_library::BrowseRow;
+use ebook_library::{BrowseRow, Protection};
 use gtk::glib;
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -162,6 +162,42 @@ pub fn truncating(label: &gtk::Label) {
         }
         cut
     });
+}
+
+/// What names a locked book's lock, wherever books are shown or said.
+pub fn locked_by(protection: Protection) -> &'static str {
+    match protection {
+        Protection::Lcp => "Locked by Readium LCP",
+        Protection::Adobe => "Locked by Adobe",
+        Protection::Apple => "Locked by Apple",
+        Protection::Password => "Locked by a password",
+        Protection::Unknown => "Locked by an unrecognised scheme",
+    }
+}
+
+/// What a lock means for the reader.
+pub const LOCK_MEANS: &str =
+    "Ebook Manager can't read, convert or change the text of books locked this way.";
+
+/// The mark in the finished mark's slot for a locked book. Its tooltip says
+/// what the lock means; its words are in the book's spoken name.
+pub fn lock_mark() -> gtk::Image {
+    let lock = gtk::Image::from_icon_name("changes-prevent-symbolic");
+    lock.set_pixel_size(12);
+    lock.add_css_class("dimmed");
+    lock.set_accessible_role(gtk::AccessibleRole::Presentation);
+    lock
+}
+
+/// Shows `lock` for a locked book, with its tooltip, and hides it otherwise.
+pub fn show_lock(lock: &gtk::Image, book: Option<&Rc<BrowseRow>>) {
+    let protection = book.and_then(|book| book.protection);
+    lock.set_visible(protection.is_some());
+    lock.set_tooltip_text(
+        protection
+            .map(|p| format!("{}. {LOCK_MEANS}", locked_by(p)))
+            .as_deref(),
+    );
 }
 
 /// The mark after a finished book's author.
@@ -362,8 +398,18 @@ pub fn spoken(book: &BrowseRow) -> String {
     if !book.authors.is_empty() {
         parts.push(book.authors.clone());
     }
-    parts.extend(reading_state(book.progress));
+    parts.push(state(book));
+    parts.retain(|part| !part.is_empty());
     parts.join(", ")
+}
+
+/// A book's lock, else how far it has been read: the last part of its
+/// spoken name. Empty for an unread book that is not locked.
+pub fn state(book: &BrowseRow) -> String {
+    match book.protection {
+        Some(protection) => locked_by(protection).into(),
+        None => reading_state(book.progress).unwrap_or_default(),
+    }
 }
 
 pub fn finished(progress: Option<f32>) -> bool {
@@ -397,5 +443,42 @@ mod tests {
         assert_eq!(reading_state(Some(0.62)).as_deref(), Some("62% read"));
         assert_eq!(reading_state(Some(0.999)).as_deref(), Some("99% read"));
         assert_eq!(reading_state(Some(1.0)).as_deref(), Some("Finished"));
+    }
+
+    fn book(protection: Option<Protection>) -> BrowseRow {
+        BrowseRow {
+            id: String::new(),
+            version_id: String::new(),
+            title: "Moby-Dick".into(),
+            authors: "Herman Melville".into(),
+            author_sort: None,
+            series: None,
+            added: None,
+            published: None,
+            last_read: None,
+            progress: None,
+            cover: None,
+            cover_rgb: None,
+            spine_rgb: None,
+            right_to_left: false,
+            protection,
+        }
+    }
+
+    #[test]
+    fn a_locked_book_is_said_with_its_lock() {
+        assert_eq!(spoken(&book(None)), "Moby-Dick, Herman Melville");
+        assert_eq!(
+            spoken(&book(Some(Protection::Adobe))),
+            "Moby-Dick, Herman Melville, Locked by Adobe"
+        );
+        for (protection, said) in [
+            (Protection::Lcp, "Locked by Readium LCP"),
+            (Protection::Apple, "Locked by Apple"),
+            (Protection::Password, "Locked by a password"),
+            (Protection::Unknown, "Locked by an unrecognised scheme"),
+        ] {
+            assert_eq!(state(&book(Some(protection))), said);
+        }
     }
 }

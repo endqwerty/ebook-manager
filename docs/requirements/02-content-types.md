@@ -43,8 +43,12 @@ a cover, and send to a device.
 - `FMT-10` (core) The app detects protection, names the scheme, keeps the book in
   the library marked as locked, and reads whatever metadata and cover are not
   encrypted. It explains that conversion, editing and reading may not work.
+  Done for EPUB on Linux: see [protected books](../design/protected-books.md)
+  and the [desktop spec](../../specs/desktop-mvp.md#locked-books).
 - `FMT-11` (core) The app contains no code, plugin, link or instruction for
-  removing protection. See [constraints](10-constraints.md).
+  removing protection. See [constraints](10-constraints.md). Done: no such code,
+  plugin, link or instruction exists, and each pull request's reviewers check
+  the diff for one.
 - `FMT-12` (later) Reading Readium LCP files with the user's licence and
   passphrase. Library loans and the Internet Archive deliver LCP. This needs a
   closed module and a contract with EDRLab, so the app must build and run without

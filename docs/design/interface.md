@@ -47,7 +47,7 @@ Four things, each of which you can measure on a screen.
 | Quality | Where it comes from |
 |---|---|
 | Order | Every cover is the same size and rows are level. Every screen has one leading edge. Captions keep a fixed height. Numbers line up in columns. |
-| Quiet | One prominent action per screen. No badges, and a message only for a problem that needs a decision. Nothing moves unless the reader caused it, apart from a cover fading in as it loads. |
+| Quiet | One prominent action per screen. No badges, and a message only for a problem that needs a decision or a request that cannot be carried out at all. Nothing moves unless the reader caused it, apart from a cover fading in as it loads. |
 | Warmth | A serif for the names of things. Covers drawn as objects with weight. Paper tones in the reader. |
 | Books first | The frame takes its colour from the system. The only strong colour in the window is on the covers and the one prominent action. |
 
@@ -101,7 +101,9 @@ and not the interface. See [Covers](#covers).
 - A finished job shows no message. The reader sees the result: the books appear
   and the count changes. A running job shows progress where the platform puts it.
   Only a problem that needs a decision gets a message. It stays until the reader
-  answers it and never dismisses itself.
+  answers it and never dismisses itself. A request the app cannot carry out at
+  all, such as reading a locked book, is answered with the platform's alert,
+  because otherwise the reader's action would seem ignored.
 
 ### Alignment
 

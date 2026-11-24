@@ -411,6 +411,22 @@ impl Library {
         }
         Ok(())
     }
+    /// Records a lock found in a book's file after it was imported, as the
+    /// reader helper now recognises more schemes. Nothing changes when the
+    /// book has another version by now.
+    pub fn set_protection(
+        &mut self,
+        id: &str,
+        version_id: &str,
+        protection: Protection,
+    ) -> Result<()> {
+        let mut book = self.book(id)?;
+        if book.version_id == version_id && book.imported.protection != Some(protection) {
+            book.imported.protection = Some(protection);
+            self.commit(Change::Book(Box::new(book)), None)?;
+        }
+        Ok(())
+    }
     pub fn save_position(&mut self, id: &str, pos: &ReadingPosition) -> Result<()> {
         ensure!(
             self.book(id)?.version_id == pos.version_id,
