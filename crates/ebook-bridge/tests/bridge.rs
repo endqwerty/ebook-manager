@@ -394,6 +394,12 @@ fn saved_reading_place_and_edits_survive_closing_and_reopening_library() {
     assert_eq!(window[0].series_position.as_deref(), Some("1.5"));
     assert!(window[0].progress.unwrap_or(0.0) > 0.0);
 
+    let jump = reopened.quick_jump("vance".into(), 5).unwrap();
+    assert_eq!(jump.books.len(), 1);
+    assert_eq!(jump.books[0].id, book_id);
+    assert_eq!(jump.authors.len(), 1);
+    assert_eq!(jump.authors[0].name, "Clara Vance");
+
     let open_again = reopened.clone().open_book(book_id.clone()).unwrap();
     let place = open_again.load_place().unwrap().expect("saved place");
     assert_eq!(place.chapter, 1);

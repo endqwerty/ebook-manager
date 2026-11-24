@@ -320,6 +320,12 @@ final class EbookManagerKitTests: XCTestCase {
         let bookId: String
         do {
             let service = BridgeService(directory: libDir)
+            async let initialBrowse = service.browse(query: "", sort: [])
+            async let initialSurvey = service.surveyUnsurveyed(limit: 8)
+            let (emptySnapshot, surveyedCount) = try await (initialBrowse, initialSurvey)
+            XCTAssertEqual(emptySnapshot.count, 0)
+            XCTAssertEqual(surveyedCount, 0)
+
             let imported = try await service.importPaths([bookURL.path])
             XCTAssertEqual(imported.count, 1)
             guard case let .added(book) = imported[0].outcome else {
@@ -340,5 +346,125 @@ final class EbookManagerKitTests: XCTestCase {
         if case .copied = firstExport {} else { XCTFail("Expected copied on first export") }
         let secondExport = try await reopenedService.exportBook(bookId: bookId, destinationDir: exportDir.path)
         if case .alreadyPresent = secondExport {} else { XCTFail("Expected alreadyPresent on second export") }
+    }
+
+    @MainActor
+    func testDesktopWalkthroughFolderImportReviewEditReadAndExportOnMacOS() async throws {
+        _ = NSApplication.shared
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ebook-macos-walkthrough-\(UUID().uuidString)", isDirectory: true)
+        let incoming = scratch.appendingPathComponent("incoming", isDirectory: true)
+        let exportDir = scratch.appendingPathComponent("device", isDirectory: true)
+        let libDir = scratch.appendingPathComponent("library", isDirectory: true).path
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let originalBytes = StoredZipBuilder.syntheticEPUB(title: "The Lantern Atlas", extraText: "original text")
+        let revisedBytes = StoredZipBuilder.syntheticEPUB(title: "The Lantern Atlas", extraText: "revised edition paragraph " + String(repeating: "harbor ", count: 250))
+        try originalBytes.write(to: incoming.appendingPathComponent("01-book.epub"))
+        try originalBytes.write(to: incoming.appendingPathComponent("02-duplicate.epub"))
+        try revisedBytes.write(to: incoming.appendingPathComponent("03-revised.epub"))
+        try Data("broken archive".utf8).write(to: incoming.appendingPathComponent("04-broken.epub"))
+
+        let bookId: String
+        let savedOffset: UInt32
+        do {
+            let service = BridgeService(directory: libDir)
+            let results = try await service.importPaths([incoming.path])
+            XCTAssertEqual(results.count, 4)
+            guard case let .added(addedBook) = results[0].outcome else {
+                return XCTFail("Expected first file Added")
+            }
+            bookId = addedBook.id
+            if case .duplicate = results[1].outcome {} else { XCTFail("Expected second file Duplicate") }
+            guard case let .needsReview(reviewToken, _, _, _, _, candidates) = results[2].outcome else {
+                return XCTFail("Expected third file NeedsReview")
+            }
+            XCTAssertEqual(candidates.map(\.id), [bookId])
+            if case .failed = results[3].outcome {} else { XCTFail("Expected fourth file Failed") }
+
+            let beforeSettle = try await service.browse(query: "", sort: [])
+            XCTAssertEqual(beforeSettle.count, 1)
+
+            let replaced = try await service.settleReview(token: reviewToken, choice: .replace(bookId: bookId))
+            XCTAssertEqual(replaced?.id, bookId)
+            let afterSettle = try await service.browse(query: "", sort: [])
+            XCTAssertEqual(afterSettle.count, 1)
+
+            let updated = try await service.editBook(
+                id: bookId,
+                edit: BookEdit(
+                    title: "The Coastal Lantern",
+                    authors: ["Clara Vance"],
+                    sortTitle: "Coastal Lantern",
+                    authorSorts: ["Vance, Clara"],
+                    seriesName: "Tide Guides",
+                    seriesPosition: "2"
+                )
+            )
+            XCTAssertEqual(updated.title, "The Coastal Lantern")
+            let jump = try await service.quickJump(query: "vance", limit: 5)
+            XCTAssertEqual(jump.books.map(\.id), [bookId])
+            XCTAssertEqual(jump.authors.map(\.name), ["Clara Vance"])
+
+            let handle = try await service.openBook(bookId: bookId)
+            let chapterSource = OpenBookChapterSource(handle: handle)
+            let landed = expectation(description: "walkthrough chapter 2 landed")
+            var latestReport: PagePlaceReport?
+            let web = try await ReaderWebController.create(source: chapterSource) { event in
+                if case let .place(report) = event {
+                    latestReport = report
+                    if report.page == 0 {
+                        landed.fulfill()
+                    }
+                }
+            }
+            let win = NSWindow(
+                contentRect: CGRect(x: 80, y: 80, width: 480, height: 360),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            win.isReleasedWhenClosed = false
+            win.alphaValue = 0.0
+            win.contentView = web.webView
+            win.orderBack(nil)
+
+            _ = web.load(chapter: 1, landing: .start)
+            await fulfillment(of: [landed], timeout: 10.0)
+            _ = await web.turn(by: 1, animate: false)
+            let finalPlace = try XCTUnwrap(latestReport)
+            savedOffset = finalPlace.offset
+            await handle.savePlace(
+                chapter: 1,
+                offset: finalPlace.offset,
+                page: finalPlace.page,
+                pages: finalPlace.pages
+            )
+
+            web.shutDown()
+            win.contentView = nil
+            win.orderOut(nil)
+        }
+
+        let reopened = BridgeService(directory: libDir)
+        let found = try await reopened.browse(query: "tide guides", sort: [SortRule(field: .author, descending: false)])
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(found.rows.first?.title, "The Coastal Lantern")
+
+        let reopenedBook = try await reopened.openBook(bookId: bookId)
+        let restoredPlace = try await reopenedBook.loadPlace()
+        XCTAssertEqual(restoredPlace?.chapter, 1)
+        XCTAssertEqual(restoredPlace?.offset, savedOffset)
+
+        let export1 = try await reopened.exportBook(bookId: bookId, destinationDir: exportDir.path)
+        guard case let .copied(writtenPath) = export1 else {
+            return XCTFail("Expected copied on first export")
+        }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: writtenPath)), revisedBytes)
+
+        let export2 = try await reopened.exportBook(bookId: bookId, destinationDir: exportDir.path)
+        XCTAssertEqual(export2, .alreadyPresent(destination: writtenPath))
     }
 }

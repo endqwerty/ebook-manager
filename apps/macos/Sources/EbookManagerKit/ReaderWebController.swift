@@ -474,6 +474,36 @@ public final class ReaderWebController: NSObject, WKNavigationDelegate, WKUIDele
         )
     }
 
+    public func stepRuler(by delta: Int) async -> Bool? {
+        guard currentLoad?.readyRecord != nil else { return nil }
+        let result = try? await webView.callAsyncJavaScript(
+            "return __reader.stepRuler(by)",
+            arguments: ["by": delta],
+            in: nil,
+            contentWorld: readerWorld
+        )
+        guard let state = result as? String else { return nil }
+        switch state {
+        case "moved": return true
+        case "edge": return false
+        default: return nil
+        }
+    }
+
+    public func resetRuler(atEnd: Bool) {
+        guard currentLoad?.readyRecord != nil else { return }
+        let edge = atEnd ? "end" : "start"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = try? await self.webView.callAsyncJavaScript(
+                "return __reader.resetRuler(edge)",
+                arguments: ["edge": edge],
+                in: nil,
+                contentWorld: self.readerWorld
+            )
+        }
+    }
+
     public func setStyles(_ properties: [(name: String, value: String)]) {
         for prop in properties {
             currentCSSVariables.removeAll { $0.name == prop.name }

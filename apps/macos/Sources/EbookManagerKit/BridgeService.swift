@@ -29,20 +29,12 @@ public final class BridgeService: @unchecked Sendable {
 
     private func ensureLibrary() throws -> Library {
         lock.lock()
+        defer { lock.unlock() }
         if let existing = libraryInstance {
-            lock.unlock()
             return existing
         }
-        lock.unlock()
-
         let opened = try Library.open(directory: directory)
-        lock.lock()
-        if let raced = libraryInstance {
-            lock.unlock()
-            return raced
-        }
         libraryInstance = opened
-        lock.unlock()
         return opened
     }
 
@@ -89,6 +81,12 @@ public final class BridgeService: @unchecked Sendable {
     public func browseChanged() async throws -> Bool {
         try await runRead { lib in
             try lib.browseChanged()
+        }
+    }
+
+    public func quickJump(query: String, limit: UInt32 = 8) async throws -> QuickJumpMatches {
+        try await runRead { lib in
+            try lib.quickJump(query: query, limit: limit)
         }
     }
 

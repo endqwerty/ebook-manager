@@ -275,6 +275,26 @@ pub struct BrowseSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct QuickJumpCount {
+    pub name: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct QuickJumpBook {
+    pub id: String,
+    pub title: String,
+    pub authors: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct QuickJumpMatches {
+    pub authors: Vec<QuickJumpCount>,
+    pub series: Vec<QuickJumpCount>,
+    pub books: Vec<QuickJumpBook>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SeriesEntry {
     pub name: String,
     pub position: Option<String>,
@@ -906,6 +926,31 @@ impl Library {
         self.with_browser(|state| {
             let reader = state.reader.as_mut().expect("browse reader initialized");
             reader.changed()
+        })
+    }
+
+    /// Searches capped quick-jump matches across authors, series and books.
+    pub fn quick_jump(&self, query: String, limit: u32) -> Result<QuickJumpMatches, BridgeError> {
+        self.with_browser(|state| {
+            let reader = state.reader.as_mut().expect("browse reader initialized");
+            let found = reader.quick_jump(&query, limit as usize, &Cancel::default())?;
+            Ok(QuickJumpMatches {
+                authors: found
+                    .authors
+                    .into_iter()
+                    .map(|(name, count)| QuickJumpCount { name, count })
+                    .collect(),
+                series: found
+                    .series
+                    .into_iter()
+                    .map(|(name, count)| QuickJumpCount { name, count })
+                    .collect(),
+                books: found
+                    .books
+                    .into_iter()
+                    .map(|(id, title, authors)| QuickJumpBook { id, title, authors })
+                    .collect(),
+            })
         })
     }
 

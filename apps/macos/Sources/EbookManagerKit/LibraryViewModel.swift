@@ -99,7 +99,9 @@ public final class LibraryViewModel: ObservableObject {
     @Published public private(set) var isBusy = false
     @Published public var importReport: ImportReportModel?
     @Published public var activeReview: PendingReviewPrompt?
+    @Published public var inspectingBook: BookDetail?
     @Published public var editingBook: BookDetail?
+    @Published public var showQuickJump = false
     @Published public var lockedAlert: LockedAlertModel?
     @Published public var noticeAlert: SimpleNoticeModel?
 
@@ -273,6 +275,13 @@ public final class LibraryViewModel: ObservableObject {
         }
     }
 
+    public func importURLsForSnapshot(_ urls: [URL]) async {
+        let paths = urls.map(\.path).filter { !$0.isEmpty }
+        guard !paths.isEmpty else { return }
+        _ = try? await bridge.importPaths(paths)
+        reloadBrowse()
+    }
+
     public func importURLs(_ urls: [URL]) {
         let paths = urls.map(\.path).filter { !$0.isEmpty }
         guard !paths.isEmpty else { return }
@@ -403,6 +412,37 @@ public final class LibraryViewModel: ObservableObject {
     public func openEditForSelected() {
         guard selectedIds.count == 1, let id = selectedIds.first else { return }
         openEdit(forBookId: id)
+    }
+
+    public func toggleDetailsForSelected() {
+        if inspectingBook != nil {
+            inspectingBook = nil
+            return
+        }
+        guard selectedIds.count == 1, let id = selectedIds.first else { return }
+        openDetails(forBookId: id)
+    }
+
+    public func openDetails(forBookId bookId: String) {
+        Task {
+            do {
+                inspectingBook = try await bridge.book(id: bookId)
+            } catch let err as BridgeError {
+                noticeAlert = SimpleNoticeModel(heading: "Couldn’t Load Book Details", body: err.userMessage)
+            } catch {
+                noticeAlert = SimpleNoticeModel(heading: "Couldn’t Load Book Details", body: error.localizedDescription)
+            }
+        }
+    }
+
+    public func progressForBook(id: String) -> Float? {
+        rows.first(where: { $0.id == id })?.progress
+    }
+
+    public func filterByQuery(_ query: String) {
+        inspectingBook = nil
+        showQuickJump = false
+        searchText = query
     }
 
     public func openEdit(forBookId bookId: String) {
