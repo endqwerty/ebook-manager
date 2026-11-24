@@ -3,9 +3,9 @@
 use super::archive::Archive;
 use super::xml::{parse_tree_checked, Element};
 use super::{clean_inline, encoding, paths, truncate_chars};
-use crate::model::{Author, Identifier, Limits, Metadata, SeriesMembership};
+use crate::model::{Author, Identifier, Limits, Metadata, Protection, SeriesMembership};
 use crate::wire::{WireError, WireErrorKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const MAX_TEXT: usize = 2000;
 const MAX_LIST: usize = 64;
@@ -46,6 +46,9 @@ pub struct Package {
     pub nav: Option<String>,
     /// Container path of the NCX, if declared.
     pub ncx: Option<String>,
+    /// Container paths `META-INF/encryption.xml` lists, whatever their
+    /// algorithm.
+    pub encrypted: HashSet<String>,
 }
 
 impl Package {
@@ -74,7 +77,10 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
             "no META-INF/container.xml",
         ));
     }
-    let container = read_tree(archive, "META-INF/container.xml", limits.max_package_bytes)?;
+    let container = match read_tree(archive, "META-INF/container.xml", limits.max_package_bytes) {
+        Err(e) if e.kind == WireErrorKind::Protected => return Ok(Package::sealed()),
+        other => other?,
+    };
     let mut rootfiles = Vec::new();
     collect(&container, "rootfile", &mut rootfiles);
     let opf_path = rootfiles
@@ -90,15 +96,18 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
         .next()
         .ok_or_else(|| WireError::invalid("the container names no package document"))?;
 
-    let protected = is_protected(archive, limits)?;
+    let (protection, encrypted) = protection(archive, limits)?;
 
-    let doc = read_tree(archive, &opf_path, limits.max_package_bytes)?;
+    let doc = match read_tree(archive, &opf_path, limits.max_package_bytes) {
+        Err(e) if e.kind == WireErrorKind::Protected => return Ok(Package::sealed()),
+        other => other?,
+    };
     let package = doc
         .find("package")
         .ok_or_else(|| WireError::invalid("the package document has no package element"))?;
 
     let mut metadata = read_metadata(package);
-    metadata.protected = protected;
+    metadata.protection = protection;
 
     let mut items: Vec<ManifestItem> = Vec::new();
     // Item id to its position in `items`; the first use of an id wins.
@@ -187,6 +196,7 @@ pub fn load(archive: &mut Archive, limits: &Limits) -> Result<Package, WireError
         cover,
         nav,
         ncx: ncx.or(ncx_by_type),
+        encrypted,
     })
 }
 
@@ -210,24 +220,82 @@ fn collect<'a>(root: &'a Element, name: &str, out: &mut Vec<&'a Element>) {
     }
 }
 
-/// OCF lists encrypted resources in META-INF/encryption.xml. Anything encrypted
-/// with an algorithm other than font obfuscation means the text may be locked.
-fn is_protected(archive: &mut Archive, limits: &Limits) -> Result<bool, WireError> {
-    if archive.has_encrypted_entries() {
-        return Ok(true);
+/// OCF lists encrypted resources in `META-INF/encryption.xml` and reserves
+/// `META-INF/rights.xml` for a vendor's rights information. Anything
+/// encrypted with an algorithm other than font obfuscation means the text may
+/// be locked. The scheme is the first that the container declares, in the
+/// order Readium LCP, Adobe, Apple, a password, then unrecognised.
+fn protection(
+    archive: &mut Archive,
+    limits: &Limits,
+) -> Result<(Option<Protection>, HashSet<String>), WireError> {
+    let mut encrypted = HashSet::new();
+    let mut locked = archive.has_encrypted_entries();
+    if archive.contains("META-INF/encryption.xml") {
+        let tree = read_tree(archive, "META-INF/encryption.xml", limits.max_package_bytes)?;
+        let mut entries = Vec::new();
+        collect(&tree, "encrypteddata", &mut entries);
+        for e in entries {
+            let algorithm = e
+                .find("encryptionmethod")
+                .and_then(|m| m.attr_local("algorithm"));
+            if !algorithm.is_some_and(|a| FONT_OBFUSCATION.contains(&a.trim())) {
+                locked = true;
+            }
+            if let Some(local) = e
+                .find("cipherreference")
+                .and_then(|r| r.attr_local("uri"))
+                .and_then(|uri| paths::resolve("", uri))
+            {
+                encrypted.insert(local.path);
+            }
+        }
     }
-    if !archive.contains("META-INF/encryption.xml") {
-        return Ok(false);
+    let rights = if archive.contains("META-INF/rights.xml") {
+        let tree = read_tree(archive, "META-INF/rights.xml", limits.max_package_bytes)?;
+        let adobe = tree.elements().next().is_some_and(|root| {
+            root.attrs.iter().any(|(name, value)| {
+                (name == "xmlns" || name.starts_with("xmlns:")) && value.contains("ns.adobe.com")
+            })
+        });
+        Some(adobe)
+    } else {
+        None
+    };
+    let scheme = if archive.contains("META-INF/license.lcpl") {
+        Some(Protection::ReadiumLcp)
+    } else if rights == Some(true) {
+        Some(Protection::Adobe)
+    } else if archive.contains("META-INF/sinf.xml") {
+        Some(Protection::Apple)
+    } else if archive.has_encrypted_entries() {
+        Some(Protection::Password)
+    } else if locked || rights.is_some() {
+        Some(Protection::Unrecognised)
+    } else {
+        None
+    };
+    Ok((scheme, encrypted))
+}
+
+impl Package {
+    /// A book whose container file or package is itself encrypted, so
+    /// nothing in it can be read.
+    fn sealed() -> Package {
+        Package {
+            metadata: Metadata {
+                protection: Some(Protection::Password),
+                ..Metadata::default()
+            },
+            spine: Vec::new(),
+            manifest: Vec::new(),
+            unresolved_linear: false,
+            cover: None,
+            nav: None,
+            ncx: None,
+            encrypted: HashSet::new(),
+        }
     }
-    let tree = read_tree(archive, "META-INF/encryption.xml", limits.max_package_bytes)?;
-    let mut entries = Vec::new();
-    collect(&tree, "encrypteddata", &mut entries);
-    Ok(entries.iter().any(|e| {
-        let algorithm = e
-            .find("encryptionmethod")
-            .and_then(|m| m.attr_local("algorithm"));
-        !algorithm.is_some_and(|a| FONT_OBFUSCATION.contains(&a.trim()))
-    }))
 }
 
 fn field(e: &Element) -> String {

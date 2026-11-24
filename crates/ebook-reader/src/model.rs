@@ -73,9 +73,10 @@ pub struct Metadata {
     pub languages: Vec<String>,
     /// The package `version` attribute, for example `"2.0"` or `"3.0"`.
     pub epub_version: Option<String>,
-    /// The book declares encrypted content other than obfuscated fonts.
-    /// [`crate::Reader::open`] refuses such a book.
-    pub protected: bool,
+    /// The scheme that locks the book, when it declares encrypted content
+    /// other than obfuscated fonts. [`crate::Reader::open`] refuses such a
+    /// book.
+    pub protection: Option<Protection>,
     /// The series the book declares itself part of, in package order. The
     /// first is the primary series.
     pub series: Vec<SeriesMembership>,
@@ -84,6 +85,22 @@ pub struct Metadata {
     pub published: Option<String>,
     /// The book's pages turn from right to left.
     pub right_to_left: bool,
+}
+
+/// A protection scheme, named from what the container declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Protection {
+    /// `META-INF/license.lcpl`.
+    ReadiumLcp,
+    /// `META-INF/rights.xml` in Adobe's namespace.
+    Adobe,
+    /// `META-INF/sinf.xml`.
+    Apple,
+    /// A ZIP entry encrypted with the archive's own password scheme.
+    Password,
+    /// Another `rights.xml`, or another encrypted resource.
+    Unrecognised,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

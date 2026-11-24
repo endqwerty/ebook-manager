@@ -7,12 +7,19 @@ use crate::model::{BlockKind, Limits};
 use crate::wire::WireSurvey;
 
 pub fn survey(archive: &mut Archive, package: &Package, limits: &Limits) -> WireSurvey {
-    // An encrypted book's chapters, and perhaps its cover, cannot be read.
-    // That is an answer, not a failure: asking again would give the same.
-    if package.metadata.protected {
+    // An encrypted book's chapters cannot be read, nor its cover when that
+    // is encrypted too. That is an answer, not a failure: asking again would
+    // give the same.
+    if package.metadata.protection.is_some() {
+        let open = package
+            .cover
+            .as_ref()
+            .is_some_and(|c| !package.encrypted.contains(&c.path));
         return WireSurvey {
             words: None,
-            cover: None,
+            cover: open
+                .then(|| cover::cover(archive, package, limits))
+                .flatten(),
         };
     }
     // The cover first: its size is bounded, and a long book's text then

@@ -80,9 +80,15 @@ and media-overlay books, and every platform other than native Linux packages.
   lower-case scheme taken from the scheme attribute or a `urn:` or `isbn:`
   prefix, and a flag for the package's unique identifier.
 - **M3** The result depends only on the file's bytes, not its name or location.
-- **M4** A book that declares encrypted content other than obfuscated fonts is
-  reported as protected. Its metadata is still returned so it can be imported
-  and shown as unreadable.
+- **M4** A book that declares encrypted content other than obfuscated fonts, or
+  has a ZIP-encrypted entry, is reported as protected, with the scheme its
+  container declares: Readium LCP for `META-INF/license.lcpl`, Adobe for a
+  `META-INF/rights.xml` whose root element declares a namespace on
+  `ns.adobe.com`, Apple for `META-INF/sinf.xml`, a password for a ZIP-encrypted
+  entry, and unrecognised otherwise, the first that matches in that order. Its
+  metadata is still returned so it can be imported and shown as locked. When
+  the container file or the package is itself ZIP-encrypted, the metadata is
+  empty and the scheme is a password.
 - **M5** Series come from EPUB 3 `belongs-to-collection` entries whose
   `collection-type` is `series`, in package order, each with its
   `group-position` as text when given. Collections of another type are left
@@ -168,7 +174,8 @@ that take more than the package to find: a word count and a cover.
 - **V1** The word count and the cover are independent: an unusable cover
   leaves the count, and an unknown count leaves the cover. Neither is ever an
   error. A survey fails only as other calls do (F1 to F7). A protected book
-  (M4) gives an unknown count and no cover.
+  (M4) gives an unknown count, and its cover only when the cover's file is
+  neither listed in the encryption list nor in a ZIP-encrypted entry.
 - **V2** The count covers the linear reading order. A word is a run of
   characters containing a letter or digit, ended by whitespace or the end of
   a block, so `don't` and `well-known` are one word each and a dash alone is
@@ -324,10 +331,10 @@ to the reader.
   read from the archive's end record before its directory is parsed. Passing a
   limit gives a limit error; in particular, contents that are too long or too large
   are an error and never a shortened list. A reading call unpacks at most the
-  container file, the encryption list, the package, the two contents documents
-  and one chapter, so the per-document limits also bound the total. A book's
+  container file, the encryption list, the rights file, the package, the two
+  contents documents and one chapter, so the per-document limits also bound the total. A book's
   helper keeps what it read, but charges each call for the container, the
-  encryption list, the package and, when the call uses them, the contents
+  encryption list, the rights file, the package and, when the call uses them, the contents
   documents, as if it had read them again, so a call gets the same answer
   whichever helper serves it. A survey
   unpacks the cover first and then the linear chapters, all within the same

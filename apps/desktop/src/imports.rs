@@ -29,7 +29,7 @@ fn stage(source: PathBuf, thumbnails: &Path) -> Result<Candidate> {
     let reader = Reader::new(ReaderConfig::default())?;
     let m = reader.inspect(staged.path())?;
     ensure!(
-        !m.protected,
+        m.protection.is_none(),
         "This EPUB is protected. Choose a DRM-free book."
     );
     // A survey that fails leaves the book unsurveyed, to be asked again at

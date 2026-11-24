@@ -220,7 +220,7 @@ impl Session {
 }
 
 fn readable(package: &Package) -> Result<(), WireError> {
-    if package.metadata.protected {
+    if package.metadata.protection.is_some() {
         return Err(WireError::new(
             WireErrorKind::Protected,
             "the book declares encrypted content",
