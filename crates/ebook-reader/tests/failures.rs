@@ -366,6 +366,9 @@ fn an_unreadable_marker_file_still_names_a_lock() {
     for truncated in [
         &b"<encryption><"[..],
         &LOCKED_CHAPTER[..LOCKED_CHAPTER.len() / 2],
+        &b""[..],
+        &b"not xml at all <<<>>>"[..],
+        &b"<other/>"[..],
     ] {
         let bytes = simple(&["<p>x</p>"], &[("META-INF/encryption.xml", truncated)]);
         let m = reader().inspect(&dir.file("cut.epub", &bytes)).unwrap();
