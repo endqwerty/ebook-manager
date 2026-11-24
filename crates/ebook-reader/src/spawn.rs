@@ -75,23 +75,27 @@ pub fn confine(cmd: &mut Command) {
     }
 }
 
-/// One past the highest descriptor this process has open. A limit lowered
-/// after a file was opened leaves that file open above it, so the open
-/// descriptors are listed. The limit stands in when they cannot be.
+/// One past the highest descriptor the child could inherit. Everything
+/// under the descriptor limit is covered, whenever it was opened. A limit
+/// lowered after a file was opened leaves that file open above it, so the
+/// open descriptors are listed as well, with room for ones another thread
+/// opens between the listing and the fork: a new descriptor takes the lowest
+/// free number, so it lands just past the highest. When the listing fails,
+/// every number a process can hold is covered.
 #[cfg(target_os = "macos")]
 fn descriptor_limit() -> libc::c_int {
-    const FALLBACK: u64 = 1 << 20;
+    const MOST: u64 = 1 << 20;
+    const ROOM: u64 = 256;
     let open = std::fs::read_dir("/dev/fd").ok().and_then(|entries| {
         entries
             .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u64>().ok())
             .max()
     });
-    let limit = || {
-        rustix::process::getrlimit(rustix::process::Resource::Nofile)
-            .current
-            .unwrap_or(FALLBACK)
-            .min(FALLBACK)
+    let limit = rustix::process::getrlimit(rustix::process::Resource::Nofile).current;
+    let end = match (open, limit) {
+        (Some(highest), Some(limit)) => limit.max(highest.saturating_add(ROOM)),
+        (Some(highest), None) => highest.saturating_add(ROOM),
+        (None, _) => MOST,
     };
-    let end = open.map_or_else(limit, |highest| highest.saturating_add(1));
-    libc::c_int::try_from(end).unwrap_or(libc::c_int::MAX)
+    libc::c_int::try_from(end.min(MOST)).unwrap_or(libc::c_int::MAX)
 }

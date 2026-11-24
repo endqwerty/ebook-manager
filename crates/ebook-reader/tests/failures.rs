@@ -1110,7 +1110,7 @@ fn fatal_signals_end_the_helper_without_a_crash() {
             // on Linux, which leaves no crash record either.
             let killed =
                 std::os::unix::process::ExitStatusExt::signal(&out.status) == Some(libc::SIGKILL);
-            if case == "cpu" && killed {
+            if cfg!(target_os = "linux") && case == "cpu" && killed {
                 continue;
             }
             assert_eq!(

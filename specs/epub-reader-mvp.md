@@ -82,27 +82,28 @@ the place of `bwrap`. S2 and S3 read as follows.
   by their resolved paths. The helper has no network, no other host files, no
   writable storage, an empty environment, a session of its own and none of
   the application's descriptors beyond its three standard streams.
-- **S8** The helper refuses to open a book when it can read anything about
-  `/Users`, `/etc`, `/tmp`, `/var`, `/private`, `/Library`, `/Applications`,
-  `/Volumes`, `/dev`, `/bin`, `/opt` or `/System/Library/CoreServices` beyond
-  the names the root listing gives, can create a file under `/private/tmp`
-  or `/private/var/tmp`, has a network route, or can start another process.
-  It makes that last check before it sets its process limit, so the refusal
-  it sees is the profile's. These checks are a tripwire for a missing
+- **S8** The helper refuses to open a book when a lookup of `/Users`,
+  `/etc`, `/tmp`, `/var`, `/private`, `/Library`, `/Applications`,
+  `/Volumes`, `/dev`, `/bin`, `/opt` or `/System/Library/CoreServices`
+  succeeds, when it can create a file under `/private/tmp` or
+  `/private/var/tmp`, has a network route, or can start another process.
+  It makes that last check before it sets its own process limit, so that
+  limit is not what refuses. These checks are a tripwire for a missing
   profile, not a proof of the whole profile; `sandbox_sees_only_the_book`
   in `tests/failures.rs` checks what the profile lets the helper read.
 - **S9** macOS has no parent-death signal. The helper ends when the
   application's end closes its input. A call in progress then runs until it
   finishes or its CPU limit (F7) stops it. The application's open files are
-  marked close-on-exec one by one up to the highest it has open, including
-  any above a descriptor limit lowered since.
+  marked close-on-exec one by one: every number under its descriptor limit,
+  and past it up to the highest it has open.
 - **S10** macOS refuses an address-space limit below what a process already
   maps, so F7's memory bound is kept by the helper's allocator: it counts the
   bytes of every allocation in use and refuses one that would pass
   `Limits::memory_bytes`. The helper then stops as F7 describes, or, when
   the refused request was one the unpacker made allowing for failure, refuses
   the book as damaged and carries on. The bound
-  covers the helper's heap. Its stack, which the system caps at 8 MiB, and
+  covers what the helper's own code allocates through that allocator. The
+  allocator's bookkeeping, the stack, which the system caps at 8 MiB, and
   the system libraries mapped into it are outside the count. A helper built
   without that allocator counts as not isolated. An inherited address-space
   limit plays no part.

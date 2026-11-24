@@ -131,11 +131,14 @@ impl<'a> Staged<'a> {
     }
 
     /// Give the copy its real name unless something already has it. A
-    /// filesystem that can't rename without replacing gets a link instead.
+    /// filesystem that can't rename without replacing gets a link instead,
+    /// and the private name is removed here so the caller's directory sync
+    /// covers that too.
     fn publish(&self, name: &str) -> io::Result<()> {
         match renameat_with(self.dir, &self.name, self.dir, name, RenameFlags::NOREPLACE) {
             Err(Errno::INVAL | Errno::NOSYS | Errno::NOTSUP) => {
-                linkat(self.dir, &self.name, self.dir, name, AtFlags::empty())?
+                linkat(self.dir, &self.name, self.dir, name, AtFlags::empty())?;
+                unlinkat(self.dir, &self.name, AtFlags::empty())?
             }
             other => other?,
         }

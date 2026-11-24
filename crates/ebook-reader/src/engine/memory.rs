@@ -21,7 +21,7 @@ pub fn limit(bytes: u64) -> bool {
         usize::try_from(bytes).unwrap_or(usize::MAX),
         Ordering::Relaxed,
     );
-    drop(Box::new(0u8));
+    drop(std::hint::black_box(Box::new(0u8)));
     INSTALLED.load(Ordering::Relaxed)
 }
 

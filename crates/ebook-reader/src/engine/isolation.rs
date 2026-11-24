@@ -1,6 +1,6 @@
 //! The helper checks that it really is confined before it touches a book.
 
-use std::net::UdpSocket;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::process::Stdio;
 
@@ -63,9 +63,13 @@ pub fn verify() -> Result<(), String> {
         }
     }
     // 192.0.2.1 is reserved for documentation. With no network the kernel has
-    // no route and refuses at once; no packet is sent either way.
-    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("192.0.2.1:9").is_ok() {
+    // no route and refuses at once; no packet is sent either way. The socket
+    // is connected without binding it first, because a sandbox can refuse
+    // the one and allow the other.
+    use rustix::net::{connect, socket, AddressFamily, SocketType};
+    if let Ok(socket) = socket(AddressFamily::INET, SocketType::DGRAM, None) {
+        let documentation = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 9);
+        if connect(&socket, &documentation).is_ok() {
             return Err("the network is reachable".into());
         }
     }

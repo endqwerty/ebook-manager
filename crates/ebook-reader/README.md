@@ -97,12 +97,13 @@ made.
 ## What callers can rely on
 
 - **No book byte is parsed in the calling process.** The library starts
-  `ebook-reader-helper` under bubblewrap (`bwrap`), one for each opened book
+  `ebook-reader-helper` under the system's sandbox launcher (bubblewrap, or
+  `sandbox-exec` on macOS), one for each opened book
   and one for each `inspect` or `survey`, and reads back size-capped replies:
   a line of JSON, followed by a picture's bytes or a cover's pixels as they
   are.
-- **Fail closed.** `Reader::new` returns an error when the helper or `bwrap` is
-  missing, or when the helper's isolation check fails inside the sandbox. There
+- **Fail closed.** `Reader::new` returns an error when the helper or the
+  launcher is missing, or when the helper's isolation check fails inside the sandbox. There
   is no unsandboxed fallback. The helper also refuses to read a book when run
   outside a sandbox.
 - **Inert output, with two exceptions.** Results hold text, style flags,
@@ -231,10 +232,9 @@ and book are passed to the profile as parameters by their resolved paths.
 What differs from Linux:
 
 - The helper sees the host's real paths, so it finds the book from its fourth
-  argument and checks that it can read nothing about `/Users`, `/etc`, `/tmp`,
-  `/Library` and their like beyond their names in the root listing. It checks
-  that it can't start a process before it sets its process limit, so the
-  refusal is the profile's.
+  argument and checks that a lookup of `/Users`, `/etc`, `/tmp`, `/Library`
+  and their like fails. It checks that it can't start a process before it
+  sets its own process limit, so that limit is not what refuses.
 - There is no address-space limit to set. The helper's allocator counts the
   bytes in use and refuses past `Limits::memory_bytes`, which ends the helper
   with status 4 as running out of memory does on Linux. Memory the system maps
@@ -242,8 +242,9 @@ What differs from Linux:
   count.
 - Nothing kills the helper when the application dies. It exits when its input
   closes, and a call in progress ends by its CPU limit at the latest.
-- Descriptors above stderr are marked close-on-exec one by one, up to the
-  highest the application has open.
+- Descriptors above stderr are marked close-on-exec one by one: every number
+  under the descriptor limit, and past it up to the highest the application
+  has open.
 - `sandbox-exec` is marked deprecated by Apple. If it goes, `Reader::new`
   returns `SandboxUnavailable`; see
   [the design](../../docs/design/macos-app.md#the-helper-on-macos). It can't be
@@ -266,9 +267,9 @@ Not yet in place, in the order worth closing:
 
 ## Side effects
 
-One `bwrap` and helper process for each open `Book`, ended with it, and one
+One launcher and helper process for each open `Book`, ended with it, and one
 short-lived pair for each `inspect` and `survey`. `Reader::new` starts one to
-prove the sandbox, once per helper, `bwrap` and limits in a process. Nothing
+prove the sandbox, once per helper, launcher and limits in a process. Nothing
 is written to disk and no network connection is made.
 
 ## Checking it
@@ -296,7 +297,7 @@ The content statements (C1 to C8) are checked in `tests/content.rs`, which
 parses every returned chapter as strict XML, and in the unit tests of
 `src/engine/markup.rs`.
 
-The end-to-end tests need a working `bwrap` with unprivileged user namespaces
+On Linux the end-to-end tests need a working `bwrap` with unprivileged user namespaces
 and fail without one. On GitHub's `ubuntu-latest` runners the distribution's
 `bubblewrap` package is enough.
 

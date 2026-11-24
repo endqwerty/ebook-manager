@@ -97,8 +97,9 @@ URL outside the scheme.
 
 The helper is the same program. The host starts it through
 `/usr/bin/sandbox-exec` with a fixed profile that denies everything and then
-allows: running and reading the helper, reading the one book, and reading the
-system's own libraries. The helper and book paths are profile parameters, so
+allows: running and reading the helper, reading the one book, reading the
+system's own libraries, listing the root directory and reading system
+settings (`sysctl`), which the loader needs. The helper and book paths are profile parameters, so
 no path is spliced into the profile's text. The host resolves both paths
 first, because the profile matches resolved paths.
 
@@ -111,10 +112,10 @@ What bubblewrap gave on Linux, and what gives it here:
 | No new processes: process limit of one | Profile denies fork; the process limit is set as well |
 | Address-space limit | macOS refuses an address-space limit below what a process already maps. The helper's allocator counts what it hands out and refuses beyond `Limits::memory_bytes`, which ends the helper as running out of memory does on Linux |
 | Dies with the application: parent-death signal | The helper exits when its input closes, and its CPU limit ends a call in progress |
-| Every descriptor above stderr closed on exec, by `close_range` | The same, set one by one up to the highest descriptor the application has open |
+| Every descriptor above stderr closed on exec, by `close_range` | The same, set one by one under the descriptor limit and past it up to the highest descriptor open |
 
-The helper keeps checking for itself before it reads a book: that it can read
-nothing about `/Users`, `/etc`, `/tmp`, `/var`, `/Library` and their like, that
+The helper keeps checking for itself before it reads a book: that a lookup of
+`/Users`, `/etc`, `/tmp`, `/var`, `/Library` and their like fails, that
 it can't write, has no network and can't start a process. Outside the profile
 each of those fails, so there is no unconfined run. The checks are a tripwire
 for a missing profile. What the profile itself allows is checked by a test
